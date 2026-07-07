@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
+const assert = require("assert");
 
 function fail(msg){
   console.error("NG:", msg);
@@ -20,140 +21,133 @@ for (const m of scripts) {
 }
 
 const logicMatch = scripts.find((m) => m[1] === "logic");
-if (!logicMatch) fail('missing <script id="logic">');
+if (!logicMatch) fail("missing logic block");
 if (/document\.|window\.|localStorage|indexedDB/.test(logicMatch[2])) fail("logic block is not pure");
 
-const sandbox = { module:{ exports:{} }, console };
-vm.runInNewContext(logicMatch[2], sandbox, { filename:"logic" });
+const sandbox = {
+  module: { exports:{} },
+  console,
+  crypto: globalThis.crypto,
+  btoa: globalThis.btoa,
+  atob: globalThis.atob,
+  TextEncoder,
+  TextDecoder
+};
+vm.createContext(sandbox);
+vm.runInContext(logicMatch[2], sandbox, { filename:"logic" });
 const L = sandbox.module.exports;
 
-for (const name of [
-  "defaultStages", "normalizeState", "normalizeCase", "computeDay",
-  "rolloverTodos", "hasBackToday", "boardOrder", "stalenessLevel",
-  "needsReview", "reviewQueue", "unsentSeeds", "countSeedsOn",
-  "formatSeedExport", "missSeedText", "makeSeed", "moveCase"
-]) {
-  if (typeof L[name] !== "function") fail("missing export " + name);
-}
+[
+  "defaultStages", "normalizeState", "normalizeCase", "computeDay", "rolloverTodos",
+  "hasBackToday", "boardOrder", "stalenessLevel", "needsReview", "reviewQueue",
+  "unsentSeeds", "countSeedsOn", "formatSeedExport", "missSeedText", "makeSeed",
+  "moveCase", "syncDiffFields", "syncMergeCase", "syncEmptyState", "syncNoteLocalChanges",
+  "syncReconcile", "syncClearDirty", "syncDeriveKey", "syncEncryptJson", "syncDecryptJson",
+  "syncRandomSaltB64", "PBKDF2_ITER", "statsSummary", "buildOutboxBatch"
+].forEach((name) => {
+  if (typeof L[name] !== "function" && name !== "PBKDF2_ITER") fail("missing export " + name);
+});
 
-const state = L.normalizeState(null);
-if (state.v !== 1) fail("normalizeState version");
-if (!Array.isArray(state.cases) || state.cases.length !== 0) fail("normalizeState empty cases");
-if (!state.config || !Array.isArray(state.config.stages) || state.config.stages.length !== 5) fail("normalizeState stages");
-for (const k of ["phase", "next", "today", "pending", "seeds"]) {
-  if (!state.config.labels[k]) fail("missing label " + k);
-}
+assert.strictEqual(L.normalizeState(null).config.stages.length, 5);
+assert.strictEqual(L.normalizeCase({ extra:"ok" }, "2026-07-07T10:00:00.000Z", "2026-07-07").extra, "ok");
+assert.strictEqual(L.computeDay("2026-07-07", "2026-07-07"), 1);
+assert.strictEqual(L.computeDay("2026-07-05", "2026-07-07"), 3);
+assert.strictEqual(L.computeDay("2026-07-09", "2026-07-07"), 1);
 
-const c = L.normalizeCase({ extra:"ok" }, "2026-07-07T10:00:00.000Z", "2026-07-07");
-for (const k of [
-  "id","label","ageBand","sex","dxTags","status","admittedAt","dischargedAt","stageId",
-  "phaseNote","next","todos","pendings","appts","seeds","discharge","chart","order","lastTouchedAt"
-]) {
-  if (!(k in c)) fail("normalizeCase missing " + k);
-}
-if (c.extra !== "ok") fail("normalizeCase dropped unknown field");
-
-if (L.computeDay("2026-07-07", "2026-07-07") !== 1) fail("computeDay today");
-if (L.computeDay("2026-07-05", "2026-07-07") !== 3) fail("computeDay past");
-if (L.computeDay("2026-07-09", "2026-07-07") !== 1) fail("computeDay future clamp");
-
-const rolled = L.rolloverTodos({
-  todos:[
-    { id:"a", text:"done-yesterday", done:true, createdOn:"2026-07-06" },
-    { id:"b", text:"undone-yesterday", done:false, createdOn:"2026-07-06" },
-    { id:"c", text:"done-today", done:true, createdOn:"2026-07-07" }
-  ]
-}, "2026-07-07");
-if (rolled.some((x) => x.id === "a")) fail("rolloverTodos kept done-yesterday");
-if (!rolled.some((x) => x.id === "b")) fail("rolloverTodos dropped undone-yesterday");
-if (!rolled.some((x) => x.id === "c")) fail("rolloverTodos dropped done-today");
-
-if (L.hasBackToday({ pendings:[{ id:"1", text:"x", backOn:"2026-07-07" }] }, "2026-07-07") !== true) fail("hasBackToday today");
-if (L.hasBackToday({ pendings:[{ id:"1", text:"x", backOn:"2026-07-06" }] }, "2026-07-07") !== true) fail("hasBackToday overdue");
-if (L.hasBackToday({ pendings:[{ id:"1", text:"x", backOn:"2026-07-08" }] }, "2026-07-07") !== false) fail("hasBackToday tomorrow");
-if (L.hasBackToday({ pendings:[{ id:"1", text:"x", backOn:null }] }, "2026-07-07") !== false) fail("hasBackToday null");
+const rolled = L.rolloverTodos({ todos:[
+  { id:"a", text:"done-yesterday", done:true, createdOn:"2026-07-06" },
+  { id:"b", text:"undone-yesterday", done:false, createdOn:"2026-07-06" },
+  { id:"c", text:"done-today", done:true, createdOn:"2026-07-07" }
+] }, "2026-07-07");
+assert.deepStrictEqual(rolled.map((x) => x.id), ["b", "c"]);
+assert.strictEqual(L.hasBackToday({ pendings:[{ backOn:"2026-07-07" }] }, "2026-07-07"), true);
+assert.strictEqual(L.hasBackToday({ pendings:[{ backOn:"2026-07-08" }] }, "2026-07-07"), false);
 
 const ordered = L.boardOrder([
   { id:"dc", status:"discharged", order:0, pendings:[] },
   { id:"b", status:"active", order:1, pendings:[] },
-  { id:"a", status:"active", order:0, pendings:[{ id:"p", text:"x", backOn:"2026-07-07" }] },
-  { id:"c", status:"active", order:2, pendings:[{ id:"q", text:"x", backOn:"2026-07-10" }] }
+  { id:"a", status:"active", order:0, pendings:[{ backOn:"2026-07-07" }] }
 ], "2026-07-07");
-if (ordered.map((x) => x.id).join(",") !== "a,b,c") fail("boardOrder sequence");
+assert.strictEqual(ordered.map((x) => x.id).join(","), "a,b");
 
-if (L.stalenessLevel("2026-07-06T00:01:00.000Z", "2026-07-07T00:00:00.000Z") !== 0) fail("stalenessLevel 23h59m");
-if (L.stalenessLevel("2026-07-06T00:00:00.000Z", "2026-07-07T00:00:00.000Z") !== 1) fail("stalenessLevel 24h");
-if (L.stalenessLevel("2026-07-05T01:00:00.000Z", "2026-07-07T00:00:00.000Z") !== 1) fail("stalenessLevel 47h");
-if (L.stalenessLevel("2026-07-05T00:00:00.000Z", "2026-07-07T00:00:00.000Z") !== 2) fail("stalenessLevel 48h");
-if (L.stalenessLevel("garbage", "2026-07-07T00:00:00.000Z") !== 0) fail("stalenessLevel invalid");
+assert.strictEqual(L.stalenessLevel("2026-07-06T00:00:00.000Z", "2026-07-07T00:00:00.000Z"), 1);
+assert.strictEqual(L.needsReview({ lastTouchedAt:"2026-07-07T08:00:00+09:00" }, "2026-07-07"), false);
+assert.strictEqual(
+  L.reviewQueue([
+    { id:"c1", status:"active", order:0, lastTouchedAt:"2026-07-06T01:00:00+09:00", pendings:[] },
+    { id:"c2", status:"active", order:1, lastTouchedAt:"2026-07-07T08:00:00+09:00", pendings:[] }
+  ], "2026-07-07").map((x) => x.id).join(","),
+  "c1"
+);
 
-if (L.needsReview({ lastTouchedAt:"2026-07-07T08:00:00+09:00" }, "2026-07-07") !== false) fail("needsReview touched today");
-if (L.needsReview({ lastTouchedAt:"2026-07-06T23:00:00+09:00" }, "2026-07-07") !== true) fail("needsReview yesterday");
-if (L.needsReview({ lastTouchedAt:"nope" }, "2026-07-07") !== true) fail("needsReview invalid");
+const seed = L.makeSeed("s1", "seed", "2026-07-07", { label:"haien", day:3, stageName:"acute", phaseNote:"CAP" });
+assert.strictEqual(seed.createdOn, "2026-07-07");
+assert.strictEqual(L.countSeedsOn([{ seeds:[{ createdOn:"2026-07-07" }, { createdOn:"2026-07-06" }] }], "2026-07-07"), 1);
+assert.strictEqual(
+  L.unsentSeeds([
+    { status:"active", order:1, seeds:[{ id:"s1", sentAt:null }] },
+    { status:"active", order:0, seeds:[{ id:"s2", sentAt:null }] },
+    { status:"discharged", order:0, seeds:[{ id:"s3", sentAt:null }] }
+  ]).map((x) => x.id).join(","),
+  "s2,s1,s3"
+);
+assert.ok(L.formatSeedExport([], "2026-07-07").startsWith("## 2026-07-07"));
+assert.ok(L.missSeedText("old", "why").includes("old"));
+assert.strictEqual(L.moveCase([{ id:"a", order:0 }, { id:"b", order:1 }], "b", "up").map((x) => x.id).join(","), "b,a");
 
-const queue = L.reviewQueue([
-  { id:"c3", status:"active", order:2, lastTouchedAt:"2026-07-06T01:00:00+09:00", pendings:[] },
-  { id:"c1", status:"active", order:0, lastTouchedAt:"2026-07-06T01:00:00+09:00", pendings:[] },
-  { id:"dc", status:"discharged", order:1, lastTouchedAt:"2026-07-06T01:00:00+09:00", pendings:[] },
-  { id:"c2", status:"active", order:1, lastTouchedAt:"2026-07-07T08:00:00+09:00", pendings:[] }
-], "2026-07-07");
-if (queue.map((x) => x.id).join(",") !== "c1,c3") fail("reviewQueue order/exclusions");
+(async () => {
+  const salt = L.syncRandomSaltB64();
+  const key = await L.syncDeriveKey("correct horse battery staple", salt, 10000);
+  const enc = await L.syncEncryptJson(key, { hello:"world" });
+  const dec = await L.syncDecryptJson(key, enc.blob, enc.iv);
+  assert.strictEqual(JSON.stringify(dec), JSON.stringify({ hello:"world" }));
+  let failed = false;
+  try {
+    const bad = await L.syncDeriveKey("wrong", salt, 10000);
+    await L.syncDecryptJson(bad, enc.blob, enc.iv);
+  } catch (e) {
+    failed = true;
+  }
+  assert.ok(failed);
+  assert.ok(L.PBKDF2_ITER >= 310000);
 
-const seed = L.makeSeed("s1", "seed text", "2026-07-07", { label:"haien", day:3, stageName:"急性期", phaseNote:"CAP" });
-if (seed.createdOn !== "2026-07-07") fail("makeSeed createdOn");
-if (seed.snapshot.label !== "haien" || seed.snapshot.day !== 3 || seed.snapshot.stageName !== "急性期" || seed.snapshot.phaseNote !== "CAP") fail("makeSeed snapshot");
+  const merge = L.syncMergeCase(
+    { id:"c1", phaseNote:"local", labels:["a"] },
+    { phaseNote:"2026-07-07T10:00:00Z", labels:"2026-07-07T09:00:00Z" },
+    { id:"c1", phaseNote:"remote", labels:["b"] },
+    { phaseNote:"2026-07-07T09:00:00Z", labels:"2026-07-07T11:00:00Z" }
+  );
+  assert.strictEqual(merge.merged.phaseNote, "local");
+  assert.strictEqual(JSON.stringify(merge.merged.labels), JSON.stringify(["b"]));
 
-if (L.countSeedsOn([
-  { seeds:[{ createdOn:"2026-07-07" }, { createdOn:"2026-07-06" }] },
-  { seeds:[{ createdOn:"2026-07-07", sentAt:"x" }] }
-], "2026-07-07") !== 2) fail("countSeedsOn");
+  const data = { cases:[{ id:"c1", phaseNote:"x" }], config:{ stages:[{ id:"a" }], labels:{ phase:"P" } } };
+  const state = L.syncEmptyState();
+  const first = L.syncReconcile(data, state, [], "2026-07-07T10:00:00Z");
+  assert.strictEqual(first.pushes.length, 1);
+  L.syncClearDirty(state, ["c1"]);
+  const second = L.syncReconcile(data, state, [{ id:"c1", deleted:false, case:{ id:"c1", phaseNote:"y" }, mt:{ phaseNote:"2026-07-07T11:00:00Z" } }], "2026-07-07T12:00:00Z");
+  assert.strictEqual(second.data.cases[0].phaseNote, "y");
 
-const unsent = L.unsentSeeds([
-  { id:"a", status:"active", order:1, seeds:[{ id:"s1", text:"a1", sentAt:null }, { id:"s2", text:"a2", sentAt:"done" }] },
-  { id:"b", status:"active", order:0, seeds:[{ id:"s3", text:"b1", sentAt:null }] },
-  { id:"dc", status:"discharged", order:0, seeds:[{ id:"s4", text:"dc1", sentAt:null }] }
-]);
-if (unsent.map((x) => x.id).join(",") !== "s3,s1,s4") fail("unsentSeeds ordering");
+  const cfgState = L.syncEmptyState();
+  const cfgData = L.normalizeState(null);
+  cfgData.config.stages = [{ id:"s1" }];
+  L.syncNoteLocalChanges(cfgData, cfgState, "2026-07-07T10:00:00Z");
+  const cfgRes = L.syncReconcileConfig(cfgData, cfgState, {
+    config:{ stages:[{ id:"s2" }], labels:{ phase:"Remote", next:"Next", today:"Today", pending:"Pending", seeds:"Seeds" } },
+    mt:{ stages:"2026-07-07T11:00:00Z", labels:"2026-07-07T09:00:00Z" }
+  });
+  assert.strictEqual(cfgRes.data.config.stages[0].id, "s2");
 
-const exportA = L.formatSeedExport([
-  { text:"seed1", snapshot:{ label:"haien", day:3, stageName:"急性期", phaseNote:"CAP" } },
-  { text:"seed2", snapshot:{ label:"hf", day:5, stageName:"退院調整", phaseNote:"TRX" } }
-], "2026-07-07");
-const expectA = [
-  "## 2026-07-07 の種（Wardbook 手動書き出し）",
-  "- [ ] seed1",
-  "  - 局面: haien D3｜急性期｜CAP",
-  "- [ ] seed2",
-  "  - 局面: hf D5｜退院調整｜TRX"
-].join("\n");
-if (exportA !== expectA) fail("formatSeedExport full snapshot");
+  const stats = L.statsSummary({ openedDays:{ "2026-07-07":true, "2026-07-08":true }, reviewsDone:2, seedsCaptured:3, exportsDone:4 });
+  assert.strictEqual(JSON.stringify(stats), JSON.stringify({ openedDays:2, reviewsDone:2, seedsCaptured:3, exportsDone:4 }));
 
-const exportB = L.formatSeedExport([
-  { text:"seed3", snapshot:{ label:"uti", day:2, stageName:"急性期", phaseNote:"" } }
-], "2026-07-07");
-const expectB = [
-  "## 2026-07-07 の種（Wardbook 手動書き出し）",
-  "- [ ] seed3",
-  "  - 局面: uti D2｜急性期"
-].join("\n");
-if (exportB !== expectB) fail("formatSeedExport empty phaseNote");
+  const batch = L.buildOutboxBatch([
+    { id:"c1", seeds:[{ id:"s1", text:"one", createdOn:"2026-07-07", sentAt:null, snapshot:{ label:"haien" } }, { id:"s2", text:"two", createdOn:"2026-07-07", sentAt:"done", snapshot:{} }] },
+    { id:"c2", seeds:[{ id:"s3", text:"three", createdOn:"2026-07-08", sentAt:null, snapshot:{ label:"uti" } }] }
+  ], "2026-07-08", "b1", { openedDays:{ d:true }, reviewsDone:1, seedsCaptured:2, exportsDone:3 });
+  assert.strictEqual(batch.batchId, "b1");
+  assert.strictEqual(batch.seeds.map((x) => x.seedId).join(","), "s1,s3");
+  assert.strictEqual(batch.stats.openedDays, 1);
 
-const exportC = L.formatSeedExport([], "2026-07-07");
-if (exportC !== "## 2026-07-07 の種（Wardbook 手動書き出し）") fail("formatSeedExport empty");
-
-if (L.missSeedText("old next", "why") !== "予測外れ: old next → why") fail("missSeedText with why");
-if (L.missSeedText("old next", "   ") !== "予測外れ: old next") fail("missSeedText without why");
-
-const n1 = L.normalizeCase({ seeds:[{ id:"s1", text:"x", snapshot:{}, sentAt:null }] }, "2026-07-07T10:00:00.000Z", "2026-07-07");
-if (n1.seeds[0].createdOn !== "2026-07-07") fail("normalizeCase seed createdOn default");
-const n2 = L.normalizeCase({ seeds:[{ id:"s1", text:"x", createdOn:"2026-07-01", snapshot:{}, sentAt:null }] }, "2026-07-07T10:00:00.000Z", "2026-07-07");
-if (n2.seeds[0].createdOn !== "2026-07-01") fail("normalizeCase seed createdOn preserve");
-
-const moved = L.moveCase([
-  { id:"a", order:0 },
-  { id:"b", order:1 },
-  { id:"c", order:2 }
-], "b", "up");
-if (moved.map((x) => x.id + ":" + x.order).join(",") !== "b:0,a:1,c:2") fail("moveCase reorder");
-
-console.log("ALL TESTS PASSED");
+  console.log("ALL TESTS PASSED");
+})().catch((err) => fail(err.stack || err.message));

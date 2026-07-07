@@ -505,6 +505,263 @@ function copyWithOrder(c, idx){
   return out;
 }
 
+function syncDiffFields(prevCase, currCase){
+  var keys = {};
+  Object.keys(prevCase || {}).forEach(function(k){ keys[k] = true; });
+  Object.keys(currCase || {}).forEach(function(k){ keys[k] = true; });
+  var changed = [];
+  Object.keys(keys).forEach(function(k){
+    if(k === "id"){ return; }
+    var a = prevCase ? JSON.stringify(prevCase[k] === undefined ? null : prevCase[k]) : "__none__";
+    var b = currCase ? JSON.stringify(currCase[k] === undefined ? null : currCase[k]) : "__none__";
+    if(a !== b){ changed.push(k); }
+  });
+  return changed;
+}
+
+function syncMergeCase(localCase, localMt, remoteCase, remoteMt){
+  localMt = localMt || {};
+  remoteMt = remoteMt || {};
+  var merged = JSON.parse(JSON.stringify(localCase));
+  var mt = {};
+  var keys = {};
+  Object.keys(localCase || {}).forEach(function(k){ keys[k] = true; });
+  Object.keys(remoteCase || {}).forEach(function(k){ keys[k] = true; });
+  var tookRemote = false;
+  Object.keys(keys).forEach(function(k){
+    if(k === "id"){ return; }
+    var lt = localMt[k] || "";
+    var rt = remoteMt[k] || "";
+    if(rt > lt && (k in (remoteCase || {}))){
+      merged[k] = JSON.parse(JSON.stringify(remoteCase[k]));
+      mt[k] = rt;
+      if(JSON.stringify(localCase && localCase[k]) !== JSON.stringify(remoteCase[k])){ tookRemote = true; }
+    }else if(lt){
+      mt[k] = lt;
+    }
+  });
+  return { merged:merged, mt:mt, tookRemote:tookRemote };
+}
+
+function syncEmptyState(){
+  return { snap:{}, mt:{}, dirty:{}, tombstones:{}, configSnap:null, configMt:{}, configDirty:false };
+}
+
+function syncNoteLocalChanges(data, state, nowIso){
+  state = state || syncEmptyState();
+  var seen = {};
+  (data.cases || []).forEach(function(c){
+    seen[c.id] = true;
+    if(state.tombstones[c.id]){ return; }
+    var prevJson = state.snap[c.id];
+    var prev = prevJson ? JSON.parse(prevJson) : null;
+    var changed = syncDiffFields(prev, c);
+    if(changed.length){
+      state.mt[c.id] = state.mt[c.id] || {};
+      changed.forEach(function(k){ state.mt[c.id][k] = nowIso; });
+      state.snap[c.id] = JSON.stringify(c);
+      state.dirty[c.id] = true;
+    }
+  });
+  Object.keys(state.snap).forEach(function(id){
+    if(!seen[id]){
+      delete state.snap[id];
+      delete state.mt[id];
+      state.tombstones[id] = true;
+      state.dirty[id] = true;
+    }
+  });
+  var currentConfig = { stages:(data.config && data.config.stages) || [], labels:(data.config && data.config.labels) || {} };
+  var prevConfig = state.configSnap ? JSON.parse(state.configSnap) : null;
+  var mergedCfgMt = state.configMt || {};
+  ["stages", "labels"].forEach(function(k){
+    var a = prevConfig ? JSON.stringify(prevConfig[k] === undefined ? null : prevConfig[k]) : "__none__";
+    var b = JSON.stringify(currentConfig[k] === undefined ? null : currentConfig[k]);
+    if(a !== b){
+      mergedCfgMt[k] = nowIso;
+      state.configDirty = true;
+    }
+  });
+  state.configMt = mergedCfgMt;
+  state.configSnap = JSON.stringify(currentConfig);
+  return state;
+}
+
+function syncReconcile(data, state, remoteList, nowIso){
+  state = syncNoteLocalChanges(data, state, nowIso);
+  var byId = {};
+  (data.cases || []).forEach(function(c){ byId[c.id] = c; });
+  var localChanged = false;
+  (remoteList || []).forEach(function(r){
+    if(r.deleted){
+      state.tombstones[r.id] = true;
+      delete state.dirty[r.id];
+      delete state.snap[r.id];
+      delete state.mt[r.id];
+      if(byId[r.id]){
+        data.cases = data.cases.filter(function(c){ return c.id !== r.id; });
+        delete byId[r.id];
+        localChanged = true;
+      }
+      return;
+    }
+    if(state.tombstones[r.id]){ return; }
+    var local = byId[r.id];
+    if(!local){
+      var incoming = JSON.parse(JSON.stringify(r.case));
+      incoming.id = r.id;
+      data.cases.push(incoming);
+      state.snap[r.id] = JSON.stringify(incoming);
+      state.mt[r.id] = JSON.parse(JSON.stringify(r.mt || {}));
+      delete state.dirty[r.id];
+      localChanged = true;
+      return;
+    }
+    var res = syncMergeCase(local, state.mt[r.id], r.case, r.mt);
+    res.merged.id = r.id;
+    var mergedJson = JSON.stringify(res.merged);
+    if(mergedJson !== JSON.stringify(local)){
+      var idx = data.cases.indexOf(local);
+      data.cases[idx] = res.merged;
+      byId[r.id] = res.merged;
+      localChanged = true;
+    }
+    state.mt[r.id] = res.mt;
+    if(syncDiffFields(r.case, res.merged).length > 0){ state.dirty[r.id] = true; }
+    else { delete state.dirty[r.id]; }
+    state.snap[r.id] = mergedJson;
+  });
+  var pushes = [];
+  Object.keys(state.dirty).forEach(function(id){
+    if(state.tombstones[id]){
+      pushes.push({ id:id, deleted:true, case:null, mt:null });
+    }else if(byId[id]){
+      pushes.push({ id:id, deleted:false, case:byId[id], mt:state.mt[id] || {} });
+    }
+  });
+  return { data:data, state:state, pushes:pushes, localChanged:localChanged };
+}
+
+function syncClearDirty(state, ids){
+  (ids || []).forEach(function(id){ delete state.dirty[id]; });
+  return state;
+}
+
+var subtle = (typeof globalThis !== "undefined" && globalThis.crypto) ? globalThis.crypto.subtle : null;
+
+function b64FromBytes(bytes){
+  var bin = "";
+  var arr = new Uint8Array(bytes);
+  for(var i = 0; i < arr.length; i += 1){ bin += String.fromCharCode(arr[i]); }
+  return globalThis.btoa(bin);
+}
+
+function bytesFromB64(b64){
+  var bin = globalThis.atob(b64);
+  var arr = new Uint8Array(bin.length);
+  for(var i = 0; i < bin.length; i += 1){ arr[i] = bin.charCodeAt(i); }
+  return arr;
+}
+
+var PBKDF2_ITER = 310000;
+
+function syncRandomSaltB64(){
+  var bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  return b64FromBytes(bytes);
+}
+
+async function syncDeriveKey(passphrase, saltB64, iter){
+  var enc = new TextEncoder();
+  var baseKey = await subtle.importKey("raw", enc.encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+  return subtle.deriveKey(
+    { name:"PBKDF2", salt:bytesFromB64(saltB64), iterations:iter || PBKDF2_ITER, hash:"SHA-256" },
+    baseKey,
+    { name:"AES-GCM", length:256 },
+    true,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function syncEncryptJson(key, obj){
+  var iv = new Uint8Array(12);
+  globalThis.crypto.getRandomValues(iv);
+  var enc = new TextEncoder();
+  var cipher = await subtle.encrypt({ name:"AES-GCM", iv:iv }, key, enc.encode(JSON.stringify(obj)));
+  return { iv:b64FromBytes(iv), blob:b64FromBytes(cipher) };
+}
+
+async function syncDecryptJson(key, blobB64, ivB64){
+  var plain = await subtle.decrypt({ name:"AES-GCM", iv:bytesFromB64(ivB64) }, key, bytesFromB64(blobB64));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+
+function syncConfigPlain(data){
+  return {
+    config:{
+      stages:cloneArr(data && data.config && data.config.stages).map(function(x){ return JSON.parse(JSON.stringify(x)); }),
+      labels:JSON.parse(JSON.stringify((data && data.config && data.config.labels) || {}))
+    },
+    mt:JSON.parse(JSON.stringify((data && data._configMt) || {}))
+  };
+}
+
+function syncReconcileConfig(data, state, remoteDoc){
+  state = state || syncEmptyState();
+  if(!remoteDoc || !remoteDoc.config){ return { data:data, state:state, localChanged:false, push:!!state.configDirty }; }
+  var localCfg = { stages:data.config.stages, labels:data.config.labels };
+  var res = syncMergeCase(localCfg, state.configMt || {}, remoteDoc.config, remoteDoc.mt || {});
+  var changed = JSON.stringify(res.merged) !== JSON.stringify(localCfg);
+  if(changed){
+    data.config.stages = cloneArr(res.merged.stages);
+    data.config.labels = JSON.parse(JSON.stringify(res.merged.labels || {}));
+  }
+  state.configMt = res.mt;
+  state.configSnap = JSON.stringify({ stages:data.config.stages, labels:data.config.labels });
+  state.configDirty = syncDiffFields(remoteDoc.config, res.merged).length > 0;
+  data._configMt = JSON.parse(JSON.stringify(res.mt));
+  return { data:data, state:state, localChanged:changed, push:!!state.configDirty };
+}
+
+function syncClearConfigDirty(state){
+  state.configDirty = false;
+  return state;
+}
+
+function statsSummary(stats){
+  var src = isObj(stats) ? stats : {};
+  var opened = isObj(src.openedDays) ? Object.keys(src.openedDays).length : 0;
+  return {
+    openedDays:opened,
+    reviewsDone:toNum(src.reviewsDone, 0),
+    seedsCaptured:toNum(src.seedsCaptured, 0),
+    exportsDone:toNum(src.exportsDone, 0)
+  };
+}
+
+function buildOutboxBatch(cases, todayIso, batchId, stats){
+  var seeds = [];
+  cloneArr(cases).forEach(function(c){
+    cloneArr(c && c.seeds).forEach(function(seed){
+      if(seed && seed.sentAt == null){
+        seeds.push({
+          seedId:seed.id,
+          caseId:c.id,
+          text:seed.text,
+          createdOn:seed.createdOn || todayIso,
+          snapshot:JSON.parse(JSON.stringify(seed.snapshot || {}))
+        });
+      }
+    });
+  });
+  return {
+    batchId:batchId,
+    date:todayIso,
+    seeds:seeds,
+    stats:statsSummary(stats)
+  };
+}
+
 function todayISOFallback(){
   return "2000-01-01";
 }
@@ -527,7 +784,25 @@ if (typeof module !== "undefined") {
     formatSeedExport:formatSeedExport,
     missSeedText:missSeedText,
     makeSeed:makeSeed,
-    moveCase:moveCase
+    moveCase:moveCase,
+    syncDiffFields:syncDiffFields,
+    syncMergeCase:syncMergeCase,
+    syncEmptyState:syncEmptyState,
+    syncNoteLocalChanges:syncNoteLocalChanges,
+    syncReconcile:syncReconcile,
+    syncClearDirty:syncClearDirty,
+    syncDeriveKey:syncDeriveKey,
+    syncEncryptJson:syncEncryptJson,
+    syncDecryptJson:syncDecryptJson,
+    syncRandomSaltB64:syncRandomSaltB64,
+    b64FromBytes:b64FromBytes,
+    bytesFromB64:bytesFromB64,
+    PBKDF2_ITER:PBKDF2_ITER,
+    syncConfigPlain:syncConfigPlain,
+    syncReconcileConfig:syncReconcileConfig,
+    syncClearConfigDirty:syncClearConfigDirty,
+    statsSummary:statsSummary,
+    buildOutboxBatch:buildOutboxBatch
   };
 }
 </script>
@@ -535,55 +810,72 @@ if (typeof module !== "undefined") {
 const STORAGE_KEY = "wardbook:v1";
 const RESERVED_KEYS = ["wardbook:stats", "wardbook:settings", "wardbook:sync", "wardbook:theme"];
 const STR = {
-  addAdmission:"＋ 入院を登録",
-  register:"登録",
-  cancel:"キャンセル",
-  back:"← 一覧",
-  piiWarning:"氏名・ID・部屋番号など個人情報は入力しない（匿名ラベルのみ）",
-  labelPh:"ラベル（例：肺炎）",
-  firstNotePh:"見立ての一言（例：CAP、CTRXで3日解熱見込み）",
-  ageBands:["10代以下","20代","30代","40代","50代","60代","70代","80代","90代以上"],
-  sexM:"男",
-  sexF:"女",
-  unset:"未設定",
-  addDxTag:"＋病名タグ",
-  dxTagPh:"病名タグ（確定病名で検索用）",
-  nextPh:"次の展開を追加",
-  todayPh:"今日やることを追加",
-  pendingPh:"待ちを追加（培養・コンサル返事など）",
-  seedPh:"種を追加（引っかかり・疑問）",
-  backTodayBadge:"戻り予定",
-  emptyBoard:"入院患者がいません。「＋ 入院を登録」から始めます。",
-  deleteCase:"この症例を削除",
-  deleteConfirm:"この症例を完全に削除します。よろしいですか？",
-  dueLabel:"期日",
-  backOnLabel:"戻り日",
-  editMeta:"年代・性別",
-  review:"夕の棚卸し",
-  exitReview:"中断",
-  noChange:"変化なし",
-  changeStage:"ステージ変更",
-  editNote:"一言更新",
-  confirm:"確定",
-  reviewDone:"棚卸し完了",
-  reviewEmpty:"全員きょう確認済みです",
-  seedsToday:"今日の種",
-  noUnsentSeeds:"未送信の種はありません",
-  copyExport:"書き出しをコピー",
-  shareExport:"共有",
-  copied:"コピーしました",
-  backToBoard:"一覧へ戻る",
-  missPrompt:"予測が外れた？ 種にする",
-  missWhyPh:"なぜ外れた？（1行）"
+  addAdmission:"Add admission",
+  register:"Register",
+  cancel:"Cancel",
+  back:"Back",
+  piiWarning:"Do not enter PII.",
+  labelPh:"Label",
+  firstNotePh:"First impression",
+  ageBands:["10s","20s","30s","40s","50s","60s","70s","80s","90s+"],
+  sexM:"M",
+  sexF:"F",
+  unset:"Unset",
+  addDxTag:"Add Dx tag",
+  dxTagPh:"Diagnosis tag",
+  nextPh:"Add next step",
+  todayPh:"Add today task",
+  pendingPh:"Add pending item",
+  seedPh:"Add seed",
+  backTodayBadge:"Back today",
+  emptyBoard:"No active admissions.",
+  deleteCase:"Delete case",
+  deleteConfirm:"Delete this case permanently?",
+  dueLabel:"Due",
+  backOnLabel:"Back on",
+  editMeta:"Edit meta",
+  review:"Review",
+  exitReview:"Exit",
+  noChange:"No change",
+  changeStage:"Change stage",
+  editNote:"Edit note",
+  confirm:"Confirm",
+  reviewDone:"Review done",
+  reviewEmpty:"No cases need review.",
+  seedsToday:"Seeds today",
+  noUnsentSeeds:"No unsent seeds.",
+  copyExport:"Copy export",
+  shareExport:"Share",
+  copied:"Copied",
+  backToBoard:"Back to board",
+  missPrompt:"Missed prediction -> seed",
+  missWhyPh:"Why did it miss?",
+  syncRow:"同期",
+  dataRow:"データ",
+  sendOk:"Vault へ送信しました ✈",
+  sendFailed:"未送信・次回自動再送します",
+  sendOff:"（同期未設定・コピーで書き出せます）",
+  backupDl:"バックアップを保存（JSON）",
+  backupRestore:"バックアップから復元",
+  restoreConfirm:"端末内のデータを置き換えます。よろしいですか？"
 };
 
 let DB = normalizeState(null);
 let VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO() };
 let SHEET = { name:"", draft:{} };
 let DND = { activeId:"", hoverIndex:-1 };
-let REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false };
+let REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
 let MISS = null;
 let PENDING_FOCUS = null;
+const SYNC_KEY = "wardbook:sync";
+const STATS_KEY = "wardbook:stats";
+let STATS = null;
+let SYNC = null;
+const SYNC_RT = { fb:null, appInst:null, appCfg:"", appCount:0, key:null, importCount:0 };
+let SYNC_STATUS = { kind:"off", detail:"" };
+let SYNC_RUNNING = false;
+let SYNC_PENDING = false;
+let SYNC_PUSH_TIMER = 0;
 
 function todayISO(){
   var d = new Date();
@@ -599,6 +891,15 @@ function nowISO(){
 
 function uid(){
   return "w" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+
+function debounce(fn, wait){
+  var t = 0;
+  return function(){
+    var args = arguments;
+    clearTimeout(t);
+    t = setTimeout(function(){ fn.apply(null, args); }, wait);
+  };
 }
 
 function esc(s){
@@ -636,6 +937,423 @@ function saveState(){
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); } catch (e) {}
 }
 
+function loadStats(){
+  var raw = null;
+  try { raw = localStorage.getItem(STATS_KEY); } catch (e) {}
+  var src = null;
+  try { src = raw ? JSON.parse(raw) : null; } catch (e) {}
+  return {
+    v:1,
+    openedDays:isObj(src && src.openedDays) ? src.openedDays : {},
+    reviewsDone:toNum(src && src.reviewsDone, 0),
+    seedsCaptured:toNum(src && src.seedsCaptured, 0),
+    exportsDone:toNum(src && src.exportsDone, 0)
+  };
+}
+
+function saveStats(){
+  try { localStorage.setItem(STATS_KEY, JSON.stringify(STATS)); } catch (e) {}
+}
+
+function ensureStatsBootDay(){
+  if (!STATS) STATS = loadStats();
+  var today = todayISO();
+  if (!STATS.openedDays[today]) {
+    STATS.openedDays[today] = true;
+    saveStats();
+  }
+}
+
+function bumpStat(key, delta){
+  if (!STATS) STATS = loadStats();
+  STATS[key] = toNum(STATS[key], 0) + (delta || 1);
+  saveStats();
+}
+
+function loadSync(){
+  var raw = null;
+  try { raw = localStorage.getItem(SYNC_KEY); } catch (e) {}
+  try {
+    var parsed = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === "object" && parsed.config && parsed.keyJwk) {
+      parsed.state = parsed.state && parsed.state.snap ? parsed.state : syncEmptyState();
+      return parsed;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function saveSync(){
+  try {
+    if (SYNC) localStorage.setItem(SYNC_KEY, JSON.stringify(SYNC));
+    else localStorage.removeItem(SYNC_KEY);
+  } catch (e) {}
+}
+
+function timeLabel(iso){
+  var d = new Date(String(iso || ""));
+  if (!Number.isFinite(d.getTime())) return "";
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
+function syncStatusLabel(){
+  var at = SYNC && SYNC.lastSyncAt ? timeLabel(SYNC.lastSyncAt) : "";
+  switch(SYNC_STATUS.kind){
+    case "off": return "未設定（ローカルのみ）";
+    case "syncing": return "同期中…";
+    case "ok": return "同期済み " + at;
+    case "offline": return "オフライン（ローカル保存は正常）" + (at ? " ・前回 " + at : "");
+    case "reauth": return "再ログインが必要";
+    case "error": return "同期エラー" + (at ? " ・前回 " + at : "");
+    default: return at ? "前回 " + at : "待機中";
+  }
+}
+
+function setSyncStatus(kind, detail){
+  SYNC_STATUS = { kind:kind, detail:detail || "" };
+  if (typeof document !== "undefined" && document.querySelectorAll) {
+    document.querySelectorAll("[data-sync-status]").forEach(function(el){ el.textContent = syncStatusLabel(); });
+  }
+}
+
+function patchOutboxStatus(text){
+  REVIEW.outboxStatus = text || "";
+  if (typeof document !== "undefined" && document.querySelectorAll) {
+    document.querySelectorAll("[data-outbox-status]").forEach(function(el){ el.textContent = REVIEW.outboxStatus; });
+  }
+}
+
+async function syncSdk(){
+  if (SYNC_RT.fb) return SYNC_RT.fb;
+  SYNC_RT.importCount += 1;
+  var base = "https://www.gstatic.com/firebasejs/10.14.1/";
+  var mods = await Promise.all([
+    import(base + "firebase-app.js"),
+    import(base + "firebase-auth.js"),
+    import(base + "firebase-firestore.js")
+  ]);
+  SYNC_RT.fb = { app:mods[0], auth:mods[1], fs:mods[2] };
+  return SYNC_RT.fb;
+}
+
+async function syncApp(config){
+  var fb = await syncSdk();
+  var cfg = config || (SYNC && SYNC.config);
+  var cfgJson = JSON.stringify(cfg || {});
+  if (!SYNC_RT.appInst || SYNC_RT.appCfg !== cfgJson) {
+    SYNC_RT.appCount += 1;
+    SYNC_RT.appInst = fb.app.initializeApp(cfg, "wardbook-" + SYNC_RT.appCount);
+    SYNC_RT.appCfg = cfgJson;
+  }
+  return fb;
+}
+
+async function syncCurrentUser(fb){
+  var authInst = fb.auth.getAuth(SYNC_RT.appInst);
+  if (authInst.currentUser) return authInst.currentUser;
+  await new Promise(function(resolve){
+    var un = fb.auth.onAuthStateChanged(authInst, function(){
+      un();
+      resolve();
+    });
+  });
+  return authInst.currentUser;
+}
+
+async function syncAesKey(){
+  if (SYNC_RT.key) return SYNC_RT.key;
+  SYNC_RT.key = await crypto.subtle.importKey("jwk", SYNC.keyJwk, { name:"AES-GCM" }, true, ["encrypt", "decrypt"]);
+  return SYNC_RT.key;
+}
+
+function syncRefs(fb, uid){
+  var db = fb.fs.getFirestore(SYNC_RT.appInst);
+  return {
+    casesCol: fb.fs.collection(db, "users", uid, "wb_cases"),
+    caseDoc: function(id){ return fb.fs.doc(db, "users", uid, "wb_cases", id); },
+    cryptoDoc: fb.fs.doc(db, "users", uid, "wb_meta", "crypto"),
+    configDoc: fb.fs.doc(db, "users", uid, "wb_meta", "config"),
+    outboxDoc: function(id){ return fb.fs.doc(db, "users", uid, "wb_outbox", id); }
+  };
+}
+
+async function syncPullCases(fb, uid){
+  var refs = syncRefs(fb, uid);
+  var snap = await fb.fs.getDocs(refs.casesCol);
+  var key = await syncAesKey();
+  var out = [];
+  for (var i = 0; i < snap.docs.length; i += 1) {
+    var d = snap.docs[i];
+    var v = d.data();
+    if (v.deleted) { out.push({ id:d.id, deleted:true, case:null, mt:null }); continue; }
+    var payload = await syncDecryptJson(key, v.blob, v.iv);
+    out.push({ id:d.id, deleted:false, case:payload.case, mt:payload.mt || {} });
+  }
+  return out;
+}
+
+async function syncPullConfig(fb, uid){
+  var refs = syncRefs(fb, uid);
+  var snap = await fb.fs.getDoc(refs.configDoc);
+  if (!snap.exists()) return null;
+  var v = snap.data();
+  var key = await syncAesKey();
+  return await syncDecryptJson(key, v.blob, v.iv);
+}
+
+async function syncPushCases(fb, uid, pushes){
+  var refs = syncRefs(fb, uid);
+  var key = await syncAesKey();
+  for (var i = 0; i < pushes.length; i += 1) {
+    var p = pushes[i];
+    if (p.deleted) {
+      await fb.fs.setDoc(refs.caseDoc(p.id), { v:1, deleted:true, updatedAt:fb.fs.serverTimestamp() });
+    } else {
+      var enc = await syncEncryptJson(key, { case:p.case, mt:p.mt });
+      await fb.fs.setDoc(refs.caseDoc(p.id), { v:1, deleted:false, iv:enc.iv, blob:enc.blob, updatedAt:fb.fs.serverTimestamp() });
+    }
+  }
+}
+
+async function syncPushConfig(fb, uid){
+  var refs = syncRefs(fb, uid);
+  var key = await syncAesKey();
+  var plain = syncConfigPlain(DB);
+  var enc = await syncEncryptJson(key, plain);
+  await fb.fs.setDoc(refs.configDoc, { v:1, iv:enc.iv, blob:enc.blob, updatedAt:fb.fs.serverTimestamp() });
+}
+
+function queueSync(){
+  if (!SYNC || !SYNC.enabled) return;
+  clearTimeout(SYNC_PUSH_TIMER);
+  SYNC_PUSH_TIMER = setTimeout(function(){ syncNow(); }, 5000);
+}
+
+async function syncSendOutboxIfNeeded(source){
+  if (!SYNC || !SYNC.enabled) {
+    if (source === "review") patchOutboxStatus(STR.sendOff);
+    return false;
+  }
+  var payload = buildOutboxBatch(DB.cases, todayISO(), uid(), STATS);
+  if (!payload.seeds.length) {
+    if (source === "review") patchOutboxStatus("");
+    return false;
+  }
+  if (source === "review") patchOutboxStatus("送信中…");
+  try {
+    var fb = await syncApp();
+    var user = await syncCurrentUser(fb);
+    if (!user) {
+      if (source === "review") patchOutboxStatus(STR.sendFailed);
+      setSyncStatus("reauth");
+      return false;
+    }
+    var refs = syncRefs(fb, user.uid);
+    var key = await syncAesKey();
+    var enc = await syncEncryptJson(key, payload);
+    await fb.fs.setDoc(refs.outboxDoc(payload.batchId), {
+      v:1,
+      iv:enc.iv,
+      blob:enc.blob,
+      consumed:false,
+      createdAt:fb.fs.serverTimestamp()
+    });
+    var sentIso = nowISO();
+    DB.cases = DB.cases.map(function(c){
+      var touched = false;
+      var nextSeeds = c.seeds.map(function(seed){
+        if (seed.sentAt != null) return seed;
+        var found = payload.seeds.some(function(row){ return row.caseId === c.id && row.seedId === seed.id; });
+        if (!found) return seed;
+        touched = true;
+        return Object.assign({}, seed, { sentAt:sentIso });
+      });
+      if (!touched) return c;
+      return Object.assign({}, c, { seeds:nextSeeds, lastTouchedAt:c.lastTouchedAt });
+    });
+    saveState();
+    syncAfterSave();
+    if (source === "review") patchOutboxStatus(STR.sendOk);
+    return true;
+  } catch (e) {
+    if (source === "review") patchOutboxStatus(STR.sendFailed);
+    return false;
+  }
+}
+
+async function syncNow(opts){
+  opts = opts || {};
+  if (!SYNC || !SYNC.enabled) return;
+  if (SYNC_RUNNING) {
+    SYNC_PENDING = true;
+    return;
+  }
+  SYNC_RUNNING = true;
+  setSyncStatus("syncing");
+  try {
+    var fb = await syncApp();
+    var user = await syncCurrentUser(fb);
+    if (!user) {
+      setSyncStatus("reauth");
+      return;
+    }
+    var remoteCases = await syncPullCases(fb, user.uid);
+    var remoteConfig = await syncPullConfig(fb, user.uid);
+    var res = syncReconcile(DB, SYNC.state, remoteCases, nowISO());
+    DB = normalizeState(res.data);
+    DB._configMt = JSON.parse(JSON.stringify((SYNC.state && SYNC.state.configMt) || {}));
+    var cfgRes = syncReconcileConfig(DB, SYNC.state, remoteConfig);
+    DB = normalizeState(cfgRes.data);
+    DB._configMt = JSON.parse(JSON.stringify((SYNC.state && SYNC.state.configMt) || {}));
+    if (res.localChanged || cfgRes.localChanged) {
+      saveState();
+      render();
+    }
+    if (res.pushes.length) {
+      await syncPushCases(fb, user.uid, res.pushes);
+      syncClearDirty(SYNC.state, res.pushes.map(function(p){ return p.id; }));
+    }
+    if (cfgRes.push) {
+      await syncPushConfig(fb, user.uid);
+      syncClearConfigDirty(SYNC.state);
+    }
+    SYNC.lastSyncAt = nowISO();
+    saveSync();
+    setSyncStatus("ok");
+    await syncSendOutboxIfNeeded("boot");
+  } catch (e) {
+    saveSync();
+    var msg = String((e && e.message) || e);
+    var offline = (typeof navigator !== "undefined" && navigator.onLine === false) || /network|failed to fetch|imported/i.test(msg);
+    setSyncStatus(offline ? "offline" : "error", msg);
+  } finally {
+    SYNC_RUNNING = false;
+    if (SYNC_PENDING) {
+      SYNC_PENDING = false;
+      queueSync();
+    }
+  }
+}
+
+function syncAfterSave(){
+  if (!SYNC || !SYNC.enabled) return;
+  syncNoteLocalChanges(DB, SYNC.state, nowISO());
+  saveSync();
+  queueSync();
+}
+
+function parseFirebaseConfig(text){
+  var keys = ["apiKey", "authDomain", "projectId", "storageBucket", "messagingSenderId", "appId"];
+  var cfg = {};
+  keys.forEach(function(k){
+    var m = String(text || "").match(new RegExp(k + '["\\\']?\\s*[:=]\\s*["\\\']([^"\\\']+)["\\\']'));
+    if (m) cfg[k] = m[1];
+  });
+  if (!cfg.apiKey || !cfg.projectId || !cfg.appId) return null;
+  if (!cfg.authDomain) cfg.authDomain = cfg.projectId + ".firebaseapp.com";
+  return cfg;
+}
+
+async function enableSync(cfg, email, password, passphrase){
+  var fb = await syncApp(cfg);
+  var authInst = fb.auth.getAuth(SYNC_RT.appInst);
+  var cred;
+  try {
+    cred = await fb.auth.signInWithEmailAndPassword(authInst, email, password);
+  } catch (e) {
+    var code = e && e.code;
+    if (code === "auth/user-not-found" || code === "auth/invalid-credential" || code === "auth/invalid-login-credentials") {
+      cred = await fb.auth.createUserWithEmailAndPassword(authInst, email, password);
+    } else {
+      throw e;
+    }
+  }
+  var uidValue = cred.user.uid;
+  var refs = syncRefs(fb, uidValue);
+  var metaSnap = await fb.fs.getDoc(refs.cryptoDoc);
+  var salt;
+  var iter;
+  var key;
+  if (metaSnap.exists()) {
+    var meta = metaSnap.data();
+    salt = meta.salt;
+    iter = meta.iter || PBKDF2_ITER;
+    key = await syncDeriveKey(passphrase, salt, iter);
+    await syncDecryptJson(key, meta.check.blob, meta.check.iv);
+  } else {
+    salt = syncRandomSaltB64();
+    iter = PBKDF2_ITER;
+    key = await syncDeriveKey(passphrase, salt, iter);
+    var check = await syncEncryptJson(key, { check:"wardbook" });
+    await fb.fs.setDoc(refs.cryptoDoc, { v:1, salt:salt, iter:iter, check:check });
+  }
+  SYNC_RT.key = key;
+  SYNC = {
+    enabled:true,
+    config:cfg,
+    email:email,
+    uid:uidValue,
+    salt:salt,
+    iter:iter,
+    keyJwk:await crypto.subtle.exportKey("jwk", key),
+    state:syncEmptyState(),
+    lastSyncAt:null
+  };
+  saveSync();
+  setSyncStatus("idle");
+  await syncNow();
+}
+
+async function doEnableSync(){
+  var cfg = parseFirebaseConfig((SHEET.draft && SHEET.draft.firebaseConfig) || "");
+  var email = String(SHEET.draft && SHEET.draft.email || "").trim();
+  var password = String(SHEET.draft && SHEET.draft.password || "");
+  var p1 = String(SHEET.draft && SHEET.draft.passphrase || "");
+  var p2 = String(SHEET.draft && SHEET.draft.passphrase2 || "");
+  if (!cfg) return;
+  if (!email || !email.includes("@")) return;
+  if (password.length < 8) return;
+  if (p1.length < 8 || p1 !== p2) return;
+  SHEET.syncBusy = true;
+  renderSheet();
+  try {
+    await enableSync(cfg, email, password, p1);
+    closeSheet();
+    render();
+  } catch (e) {
+    SHEET.syncBusy = false;
+    renderSheet();
+  }
+}
+
+async function doSyncRelogin(){
+  var pass = String(SHEET.draft && SHEET.draft.reloginPassword || "");
+  if (!pass || !SYNC) return;
+  SHEET.syncBusy = true;
+  renderSheet();
+  try {
+    var fb = await syncApp();
+    var authInst = fb.auth.getAuth(SYNC_RT.appInst);
+    await fb.auth.signInWithEmailAndPassword(authInst, SYNC.email, pass);
+    SHEET.syncBusy = false;
+    renderSheet();
+    await syncNow();
+  } catch (e) {
+    SHEET.syncBusy = false;
+    renderSheet();
+  }
+}
+
+function disableSync(){
+  if (!confirm("この端末の同期を止めます。端末内データとサーバ上のデータは消えません。よろしいですか？")) return;
+  SYNC = null;
+  SYNC_RT.key = null;
+  saveSync();
+  setSyncStatus("off");
+  closeSheet();
+  render();
+}
+
 function touch(c){
   c.lastTouchedAt = nowISO();
 }
@@ -661,6 +1379,7 @@ function flushQueuedFocus(){
 function persist(){
   saveState();
   render();
+  syncAfterSave();
 }
 
 function currentReviewCase(){
@@ -685,6 +1404,7 @@ function applyDailyRollover(force){
 
 function ensureToday(){
   if (VIEW.nowDay !== todayISO()) {
+    ensureStatsBootDay();
     applyDailyRollover(true);
     render();
   }
@@ -718,7 +1438,7 @@ function boardCases(){
 
 function openBoard(){
   clearMiss();
-  REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false };
+  REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
   VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO() };
   render();
 }
@@ -734,17 +1454,22 @@ function openDetail(caseId){
 
 function openReview(){
   clearMiss();
-  var ids = reviewQueue(DB.cases, todayISO()).map(function(c){ return c.id; });
+  var queue = reviewQueue(DB.cases, todayISO());
+  var ids = queue.map(function(c){ return c.id; });
   REVIEW = {
     ids:ids,
     index:0,
     mode:ids.length ? "actions" : "done",
     empty:ids.length === 0,
     noteDraft:"",
-    copied:false
+    copied:false,
+    outboxStatus:(!SYNC || !SYNC.enabled) ? "" : ""
   };
   VIEW = { name:"review", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO() };
   render();
+  if (!ids.length) {
+    patchOutboxStatus("");
+  }
 }
 
 function exitReview(){
@@ -756,6 +1481,9 @@ function reviewAdvance(){
   if (REVIEW.index + 1 >= REVIEW.ids.length) {
     REVIEW.mode = "done";
     REVIEW.index = REVIEW.ids.length ? REVIEW.ids.length - 1 : 0;
+    if (REVIEW.ids.length) bumpStat("reviewsDone", 1);
+    if (!SYNC || !SYNC.enabled) patchOutboxStatus("");
+    else setTimeout(function(){ syncSendOutboxIfNeeded("review"); }, 0);
   } else {
     REVIEW.index += 1;
     REVIEW.mode = "actions";
@@ -783,12 +1511,68 @@ function openStagePicker(caseId){
   renderSheet();
 }
 
+function openSyncSheet(){
+  SHEET.name = "sync";
+  SHEET.syncBusy = false;
+  SHEET.draft = SHEET.draft || {};
+  if (!SYNC || !SYNC.enabled) {
+    SHEET.draft.firebaseConfig = SHEET.draft.firebaseConfig || "";
+    SHEET.draft.email = SHEET.draft.email || "";
+    SHEET.draft.password = "";
+    SHEET.draft.passphrase = "";
+    SHEET.draft.passphrase2 = "";
+  } else {
+    SHEET.draft.reloginPassword = "";
+  }
+  renderSheet();
+}
+
+function openDataSheet(){
+  SHEET.name = "data";
+  renderSheet();
+}
+
 function sheetTextInput(key, value){
   SHEET.draft[key] = value;
   if (key === "label") {
     var btn = document.getElementById("registerBtn");
     if (btn) btn.disabled = !String(value || "").trim();
   }
+}
+
+function downloadBackup(){
+  var today = todayISO();
+  var payload = JSON.stringify(normalizeState(DB), null, 2);
+  if (typeof Blob === "undefined" || typeof URL === "undefined" || !URL.createObjectURL) return;
+  var blob = new Blob([payload], { type:"application/json;charset=utf-8" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = "wardbook-backup-" + today + ".json";
+  if (a.click) a.click();
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 0);
+}
+
+function triggerBackupRestore(){
+  var el = document.getElementById("backupRestoreInput");
+  if (el && el.click) el.click();
+}
+
+function restoreBackupFile(input){
+  var file = input && input.files && input.files[0];
+  if (!file || typeof FileReader === "undefined") return;
+  var reader = new FileReader();
+  reader.onload = function(){
+    try {
+      var parsed = JSON.parse(String(reader.result || "null"));
+      if (typeof confirm === "function" && !confirm(STR.restoreConfirm)) return;
+      DB = normalizeState(parsed);
+      saveState();
+      render();
+      closeSheet();
+    } catch (e) {}
+  };
+  reader.readAsText(file, "utf-8");
 }
 
 function pickAdmissionAge(value){
@@ -829,6 +1613,7 @@ function registerAdmission(){
   }, nowISO(), today);
   DB.cases.push(c);
   saveState();
+  syncAfterSave();
   closeSheet();
   openBoard();
 }
@@ -989,6 +1774,7 @@ function addSeed(caseId, value){
       phaseNote:c.phaseNote
     }));
   });
+  bumpStat("seedsCaptured", 1);
 }
 
 function deleteSeed(caseId, itemId){
@@ -1037,6 +1823,7 @@ function saveReviewNote(caseId, value){
 function copyReviewExport(){
   var text = formatSeedExport(unsentSeeds(DB.cases), todayISO());
   var done = function(){
+    bumpStat("exportsDone", 1);
     REVIEW.copied = true;
     render();
     setTimeout(function(){ REVIEW.copied = false; render(); }, 1500);
@@ -1060,7 +1847,9 @@ function copyReviewExport(){
 function shareReviewExport(){
   var text = formatSeedExport(unsentSeeds(DB.cases), todayISO());
   try {
-    if (typeof navigator !== "undefined" && navigator.share) navigator.share({ text:text }).catch(function(){});
+    if (typeof navigator !== "undefined" && navigator.share) {
+      navigator.share({ text:text }).then(function(){ bumpStat("exportsDone", 1); }).catch(function(){});
+    }
   } catch (e) {}
 }
 
@@ -1209,7 +1998,7 @@ function renderBoard(){
       }).join('') +
       '<div class="dropzone' + (DND.hoverIndex === cases.length ? ' on' : '') + '" onpointerenter="hoverDrop(' + cases.length + ')" onpointerup="dropReorder(' + cases.length + ')"></div>' +
     '</div>' : '<div class="empty">' + esc(STR.emptyBoard) + '</div>') +
-  '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openReview()">' + esc(STR.review) + '</button></div></div></div>';
+  '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openReview()">' + esc(STR.review) + '</button></div><div class="row" style="margin-top:8px"><button class="ghostbtn smallbtn" onclick="openSyncSheet()"><span data-sync-status>' + esc(syncStatusLabel()) + '</span></button><button class="ghostbtn smallbtn" onclick="openDataSheet()">' + esc(STR.dataRow) + '</button></div></div></div>';
 }
 
 function renderTagList(c){
@@ -1370,15 +2159,57 @@ function renderStageSheet(){
   }).join('') + '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
+function renderSyncSheet(){
+  if (SYNC && SYNC.enabled) {
+    return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.syncRow) + '</div><div class="stack">' +
+      '<div class="note"><span data-sync-status>' + esc(syncStatusLabel()) + '</span></div>' +
+      '<div class="note">サーバには暗号化済みデータのみ保存（E2E暗号化）。パスフレーズを知らない相手（サーバ運営者含む）は読めません。</div>' +
+      '<div class="field"><div class="fieldlabel">アカウント（メール）</div><input class="input" value="' + esc(SYNC.email || "") + '" readonly></div>' +
+      (SYNC_STATUS.kind === "reauth" ? '<div class="field"><div class="fieldlabel">パスワード（再ログイン）</div><input class="input" type="password" value="' + esc((SHEET.draft && SHEET.draft.reloginPassword) || "") + '" oninput="sheetTextInput(\'reloginPassword\',this.value)"></div>' : '') +
+      '<div class="row wrap"><button class="ghostbtn" onclick="syncNow()">今すぐ同期</button>' +
+      (SYNC_STATUS.kind === "reauth" ? '<button class="ghostbtn" onclick="doSyncRelogin()">再ログイン</button>' : '') +
+      '<button class="ghostbtn danger" onclick="disableSync()">無効化</button><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div></div>';
+  }
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.syncRow) + '</div><div class="stack">' +
+    '<div class="note">症例データは端末内で暗号化してから送信されます。⚠ パスフレーズを忘れるとサーバ上のデータは誰にも復元できません（端末内データは無事）。</div>' +
+    '<div class="field"><div class="fieldlabel">Firebase 設定（コンソールの firebaseConfig を貼り付け）</div><textarea class="input" rows="5" oninput="sheetTextInput(\'firebaseConfig\',this.value)">' + esc((SHEET.draft && SHEET.draft.firebaseConfig) || "") + '</textarea></div>' +
+    '<div class="field"><div class="fieldlabel">メールアドレス（同期アカウント）</div><input class="input" value="' + esc((SHEET.draft && SHEET.draft.email) || "") + '" oninput="sheetTextInput(\'email\',this.value)"></div>' +
+    '<div class="field"><div class="fieldlabel">パスワード（8文字以上・初回は自動でアカウント作成）</div><input class="input" type="password" value="' + esc((SHEET.draft && SHEET.draft.password) || "") + '" oninput="sheetTextInput(\'password\',this.value)"></div>' +
+    '<div class="field"><div class="fieldlabel">暗号化パスフレーズ（8文字以上・全端末で同一・紙に控える）</div><input class="input" type="password" value="' + esc((SHEET.draft && SHEET.draft.passphrase) || "") + '" oninput="sheetTextInput(\'passphrase\',this.value)"></div>' +
+    '<div class="field"><div class="fieldlabel">暗号化パスフレーズ（確認）</div><input class="input" type="password" value="' + esc((SHEET.draft && SHEET.draft.passphrase2) || "") + '" oninput="sheetTextInput(\'passphrase2\',this.value)"></div>' +
+    '<div class="row wrap"><button class="primary" onclick="doEnableSync()" ' + (SHEET.syncBusy ? 'disabled' : '') + '>有効化</button><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div></div>';
+}
+
+function renderDataSheet(){
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.dataRow) + '</div><div class="stack">' +
+    '<button class="ghostbtn" onclick="downloadBackup()">' + esc(STR.backupDl) + '</button>' +
+    '<input id="backupRestoreInput" class="hidden" type="file" accept="application/json,.json" onchange="restoreBackupFile(this)">' +
+    '<button class="ghostbtn" onclick="triggerBackupRestore()">' + esc(STR.backupRestore) + '</button>' +
+    '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
+}
+
 function renderSheet(){
   var el = document.getElementById("sheet");
   if (!el) return;
   var html = "";
   if (SHEET.name === "admission") html = renderAdmissionSheet();
   if (SHEET.name === "stage") html = renderStageSheet();
+  if (SHEET.name === "sync") html = renderSyncSheet();
+  if (SHEET.name === "data") html = renderDataSheet();
   el.className = "sheet" + (html ? " open" : "");
   el.innerHTML = html;
 }
+
+var renderBoardBase = renderBoard;
+renderBoard = function(){
+  return renderBoardBase();
+};
+
+var renderReviewDoneBase = renderReviewDone;
+renderReviewDone = function(){
+  var html = renderReviewDoneBase();
+  return html.replace('</div>' + (unsentSeeds(DB.cases).length ? '<div class="stack" style="margin-top:10px">' : ''), '</div><div class="phase" data-outbox-status>' + esc(REVIEW.outboxStatus || "") + '</div>' + (unsentSeeds(DB.cases).length ? '<div class="stack" style="margin-top:10px">' : ''));
+};
 
 function render(){
   ensureToday();
@@ -1393,9 +2224,18 @@ function render(){
 }
 
 function boot(){
+  STATS = loadStats();
+  ensureStatsBootDay();
+  SYNC = loadSync();
+  setSyncStatus(SYNC && SYNC.enabled ? "idle" : "off");
   DB = loadState();
+  DB._configMt = JSON.parse(JSON.stringify((SYNC && SYNC.state && SYNC.state.configMt) || {}));
   applyDailyRollover(false);
   render();
+  if (SYNC && SYNC.enabled) {
+    setTimeout(function(){ syncNow(); }, 0);
+    setTimeout(function(){ syncSendOutboxIfNeeded("boot"); }, 0);
+  }
 }
 
 if (typeof document !== "undefined" && document.addEventListener) {
