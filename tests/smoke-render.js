@@ -134,4 +134,22 @@ for (const needle of ["Phase", "Next", "Today", "Pending", "Seeds", "ABX見直�
 const appHtml = vm.runInContext("VIEW = { name:'detail', caseId:'c1', editingMeta:false, editingLabel:false, stagePickerFor:'', nowDay:todayISO() }; render()", sandbox);
 if (!appHtml || !els.app || !els.app.innerHTML) fail("render() did not write DOM");
 
+// Inline handlers resolve names against element -> document -> window before
+// reaching our globals, so a handler function named after a DOM built-in is
+// silently shadowed and never called (Casebook v9.1 createEvent incident).
+const DOM_BUILTINS = new Set(["createEvent", "open", "close", "write", "writeln", "clear", "focus", "blur",
+  "print", "stop", "find", "alert", "confirm", "prompt", "scroll", "scrollTo", "scrollBy", "remove", "click",
+  "append", "prepend", "normalize", "matches", "closest", "animate", "select", "getSelection", "createElement",
+  "createTextNode", "createRange", "importNode", "adoptNode", "execCommand", "hasFocus", "elementFromPoint",
+  "evaluate", "releaseEvents", "captureEvents", "postMessage", "fetch", "toString", "requestFullscreen"]);
+const renderedHtml = [html, boardHtml, detailHtml, appHtml,
+  vm.runInContext("renderAdmissionSheet ? (SHEET={name:'admission',draft:{label:'x',phaseNote:'',ageBand:'',sex:''}}, renderAdmissionSheet()) : ''", sandbox),
+  vm.runInContext("renderStageSheet ? (VIEW.stagePickerFor='c1', renderStageSheet()) : ''", sandbox)].join("");
+const inlineCalls = [...renderedHtml.matchAll(/on(?:click|change|input|keydown|blur|pointerdown|pointerup|pointerenter|pointercancel)="([^"]*)"/g)]
+  .flatMap((m) => [...m[1].matchAll(/(?<![\w$.])([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g)].map((x) => x[1])); // skip method calls (this.blur() etc.) -- only bare names resolve through the scope chain
+for (const name of new Set(inlineCalls)) {
+  if (DOM_BUILTINS.has(name)) fail("inline handler name collides with DOM built-in: " + name);
+}
+if (!inlineCalls.length) fail("collision check found no inline handlers (regex broken?)");
+
 console.log("SMOKE ALL PASSED");
