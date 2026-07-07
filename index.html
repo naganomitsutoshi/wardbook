@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Wardbook</title>
+<style>
+  :root{
+    color-scheme:light;
+    --bg:#f5f6f8;
+    --card:#ffffff;
+    --panel:#eef1f4;
+    --line:#d7dce2;
+    --text:#17202a;
+    --muted:#5f6b78;
+    --soft:#8a95a3;
+    --accent:#111827;
+    --stage-adm:#8b5cf6;
+    --stage-acute:#ef4444;
+    --stage-stall:#f97316;
+    --stage-improv:#eab308;
+    --stage-dc:#3b82f6;
+    --danger:#b91c1c;
+    --danger-soft:#fee2e2;
+    --ok:#166534;
+    --ok-soft:#dcfce7;
+    --badge:#fff7ed;
+    --badge-line:#fdba74;
+    --shadow:0 1px 2px rgba(0,0,0,.06);
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;
+    font:14px/1.4 system-ui,-apple-system,"Segoe UI","Hiragino Kaku Gothic ProN","Yu Gothic UI",sans-serif;
+    color:var(--text);
+    background:var(--bg);
+  }
+  button,input{font:inherit}
+  button{cursor:pointer}
+  .app{max-width:720px;margin:0 auto;padding:0 0 88px}
+  .topbar{
+    position:sticky;top:0;z-index:20;
+    background:rgba(245,246,248,.96);
+    backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--line);
+    padding:10px 14px calc(10px + env(safe-area-inset-top));
+  }
+  .toprow{display:flex;align-items:center;gap:8px}
+  .title{font-size:13px;font-weight:700;letter-spacing:.04em}
+  .grow{flex:1}
+  .screen{padding:12px}
+  .list{display:flex;flex-direction:column;gap:10px}
+  .card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-left:4px solid var(--line);
+    border-radius:14px;
+    box-shadow:var(--shadow);
+    padding:10px;
+  }
+  .card.dragging{opacity:.72}
+  .cardhead{display:flex;gap:8px;align-items:flex-start}
+  .handle,.iconbtn,.ghostbtn,.chipbtn,.pickbtn,.smallbtn,.primary{
+    border:1px solid var(--line);
+    background:#fff;
+    color:var(--text);
+    border-radius:10px;
+    min-height:36px;
+  }
+  .handle{width:36px;min-width:36px;padding:0;touch-action:none}
+  .iconbtn{width:36px;padding:0}
+  .primary{
+    background:var(--accent);
+    border-color:var(--accent);
+    color:#fff;
+    font-weight:700;
+    padding:0 14px;
+  }
+  .ghostbtn,.smallbtn,.pickbtn{padding:0 12px}
+  .smallbtn{min-height:32px;font-size:12px}
+  .chipbtn{
+    min-height:34px;
+    padding:0 10px;
+    font-size:12px;
+  }
+  .chipbtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .labelrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .caseid{font-weight:700;font-size:16px}
+  .meta{color:var(--muted);font-size:12px}
+  .stagechip{
+    display:inline-flex;align-items:center;gap:6px;
+    border:1px solid var(--line);
+    background:#fff;
+    border-radius:999px;
+    padding:3px 8px;
+    font-size:12px;
+    white-space:nowrap;
+  }
+  .dot{width:9px;height:9px;border-radius:50%}
+  .phase{margin-top:6px;color:var(--muted)}
+  .section{margin-top:8px}
+  .sectiontitle{font-size:11px;font-weight:700;color:var(--soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+  .plain{display:flex;flex-direction:column;gap:4px}
+  .lineitem{
+    display:flex;gap:8px;align-items:flex-start;
+    padding:7px 8px;border-radius:10px;background:var(--panel);
+  }
+  .lineitem.sent{opacity:.6}
+  .linegrow{flex:1;min-width:0}
+  .linegrow label{display:block}
+  .text{word-break:break-word}
+  .muted{color:var(--muted)}
+  .faint{color:var(--soft);font-size:12px}
+  .badge{
+    display:inline-flex;align-items:center;justify-content:center;
+    min-height:22px;padding:0 8px;border:1px solid var(--badge-line);
+    background:var(--badge);border-radius:999px;font-size:11px;font-weight:700;
+  }
+  .seedcount{color:var(--muted);font-size:12px}
+  .empty{
+    border:1px dashed var(--line);
+    border-radius:14px;
+    background:var(--card);
+    color:var(--muted);
+    text-align:center;
+    padding:28px 16px;
+  }
+  .bottom{
+    position:fixed;left:0;right:0;bottom:0;z-index:25;
+    background:rgba(245,246,248,.96);
+    backdrop-filter:blur(8px);
+    border-top:1px solid var(--line);
+    padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+  }
+  .bottomin{max-width:720px;margin:0 auto}
+  .bottom .primary{width:100%;min-height:44px}
+  .detailhead,.row,.field,.chips,.inline{display:flex;gap:8px}
+  .detailhead{align-items:flex-start;flex-wrap:wrap}
+  .stack{display:flex;flex-direction:column;gap:12px}
+  .panelcard{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:12px;
+    box-shadow:var(--shadow);
+  }
+  .row{align-items:center}
+  .row.wrap,.inline,.chips{flex-wrap:wrap}
+  .field{flex-direction:column}
+  .fieldlabel{font-size:12px;color:var(--muted);font-weight:700}
+  .input,.date,.editline{
+    width:100%;
+    min-height:38px;
+    border:1px solid var(--line);
+    border-radius:10px;
+    background:#fff;
+    color:var(--text);
+    padding:8px 10px;
+  }
+  .date{width:auto}
+  .editline{font-weight:700;font-size:18px}
+  .one{font-size:16px;font-weight:700}
+  .subedit{font-size:13px}
+  .check{
+    width:20px;height:20px;margin-top:2px;
+    accent-color:var(--ok);
+  }
+  .danger{
+    border-color:#fecaca;
+    background:var(--danger-soft);
+    color:var(--danger);
+  }
+  .sheet{
+    position:fixed;inset:0;z-index:40;
+    background:rgba(15,23,42,.28);
+    display:none;
+    align-items:flex-end;
+    justify-content:center;
+    padding:12px;
+  }
+  .sheet.open{display:flex}
+  .sheetcard{
+    width:min(720px,100%);
+    max-height:88vh;
+    overflow:auto;
+    background:var(--card);
+    border-radius:18px 18px 0 0;
+    padding:14px;
+    box-shadow:0 18px 48px rgba(0,0,0,.18);
+  }
+  .sheettitle{font-size:16px;font-weight:700;margin-bottom:12px}
+  .note{font-size:12px;color:var(--muted)}
+  .dropzone{
+    height:10px;border-radius:999px;transition:background .12s ease;
+  }
+  .dropzone.on{background:rgba(17,24,39,.14)}
+  .tag{
+    display:inline-flex;align-items:center;gap:6px;
+    padding:4px 8px;border-radius:999px;
+    background:var(--panel);font-size:12px;
+  }
+  .tag button{
+    width:18px;height:18px;border:none;background:transparent;padding:0;color:var(--muted)
+  }
+  .hidden{display:none!important}
+  @media (min-width:860px){
+    .app{max-width:920px}
+    .screen.detail{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+    .bottomin{max-width:920px}
+  }
+</style>
+</head>
+<body>
+<div id="app" class="app"></div>
+<div id="sheet" class="sheet"></div>
+<script id="logic">
+function defaultStages(){
+  return [
+    { id:"adm", name:"入院直後", color:"#8b5cf6" },
+    { id:"acute", name:"急性期", color:"#ef4444" },
+    { id:"stall", name:"停滞・悪化", color:"#f97316" },
+    { id:"improv", name:"改善傾向", color:"#eab308" },
+    { id:"dc", name:"退院調整", color:"#3b82f6" }
+  ];
+}
+
+function defaultLabels(){
+  return { phase:"Phase", next:"Next", today:"Today", pending:"Pending", seeds:"Seeds" };
+}
+
+function isObj(v){
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function cloneArr(v){
+  return Array.isArray(v) ? v.slice() : [];
+}
+
+function safeDate(v, fallback){
+  return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : fallback;
+}
+
+function toNum(v, fallback){
+  return Number.isFinite(Number(v)) ? Number(v) : fallback;
+}
+
+function normalizeStage(raw, index){
+  var d = defaultStages()[index] || defaultStages()[0];
+  var src = isObj(raw) ? raw : {};
+  return {
+    id: typeof src.id === "string" && src.id ? src.id : d.id,
+    name: typeof src.name === "string" && src.name ? src.name : d.name,
+    color: typeof src.color === "string" && src.color ? src.color : d.color
+  };
+}
+
+function normalizeLabels(raw){
+  var base = defaultLabels();
+  var out = {};
+  var src = isObj(raw) ? raw : {};
+  Object.keys(base).forEach(function(k){
+    out[k] = typeof src[k] === "string" && src[k] ? src[k] : base[k];
+  });
+  return out;
+}
+
+function computeDay(admittedAt, todayIso){
+  var start = Date.parse(String(admittedAt || "") + "T00:00:00");
+  var end = Date.parse(String(todayIso || "") + "T00:00:00");
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 1;
+  var diff = Math.floor((end - start) / 86400000) + 1;
+  return diff < 1 ? 1 : diff;
+}
+
+function normalizeCase(raw, nowIso, todayIso){
+  var src = isObj(raw) ? raw : {};
+  var out = {};
+  Object.keys(src).forEach(function(k){ out[k] = src[k]; });
+  out.id = typeof src.id === "string" && src.id ? src.id : "";
+  out.label = typeof src.label === "string" ? src.label : "";
+  out.ageBand = typeof src.ageBand === "string" ? src.ageBand : "";
+  out.sex = src.sex === "M" || src.sex === "F" ? src.sex : "";
+  out.dxTags = cloneArr(src.dxTags).filter(function(x){ return typeof x === "string" && x; });
+  out.status = src.status === "discharged" ? "discharged" : "active";
+  out.admittedAt = safeDate(src.admittedAt, todayIso);
+  out.dischargedAt = src.dischargedAt === null ? null : safeDate(src.dischargedAt, null);
+  out.stageId = typeof src.stageId === "string" && src.stageId ? src.stageId : defaultStages()[0].id;
+  out.phaseNote = typeof src.phaseNote === "string" ? src.phaseNote : "";
+  out.next = cloneArr(src.next).map(function(item, idx){
+    var row = isObj(item) ? item : {};
+    return {
+      id: typeof row.id === "string" && row.id ? row.id : "next-" + idx,
+      text: typeof row.text === "string" ? row.text : "",
+      due: row.due === null ? null : safeDate(row.due, null)
+    };
+  }).filter(function(item){ return item.text || item.due; });
+  out.todos = cloneArr(src.todos).map(function(item, idx){
+    var row = isObj(item) ? item : {};
+    return {
+      id: typeof row.id === "string" && row.id ? row.id : "todo-" + idx,
+      text: typeof row.text === "string" ? row.text : "",
+      done: row.done === true,
+      createdOn: safeDate(row.createdOn, todayIso)
+    };
+  }).filter(function(item){ return item.text; });
+  out.pendings = cloneArr(src.pendings).map(function(item, idx){
+    var row = isObj(item) ? item : {};
+    return {
+      id: typeof row.id === "string" && row.id ? row.id : "pending-" + idx,
+      text: typeof row.text === "string" ? row.text : "",
+      backOn: row.backOn === null ? null : safeDate(row.backOn, null)
+    };
+  }).filter(function(item){ return item.text; });
+  out.appts = cloneArr(src.appts);
+  out.seeds = cloneArr(src.seeds).map(function(item, idx){
+    var row = isObj(item) ? item : {};
+    var snap = isObj(row.snapshot) ? row.snapshot : {};
+    return {
+      id: typeof row.id === "string" && row.id ? row.id : "seed-" + idx,
+      text: typeof row.text === "string" ? row.text : "",
+      snapshot: {
+        label: typeof snap.label === "string" ? snap.label : out.label,
+        day: Number.isFinite(Number(snap.day)) ? Number(snap.day) : computeDay(out.admittedAt, todayIso),
+        stageName: typeof snap.stageName === "string" ? snap.stageName : "",
+        phaseNote: typeof snap.phaseNote === "string" ? snap.phaseNote : out.phaseNote
+      },
+      sentAt: row.sentAt === null ? null : (typeof row.sentAt === "string" ? row.sentAt : null)
+    };
+  }).filter(function(item){ return item.text; });
+  out.discharge = src.discharge == null ? null : src.discharge;
+  out.chart = src.chart == null ? null : src.chart;
+  out.order = toNum(src.order, 0);
+  out.lastTouchedAt = typeof src.lastTouchedAt === "string" && src.lastTouchedAt ? src.lastTouchedAt : nowIso;
+  return out;
+}
+
+function normalizeState(raw){
+  var src = isObj(raw) ? raw : {};
+  var cfg = isObj(src.config) ? src.config : {};
+  var stages = cloneArr(cfg.stages).map(normalizeStage).filter(function(x){ return x.id && x.name; });
+  if (!stages.length) stages = defaultStages();
+  var state = {
+    v: 1,
+    cases: cloneArr(src.cases).map(function(c, idx){
+      var item = normalizeCase(c, "", todayISOFallback());
+      if (!Number.isFinite(item.order)) item.order = idx;
+      return item;
+    }),
+    config: {
+      stages: stages,
+      labels: normalizeLabels(cfg.labels)
+    }
+  };
+  state.cases = state.cases.map(function(c, idx){
+    if (!Number.isFinite(c.order)) c.order = idx;
+    if (!hasStageId(state.config.stages, c.stageId)) c.stageId = state.config.stages[0].id;
+    return c;
+  });
+  return state;
+}
+
+function hasStageId(stages, stageId){
+  return cloneArr(stages).some(function(s){ return s.id === stageId; });
+}
+
+function rolloverTodos(c, todayIso){
+  return cloneArr(c && c.todos).filter(function(item){
+    if (!item || item.done !== true) return true;
+    return !(item.createdOn && item.createdOn < todayIso);
+  }).map(function(item){
+    return {
+      id:item.id,
+      text:item.text,
+      done:item.done === true,
+      createdOn:item.createdOn
+    };
+  });
+}
+
+function hasBackToday(c, todayIso){
+  return cloneArr(c && c.pendings).some(function(item){
+    return !!(item && item.backOn && item.backOn <= todayIso);
+  });
+}
+
+function boardOrder(cases, todayIso){
+  var active = cloneArr(cases).filter(function(c){ return c && c.status === "active"; });
+  var urgent = [];
+  var rest = [];
+  active.sort(function(a, b){ return toNum(a.order, 0) - toNum(b.order, 0); });
+  active.forEach(function(c){
+    if (hasBackToday(c, todayIso)) urgent.push(c);
+    else rest.push(c);
+  });
+  return urgent.concat(rest);
+}
+
+function makeSeed(id, text, snapshotFields){
+  var snap = isObj(snapshotFields) ? snapshotFields : {};
+  return {
+    id:id,
+    text:text,
+    snapshot:{
+      label:typeof snap.label === "string" ? snap.label : "",
+      day:Number.isFinite(Number(snap.day)) ? Number(snap.day) : 1,
+      stageName:typeof snap.stageName === "string" ? snap.stageName : "",
+      phaseNote:typeof snap.phaseNote === "string" ? snap.phaseNote : ""
+    },
+    sentAt:null
+  };
+}
+
+function moveCase(cases, caseId, direction){
+  var list = cloneArr(cases).slice().sort(function(a, b){ return toNum(a.order, 0) - toNum(b.order, 0); });
+  var idx = list.findIndex(function(c){ return c && c.id === caseId; });
+  if (idx < 0) return list.map(copyWithOrder);
+  var nextIdx = direction === "up" ? idx - 1 : direction === "down" ? idx + 1 : idx;
+  if (nextIdx < 0 || nextIdx >= list.length || nextIdx === idx) return list.map(copyWithOrder);
+  var moved = list.splice(idx, 1)[0];
+  list.splice(nextIdx, 0, moved);
+  return list.map(copyWithOrder);
+}
+
+function copyWithOrder(c, idx){
+  var out = {};
+  Object.keys(c || {}).forEach(function(k){ out[k] = c[k]; });
+  out.order = idx;
+  return out;
+}
+
+function todayISOFallback(){
+  return "2000-01-01";
+}
+
+if (typeof module !== "undefined") {
+  module.exports = {
+    defaultStages:defaultStages,
+    defaultLabels:defaultLabels,
+    normalizeState:normalizeState,
+    normalizeCase:normalizeCase,
+    computeDay:computeDay,
+    rolloverTodos:rolloverTodos,
+    hasBackToday:hasBackToday,
+    boardOrder:boardOrder,
+    makeSeed:makeSeed,
+    moveCase:moveCase
+  };
+}
+</script>
+<script>
+const STORAGE_KEY = "wardbook:v1";
+const RESERVED_KEYS = ["wardbook:stats", "wardbook:settings", "wardbook:sync", "wardbook:theme"];
+const STR = {
+  addAdmission:"＋ 入院を登録",
+  register:"登録",
+  cancel:"キャンセル",
+  back:"← 一覧",
+  piiWarning:"氏名・ID・部屋番号など個人情報は入力しない（匿名ラベルのみ）",
+  labelPh:"ラベル（例：肺炎）",
+  firstNotePh:"見立ての一言（例：CAP、CTRXで3日解熱見込み）",
+  ageBands:["10代以下","20代","30代","40代","50代","60代","70代","80代","90代以上"],
+  sexM:"男",
+  sexF:"女",
+  unset:"未設定",
+  addDxTag:"＋病名タグ",
+  dxTagPh:"病名タグ（確定病名で検索用）",
+  nextPh:"次の展開を追加",
+  todayPh:"今日やることを追加",
+  pendingPh:"待ちを追加（培養・コンサル返事など）",
+  seedPh:"種を追加（引っかかり・疑問）",
+  backTodayBadge:"戻り予定",
+  emptyBoard:"入院患者がいません。「＋ 入院を登録」から始めます。",
+  deleteCase:"この症例を削除",
+  deleteConfirm:"この症例を完全に削除します。よろしいですか？",
+  dueLabel:"期日",
+  backOnLabel:"戻り日",
+  editMeta:"年代・性別"
+};
+
+let DB = normalizeState(null);
+let VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO() };
+let SHEET = { name:"", draft:{} };
+let DND = { activeId:"", hoverIndex:-1 };
+
+function todayISO(){
+  var d = new Date();
+  var y = d.getFullYear();
+  var m = String(d.getMonth() + 1).padStart(2, "0");
+  var day = String(d.getDate()).padStart(2, "0");
+  return y + "-" + m + "-" + day;
+}
+
+function nowISO(){
+  return new Date().toISOString();
+}
+
+function uid(){
+  return "w" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+
+function esc(s){
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function stageById(stageId){
+  return DB.config.stages.find(function(s){ return s.id === stageId; }) || DB.config.stages[0];
+}
+
+function stageDot(stage){
+  return '<span class="dot" style="background:' + esc(stage.color) + '"></span>';
+}
+
+function compactSex(sex){
+  return sex === "M" ? STR.sexM : sex === "F" ? STR.sexF : "";
+}
+
+function compactMeta(c){
+  return (c.ageBand || "") + compactSex(c.sex);
+}
+
+function loadState(){
+  var raw = null;
+  try {
+    raw = localStorage.getItem(STORAGE_KEY);
+  } catch (e) {}
+  if (!raw) return normalizeState(null);
+  try {
+    return normalizeState(JSON.parse(raw));
+  } catch (e) {
+    return normalizeState(null);
+  }
+}
+
+function saveState(){
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(DB));
+  } catch (e) {}
+}
+
+function touch(c){
+  c.lastTouchedAt = nowISO();
+}
+
+function persist(){
+  saveState();
+  render();
+}
+
+function normalizeRuntimeCase(c){
+  return normalizeCase(c, nowISO(), todayISO());
+}
+
+function currentCase(){
+  return DB.cases.find(function(c){ return c.id === VIEW.caseId; }) || null;
+}
+
+function applyDailyRollover(force){
+  var today = todayISO();
+  var changed = !!force;
+  DB.cases = DB.cases.map(function(c){
+    var nextTodos = rolloverTodos(c, today);
+    if (JSON.stringify(nextTodos) !== JSON.stringify(c.todos)) {
+      changed = true;
+      var out = Object.assign({}, c, { todos:nextTodos });
+      return out;
+    }
+    return c;
+  });
+  VIEW.nowDay = today;
+  if (changed) saveState();
+}
+
+function ensureToday(){
+  if (VIEW.nowDay !== todayISO()) {
+    applyDailyRollover(true);
+    render();
+  }
+}
+
+function mutateCase(caseId, fn){
+  var target = DB.cases.find(function(c){ return c.id === caseId; });
+  if (!target) return;
+  fn(target);
+  touch(target);
+  target.todos = rolloverTodos(target, todayISO());
+  persist();
+}
+
+function reorderActiveByIds(ids){
+  var set = new Set(ids);
+  var sorted = ids.map(function(id){ return DB.cases.find(function(c){ return c.id === id; }); }).filter(Boolean);
+  var idx = 0;
+  DB.cases = DB.cases.map(function(c){
+    if (c.status !== "active" || !set.has(c.id)) return c;
+    var next = sorted[idx++];
+    var copy = Object.assign({}, next);
+    copy.order = idx - 1;
+    return copy;
+  });
+}
+
+function boardCases(){
+  return boardOrder(DB.cases, todayISO());
+}
+
+function openBoard(){
+  VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO() };
+  render();
+}
+
+function openDetail(caseId){
+  VIEW.name = "detail";
+  VIEW.caseId = caseId;
+  VIEW.editingMeta = false;
+  VIEW.editingLabel = false;
+  render();
+}
+
+function openAdmissionSheet(){
+  SHEET.name = "admission";
+  SHEET.draft = { label:"", phaseNote:"", ageBand:"", sex:"" };
+  renderSheet();
+  var el = document.getElementById("admLabelInput");
+  if (el && el.focus) el.focus();
+}
+
+function closeSheet(){
+  SHEET.name = "";
+  SHEET.draft = {};
+  renderSheet();
+}
+
+function openStagePicker(caseId){
+  VIEW.stagePickerFor = caseId;
+  SHEET.name = "stage";
+  renderSheet();
+}
+
+// Text inputs update the draft WITHOUT re-rendering the sheet: a re-render per
+// keystroke replaces the input node, which drops focus and breaks Japanese IME
+// composition. Only the register button's disabled state is patched directly.
+function sheetTextInput(key, value){
+  SHEET.draft[key] = value;
+  if (key === "label") {
+    var btn = document.getElementById("registerBtn");
+    if (btn) btn.disabled = !String(value || "").trim();
+  }
+}
+
+function pickAdmissionAge(value){
+  SHEET.draft.ageBand = value;
+  renderSheet();
+}
+
+function pickAdmissionSex(value){
+  SHEET.draft.sex = value;
+  renderSheet();
+}
+
+function registerAdmission(){
+  var draft = SHEET.draft || {};
+  var label = String(draft.label || "").trim();
+  if (!label) return;
+  var today = todayISO();
+  var c = normalizeCase({
+    id:uid(),
+    label:label,
+    phaseNote:String(draft.phaseNote || "").trim(),
+    ageBand:draft.ageBand || "",
+    sex:draft.sex || "",
+    status:"active",
+    admittedAt:today,
+    dischargedAt:null,
+    stageId:DB.config.stages[0].id,
+    next:[],
+    todos:[],
+    pendings:[],
+    appts:[],
+    seeds:[],
+    dxTags:[],
+    discharge:null,
+    chart:null,
+    order:boardCases().length,
+    lastTouchedAt:nowISO()
+  }, nowISO(), today);
+  DB.cases.push(c);
+  saveState();
+  closeSheet();
+  openBoard();
+}
+
+function setStage(caseId, stageId){
+  mutateCase(caseId, function(c){ c.stageId = stageId; });
+  closeSheet();
+}
+
+function setViewEditingMeta(on){
+  VIEW.editingMeta = !!on;
+  render();
+}
+
+function setViewEditingLabel(on){
+  VIEW.editingLabel = !!on;
+  render();
+  // autofocus does not fire on innerHTML-inserted nodes
+  if (VIEW.editingLabel && document.querySelector) {
+    var el = document.querySelector(".editline");
+    if (el && el.focus) el.focus();
+  }
+}
+
+function updateCaseLabel(caseId, value){
+  mutateCase(caseId, function(c){ c.label = String(value || "").trim(); });
+}
+
+function updateCasePhase(caseId, value){
+  mutateCase(caseId, function(c){ c.phaseNote = String(value || "").trim(); });
+}
+
+function updateCaseAge(caseId, value){
+  mutateCase(caseId, function(c){ c.ageBand = value; });
+}
+
+function updateCaseSex(caseId, value){
+  mutateCase(caseId, function(c){ c.sex = value; });
+}
+
+function addDxTag(caseId, value){
+  var text = String(value || "").trim();
+  if (!text) return;
+  mutateCase(caseId, function(c){
+    if (!c.dxTags.includes(text)) c.dxTags.push(text);
+  });
+}
+
+// By index, not by tag text: tag text is user input and embedding it inside an
+// inline onclick JS string breaks on quotes/apostrophes.
+function removeDxTag(caseId, index){
+  mutateCase(caseId, function(c){
+    c.dxTags = c.dxTags.filter(function(x, i){ return i !== index; });
+  });
+}
+
+function addNext(caseId, value){
+  var text = String(value || "").trim();
+  if (!text) return;
+  mutateCase(caseId, function(c){
+    c.next.push({ id:uid(), text:text, due:null });
+  });
+}
+
+function updateNextText(caseId, itemId, value){
+  mutateCase(caseId, function(c){
+    var item = c.next.find(function(x){ return x.id === itemId; });
+    if (item) item.text = value;
+  });
+}
+
+function updateNextDue(caseId, itemId, value){
+  mutateCase(caseId, function(c){
+    var item = c.next.find(function(x){ return x.id === itemId; });
+    if (item) item.due = value || null;
+  });
+}
+
+function deleteNext(caseId, itemId){
+  mutateCase(caseId, function(c){
+    c.next = c.next.filter(function(x){ return x.id !== itemId; });
+  });
+}
+
+function addTodo(caseId, value){
+  var text = String(value || "").trim();
+  if (!text) return;
+  mutateCase(caseId, function(c){
+    c.todos.push({ id:uid(), text:text, done:false, createdOn:todayISO() });
+  });
+}
+
+function toggleTodo(caseId, itemId){
+  mutateCase(caseId, function(c){
+    var item = c.todos.find(function(x){ return x.id === itemId; });
+    if (item) item.done = !item.done;
+  });
+}
+
+function updateTodoText(caseId, itemId, value){
+  mutateCase(caseId, function(c){
+    var item = c.todos.find(function(x){ return x.id === itemId; });
+    if (item) item.text = value;
+  });
+}
+
+function deleteTodo(caseId, itemId){
+  mutateCase(caseId, function(c){
+    c.todos = c.todos.filter(function(x){ return x.id !== itemId; });
+  });
+}
+
+function addPending(caseId, value){
+  var text = String(value || "").trim();
+  if (!text) return;
+  mutateCase(caseId, function(c){
+    c.pendings.push({ id:uid(), text:text, backOn:null });
+  });
+}
+
+function updatePendingText(caseId, itemId, value){
+  mutateCase(caseId, function(c){
+    var item = c.pendings.find(function(x){ return x.id === itemId; });
+    if (item) item.text = value;
+  });
+}
+
+function updatePendingBackOn(caseId, itemId, value){
+  mutateCase(caseId, function(c){
+    var item = c.pendings.find(function(x){ return x.id === itemId; });
+    if (item) item.backOn = value || null;
+  });
+}
+
+function deletePending(caseId, itemId){
+  mutateCase(caseId, function(c){
+    c.pendings = c.pendings.filter(function(x){ return x.id !== itemId; });
+  });
+}
+
+function addSeed(caseId, value){
+  var text = String(value || "").trim();
+  if (!text) return;
+  mutateCase(caseId, function(c){
+    var stage = stageById(c.stageId);
+    c.seeds.push(makeSeed(uid(), text, {
+      label:c.label,
+      day:computeDay(c.admittedAt, todayISO()),
+      stageName:stage ? stage.name : "",
+      phaseNote:c.phaseNote
+    }));
+  });
+}
+
+function deleteSeed(caseId, itemId){
+  mutateCase(caseId, function(c){
+    c.seeds = c.seeds.filter(function(x){ return x.id !== itemId; });
+  });
+}
+
+function deleteCase(caseId){
+  if (!confirm(STR.deleteConfirm)) return;
+  DB.cases = DB.cases.filter(function(c){ return c.id !== caseId; }).map(function(c, idx){
+    var out = Object.assign({}, c);
+    if (out.status === "active") out.order = idx;
+    return out;
+  });
+  saveState();
+  openBoard();
+}
+
+function moveCaseDirection(caseId, direction){
+  var active = DB.cases.filter(function(c){ return c.status === "active"; });
+  var moved = moveCase(active, caseId, direction);
+  var byId = {};
+  moved.forEach(function(c){ byId[c.id] = c.order; });
+  DB.cases = DB.cases.map(function(c){
+    if (c.status !== "active") return c;
+    var out = Object.assign({}, c);
+    if (byId.hasOwnProperty(out.id)) out.order = byId[out.id];
+    return out;
+  });
+  saveState();
+  render();
+}
+
+function startDragCase(ev, caseId){
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  // Touch pointers are implicitly captured by the handle, which would keep
+  // pointerenter/pointerup from ever reaching the dropzones. Release it.
+  if (ev && ev.pointerId != null && ev.target && ev.target.releasePointerCapture) {
+    try { ev.target.releasePointerCapture(ev.pointerId); } catch (e) {}
+  }
+  DND.activeId = caseId;
+  DND.hoverIndex = -1;
+  render();
+}
+
+function hoverDrop(index){
+  if (!DND.activeId) return;
+  DND.hoverIndex = index;
+  render();
+}
+
+function dropReorder(index){
+  if (!DND.activeId) return;
+  var ids = boardCases().map(function(c){ return c.id; });
+  var from = ids.indexOf(DND.activeId);
+  if (from < 0) {
+    DND.activeId = "";
+    DND.hoverIndex = -1;
+    render();
+    return;
+  }
+  var nextIds = ids.slice();
+  var picked = nextIds.splice(from, 1)[0];
+  var target = index;
+  if (target > from) target -= 1;
+  if (target < 0) target = 0;
+  if (target > nextIds.length) target = nextIds.length;
+  nextIds.splice(target, 0, picked);
+  reorderActiveByIds(nextIds);
+  DND.activeId = "";
+  DND.hoverIndex = -1;
+  saveState();
+  render();
+}
+
+function cancelDrag(){
+  if (!DND.activeId && DND.hoverIndex < 0) return;
+  DND.activeId = "";
+  DND.hoverIndex = -1;
+  render();
+}
+
+function renderTopbar(){
+  return '<div class="topbar"><div class="toprow">' +
+    (VIEW.name === "detail" ? '<button class="ghostbtn smallbtn" onclick="openBoard()">' + esc(STR.back) + '</button>' : '') +
+    '<div class="title">Wardbook</div><div class="grow"></div></div></div>';
+}
+
+function renderBoardCard(c){
+  var stage = stageById(c.stageId);
+  var dueNext = c.next.slice(0, 2);
+  var undone = c.todos.filter(function(x){ return !x.done; });
+  var showPendings = c.pendings.length > 0;
+  var stageStyle = 'border-left-color:' + esc(stage.color);
+  return '<article class="card' + (DND.activeId === c.id ? ' dragging' : '') + '" style="' + stageStyle + '" onclick="openDetail(\'' + esc(c.id) + '\')">' +
+    '<div class="cardhead">' +
+      '<button class="handle" onpointerdown="startDragCase(event,\'' + esc(c.id) + '\')" onclick="event.stopPropagation()">≡</button>' +
+      '<div class="linegrow">' +
+        '<div class="labelrow"><div class="caseid">' + esc(c.label || "—") + ' D' + computeDay(c.admittedAt, todayISO()) + '</div>' +
+        (compactMeta(c) ? '<div class="meta">' + esc(compactMeta(c)) + '</div>' : '') +
+        '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div></div>' +
+        (c.phaseNote ? '<div class="phase">' + esc(c.phaseNote) + '</div>' : '') +
+        (dueNext.length ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.next) + '</div><div class="plain">' + dueNext.map(function(item){
+          return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + (item.due ? '<div class="faint">' + esc(item.due) + '</div>' : '') + '</div></div>';
+        }).join("") + '</div></div>' : '') +
+        (undone.length ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.today) + ' ' + undone.length + '</div><div class="plain">' + undone.slice(0, 2).map(function(item){
+          return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div></label>';
+        }).join("") + '</div></div>' : '') +
+        (showPendings ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.pending) + '</div><div class="plain">' + c.pendings.map(function(item){
+          var urgent = item.backOn && item.backOn <= todayISO();
+          return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + (item.backOn ? '<div class="faint">' + esc(item.backOn) + '</div>' : '') + '</div>' + (urgent ? '<span class="badge">' + esc(STR.backTodayBadge) + '</span>' : '') + '</div>';
+        }).join("") + '</div></div>' : '') +
+        (c.seeds.length ? '<div class="section seedcount">' + esc(DB.config.labels.seeds) + ' ' + c.seeds.length + '</div>' : '') +
+      '</div>' +
+    '</div>' +
+    '<div class="inline" style="margin-top:8px" onclick="event.stopPropagation()"><button class="smallbtn" onclick="moveCaseDirection(\'' + esc(c.id) + '\',\'up\')">↑</button><button class="smallbtn" onclick="moveCaseDirection(\'' + esc(c.id) + '\',\'down\')">↓</button></div>' +
+  '</article>';
+}
+
+function renderBoard(){
+  var cases = boardCases();
+  return '<section class="screen">' +
+    (cases.length ? '<div class="list">' +
+      cases.map(function(c, idx){
+        return '<div class="dropzone' + (DND.hoverIndex === idx ? ' on' : '') + '" onpointerenter="hoverDrop(' + idx + ')" onpointerup="dropReorder(' + idx + ')"></div>' + renderBoardCard(c);
+      }).join("") +
+      '<div class="dropzone' + (DND.hoverIndex === cases.length ? ' on' : '') + '" onpointerenter="hoverDrop(' + cases.length + ')" onpointerup="dropReorder(' + cases.length + ')"></div>' +
+    '</div>' : '<div class="empty">' + esc(STR.emptyBoard) + '</div>') +
+  '</section><div class="bottom"><div class="bottomin"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button></div></div>';
+}
+
+function renderTagList(c){
+  return '<div class="chips">' +
+    c.dxTags.map(function(tag, i){
+      return '<span class="tag">' + esc(tag) + '<button onclick="removeDxTag(\'' + esc(c.id) + '\',' + i + ')">×</button></span>';
+    }).join("") +
+  '</div>';
+}
+
+function renderMetaEditor(c){
+  return '<div class="field" style="margin-top:8px"><div class="fieldlabel">' + esc(STR.editMeta) + '</div>' +
+    '<div class="chips">' +
+      '<button class="chipbtn' + (!c.ageBand ? ' on' : '') + '" onclick="updateCaseAge(\'' + esc(c.id) + '\',\'\')">' + esc(STR.unset) + '</button>' +
+      STR.ageBands.map(function(age){
+        return '<button class="chipbtn' + (c.ageBand === age ? ' on' : '') + '" onclick="updateCaseAge(\'' + esc(c.id) + '\',\'' + esc(age) + '\')">' + esc(age) + '</button>';
+      }).join("") +
+    '</div><div class="chips">' +
+      '<button class="chipbtn' + (!c.sex ? ' on' : '') + '" onclick="updateCaseSex(\'' + esc(c.id) + '\',\'\')">' + esc(STR.unset) + '</button>' +
+      '<button class="chipbtn' + (c.sex === "M" ? ' on' : '') + '" onclick="updateCaseSex(\'' + esc(c.id) + '\',\'M\')">' + esc(STR.sexM) + '</button>' +
+      '<button class="chipbtn' + (c.sex === "F" ? ' on' : '') + '" onclick="updateCaseSex(\'' + esc(c.id) + '\',\'F\')">' + esc(STR.sexF) + '</button>' +
+    '</div></div>';
+}
+
+function renderNextList(c){
+  return c.next.map(function(item){
+    return '<div class="lineitem"><div class="linegrow">' +
+      '<input class="input subedit" value="' + esc(item.text) + '" onchange="updateNextText(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
+      '<div class="row wrap" style="margin-top:6px"><span class="fieldlabel">' + esc(STR.dueLabel) + '</span><input class="date" type="date" value="' + esc(item.due || "") + '" onchange="updateNextDue(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)"></div>' +
+    '</div><button class="iconbtn" onclick="deleteNext(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
+  }).join("");
+}
+
+function renderTodoList(c){
+  return c.todos.map(function(item){
+    return '<div class="lineitem"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' +
+      '<div class="linegrow"><input class="input subedit" value="' + esc(item.text) + '" onchange="updateTodoText(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)"><div class="faint">' + esc(item.createdOn) + '</div></div>' +
+      '<button class="iconbtn" onclick="deleteTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
+  }).join("");
+}
+
+function renderPendingList(c){
+  return c.pendings.map(function(item){
+    var urgent = item.backOn && item.backOn <= todayISO();
+    return '<div class="lineitem"><div class="linegrow"><input class="input subedit" value="' + esc(item.text) + '" onchange="updatePendingText(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
+      '<div class="row wrap" style="margin-top:6px"><span class="fieldlabel">' + esc(STR.backOnLabel) + '</span><input class="date" type="date" value="' + esc(item.backOn || "") + '" onchange="updatePendingBackOn(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
+      (urgent ? '<span class="badge">' + esc(STR.backTodayBadge) + '</span>' : '') + '</div></div>' +
+      '<button class="iconbtn" onclick="deletePending(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
+  }).join("");
+}
+
+function renderSeedList(c){
+  return c.seeds.map(function(item){
+    return '<div class="lineitem' + (item.sentAt ? ' sent' : '') + '"><div class="linegrow"><div class="text">' + esc(item.text) + '</div><div class="faint">D' + esc(item.snapshot.day) + ' ・ ' + esc(item.snapshot.stageName) + (item.snapshot.phaseNote ? ' ・ ' + esc(item.snapshot.phaseNote) : '') + '</div></div><button class="iconbtn" onclick="deleteSeed(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
+  }).join("");
+}
+
+function renderSectionCard(title, body, addId, placeholder, addFn, caseId){
+  return '<section class="panelcard"><div class="one">' + esc(title) + '</div><div class="stack" style="margin-top:10px">' +
+    (body || '<div class="faint">—</div>') +
+    (addId ? '<div class="row"><input id="' + esc(addId) + '" class="input" placeholder="' + esc(placeholder) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){' + addFn + '(\'' + esc(caseId) + '\',this.value);this.value=\'\';}"><button class="ghostbtn" onclick="' + addFn + '(\'' + esc(caseId) + '\',document.getElementById(\'' + esc(addId) + '\').value);document.getElementById(\'' + esc(addId) + '\').value=\'\'">＋</button></div>' : '') +
+  '</div></section>';
+}
+
+function renderDetail(caseId){
+  var c = DB.cases.find(function(item){ return item.id === caseId; });
+  if (!c) return '<section class="screen"><div class="empty">not found</div></section>';
+  var stage = stageById(c.stageId);
+  return '<section class="screen detail"><div class="stack">' +
+    '<section class="panelcard"><div class="detailhead"><div class="linegrow">' +
+      (VIEW.editingLabel
+        ? '<input class="editline" value="' + esc(c.label) + '" onblur="setViewEditingLabel(false);updateCaseLabel(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}" autofocus>'
+        : '<div class="caseid one" onclick="setViewEditingLabel(true)">' + esc(c.label || "—") + '</div>') +
+      '<div class="meta" onclick="setViewEditingMeta(' + (!VIEW.editingMeta ? 'true' : 'false') + ')">D' + computeDay(c.admittedAt, todayISO()) + ' ・ ' + esc(compactMeta(c)) + '</div>' +
+      (VIEW.editingMeta ? renderMetaEditor(c) : '') +
+    '</div>' +
+    '<button class="pickbtn" onclick="openStagePicker(\'' + esc(c.id) + '\')">' + stageDot(stage) + esc(stage.name) + '</button></div>' +
+    '<div class="field" style="margin-top:10px"><div class="fieldlabel">' + esc(STR.addDxTag) + '</div>' +
+      renderTagList(c) +
+      '<div class="row" style="margin-top:8px"><input id="dxTagInput" class="input" placeholder="' + esc(STR.dxTagPh) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addDxTag(\'' + esc(c.id) + '\',this.value);this.value=\'\'}"><button class="ghostbtn" onclick="addDxTag(\'' + esc(c.id) + '\',document.getElementById(\'dxTagInput\').value);document.getElementById(\'dxTagInput\').value=\'\'">＋</button></div>' +
+    '</div></section>' +
+    '<section class="panelcard"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
+    renderSectionCard(DB.config.labels.next, renderNextList(c), "nextInput", STR.nextPh, "addNext", c.id) +
+    renderSectionCard(DB.config.labels.today, renderTodoList(c), "todoInput", STR.todayPh, "addTodo", c.id) +
+    renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id) +
+    renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id) +
+    '<section class="panelcard"><button class="ghostbtn danger" onclick="deleteCase(\'' + esc(c.id) + '\')">' + esc(STR.deleteCase) + '</button></section>' +
+  '</div></section>';
+}
+
+function renderAdmissionSheet(){
+  var d = SHEET.draft || {};
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.addAdmission) + '</div>' +
+    '<div class="stack">' +
+      '<div class="field"><input id="admLabelInput" class="input" value="' + esc(d.label || "") + '" placeholder="' + esc(STR.labelPh) + '" oninput="sheetTextInput(\'label\',this.value)" autofocus><div class="note">' + esc(STR.piiWarning) + '</div></div>' +
+      '<div class="field"><input class="input" value="' + esc(d.phaseNote || "") + '" placeholder="' + esc(STR.firstNotePh) + '" oninput="sheetTextInput(\'phaseNote\',this.value)"></div>' +
+      '<div class="field"><div class="fieldlabel">' + esc(STR.editMeta) + '</div><div class="chips"><button class="chipbtn' + (!d.ageBand ? ' on' : '') + '" onclick="pickAdmissionAge(\'\')">' + esc(STR.unset) + '</button>' +
+        STR.ageBands.map(function(age){ return '<button class="chipbtn' + (d.ageBand === age ? ' on' : '') + '" onclick="pickAdmissionAge(\'' + esc(age) + '\')">' + esc(age) + '</button>'; }).join("") +
+      '</div></div>' +
+      '<div class="field"><div class="chips"><button class="chipbtn' + (!d.sex ? ' on' : '') + '" onclick="pickAdmissionSex(\'\')">' + esc(STR.unset) + '</button><button class="chipbtn' + (d.sex === "M" ? ' on' : '') + '" onclick="pickAdmissionSex(\'M\')">' + esc(STR.sexM) + '</button><button class="chipbtn' + (d.sex === "F" ? ' on' : '') + '" onclick="pickAdmissionSex(\'F\')">' + esc(STR.sexF) + '</button></div></div>' +
+      '<div class="row"><button id="registerBtn" class="primary" ' + (!String(d.label || "").trim() ? "disabled" : "") + ' onclick="registerAdmission()">' + esc(STR.register) + '</button><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div>' +
+    '</div></div>';
+}
+
+function renderStageSheet(){
+  var c = DB.cases.find(function(item){ return item.id === VIEW.stagePickerFor; });
+  var active = c ? c.stageId : "";
+  return '<div class="sheetcard"><div class="sheettitle">Stage</div><div class="stack">' + DB.config.stages.map(function(stage){
+    return '<button class="lineitem" style="width:100%;text-align:left;' + (active === stage.id ? 'outline:2px solid ' + stage.color + ';' : '') + '" onclick="setStage(\'' + esc(VIEW.stagePickerFor) + '\',\'' + esc(stage.id) + '\')"><span>' + stageDot(stage) + '</span><span class="text">' + esc(stage.name) + '</span></button>';
+  }).join("") + '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
+}
+
+function renderSheet(){
+  var el = document.getElementById("sheet");
+  if (!el) return;
+  var html = "";
+  if (SHEET.name === "admission") html = renderAdmissionSheet();
+  if (SHEET.name === "stage") html = renderStageSheet();
+  el.className = "sheet" + (html ? " open" : "");
+  el.innerHTML = html;
+}
+
+function render(){
+  ensureToday();
+  var app = document.getElementById("app");
+  if (!app) return "";
+  var html = renderTopbar() + (VIEW.name === "detail" ? renderDetail(VIEW.caseId) : renderBoard());
+  app.innerHTML = html;
+  renderSheet();
+  return html;
+}
+
+function boot(){
+  DB = loadState();
+  applyDailyRollover(false);
+  render();
+}
+
+if (typeof document !== "undefined" && document.addEventListener) {
+  document.addEventListener("visibilitychange", function(){
+    if (!document.visibilityState || document.visibilityState === "visible") ensureToday();
+  });
+  // Dropzone handlers run first (bubbling), so a successful drop clears the
+  // drag state before these fire; anything else is an abandoned drag.
+  document.addEventListener("pointerup", cancelDrag);
+  document.addEventListener("pointercancel", cancelDrag);
+}
+
+boot();
+</script>
+</body>
+</html>
