@@ -41,12 +41,15 @@ const L = sandbox.module.exports;
   "defaultStages", "normalizeState", "normalizeCase", "computeDay", "rolloverTodos",
   "hasBackToday", "boardOrder", "stalenessLevel", "needsReview", "reviewQueue",
   "unsentSeeds", "countSeedsOn", "formatSeedExport", "missSeedText", "makeSeed",
-  "moveCase", "syncDiffFields", "syncMergeCase", "syncEmptyState", "syncNoteLocalChanges",
-  "syncReconcile", "syncClearDirty", "syncDeriveKey", "syncEncryptJson", "syncDecryptJson",
-  "syncRandomSaltB64", "PBKDF2_ITER", "statsSummary", "buildOutboxBatch"
+  "moveCase", "normalizeChart", "dcChecklistItems", "stageOn", "chartDates",
+  "medOnDate", "buildWeekGrid", "searchCases", "reviewStreak", "syncDiffFields",
+  "syncMergeCase", "syncEmptyState", "syncNoteLocalChanges", "syncReconcile",
+  "syncClearDirty", "syncDeriveKey", "syncEncryptJson", "syncDecryptJson",
+  "syncRandomSaltB64", "statsSummary", "buildOutboxBatch"
 ].forEach((name) => {
-  if (typeof L[name] !== "function" && name !== "PBKDF2_ITER") fail("missing export " + name);
+  if (typeof L[name] !== "function") fail("missing export " + name);
 });
+if (typeof L.PBKDF2_ITER !== "number") fail("missing export PBKDF2_ITER");
 
 assert.strictEqual(L.normalizeState(null).config.stages.length, 5);
 assert.strictEqual(L.normalizeCase({ extra:"ok" }, "2026-07-07T10:00:00.000Z", "2026-07-07").extra, "ok");
@@ -60,6 +63,7 @@ const rolled = L.rolloverTodos({ todos:[
   { id:"c", text:"done-today", done:true, createdOn:"2026-07-07" }
 ] }, "2026-07-07");
 assert.deepStrictEqual(rolled.map((x) => x.id), ["b", "c"]);
+
 assert.strictEqual(L.hasBackToday({ pendings:[{ backOn:"2026-07-07" }] }, "2026-07-07"), true);
 assert.strictEqual(L.hasBackToday({ pendings:[{ backOn:"2026-07-08" }] }, "2026-07-07"), false);
 
@@ -70,12 +74,20 @@ const ordered = L.boardOrder([
 ], "2026-07-07");
 assert.strictEqual(ordered.map((x) => x.id).join(","), "a,b");
 
+assert.strictEqual(L.stalenessLevel("2026-07-06T00:01:00.000Z", "2026-07-07T00:00:00.000Z"), 0);
 assert.strictEqual(L.stalenessLevel("2026-07-06T00:00:00.000Z", "2026-07-07T00:00:00.000Z"), 1);
+assert.strictEqual(L.stalenessLevel("2026-07-05T01:00:00.000Z", "2026-07-07T00:00:00.000Z"), 1);
+assert.strictEqual(L.stalenessLevel("2026-07-05T00:00:00.000Z", "2026-07-07T00:00:00.000Z"), 2);
+assert.strictEqual(L.stalenessLevel("bad", "2026-07-07T00:00:00.000Z"), 0);
+
 assert.strictEqual(L.needsReview({ lastTouchedAt:"2026-07-07T08:00:00+09:00" }, "2026-07-07"), false);
+assert.strictEqual(L.needsReview({ lastTouchedAt:"2026-07-06T23:00:00+09:00" }, "2026-07-07"), true);
+assert.strictEqual(L.needsReview({ lastTouchedAt:"bad" }, "2026-07-07"), true);
 assert.strictEqual(
   L.reviewQueue([
     { id:"c1", status:"active", order:0, lastTouchedAt:"2026-07-06T01:00:00+09:00", pendings:[] },
-    { id:"c2", status:"active", order:1, lastTouchedAt:"2026-07-07T08:00:00+09:00", pendings:[] }
+    { id:"c2", status:"active", order:1, lastTouchedAt:"2026-07-07T08:00:00+09:00", pendings:[] },
+    { id:"c3", status:"discharged", order:2, lastTouchedAt:"2026-07-06T01:00:00+09:00", pendings:[] }
   ], "2026-07-07").map((x) => x.id).join(","),
   "c1"
 );
@@ -94,6 +106,73 @@ assert.strictEqual(
 assert.ok(L.formatSeedExport([], "2026-07-07").startsWith("## 2026-07-07"));
 assert.ok(L.missSeedText("old", "why").includes("old"));
 assert.strictEqual(L.moveCase([{ id:"a", order:0 }, { id:"b", order:1 }], "b", "up").map((x) => x.id).join(","), "b,a");
+
+const chart = L.normalizeChart({
+  meds:[{ name:"abx", route:"inj", startDate:"2026-07-07", endDate:null }, null],
+  events:[{ date:"2026-07-08", type:"exam", title:"CT" }, { bad:true }],
+  rows:[{ group:"lab", name:"CRP", values:{ "2026-07-07":"1.2", nope:"x" } }, {}]
+});
+assert.strictEqual(chart.meds.length, 1);
+assert.strictEqual(chart.events.length, 1);
+assert.strictEqual(chart.rows[0].values["2026-07-07"], "1.2");
+assert.strictEqual(L.dcChecklistItems().some((x) => x.k === "dxtags"), true);
+
+assert.strictEqual(L.stageOn([{ date:"2026-07-05", stageId:"adm" }, { date:"2026-07-07", stageId:"dc" }], "2026-07-04"), "adm");
+assert.strictEqual(L.stageOn([{ date:"2026-07-05", stageId:"adm" }, { date:"2026-07-07", stageId:"dc" }], "2026-07-06"), "adm");
+assert.strictEqual(L.stageOn([{ date:"2026-07-05", stageId:"adm" }, { date:"2026-07-07", stageId:"dc" }], "2026-07-09"), "dc");
+
+const dates = L.chartDates({
+  admittedAt:"2026-07-01",
+  appts:[{ date:"2026-07-15" }],
+  discharge:{ plannedOn:"2026-07-14" },
+  chart:{ meds:[{ startDate:"2026-07-02", endDate:"2026-07-09" }], events:[{ date:"2026-07-13" }] }
+}, "2026-07-07");
+assert.strictEqual(dates[0], "2026-07-01");
+assert.strictEqual(dates[dates.length - 1], "2026-07-15");
+
+assert.strictEqual(L.medOnDate({ startDate:"2026-07-07", endDate:null }, "2026-07-20"), true);
+assert.strictEqual(L.medOnDate({ startDate:"2026-07-07", endDate:"2026-07-07" }, "2026-07-08"), false);
+
+const week = L.buildWeekGrid([
+  {
+    id:"c1", label:"haien", admittedAt:"2026-07-01", status:"active", order:0,
+    stageLog:[{ date:"2026-07-01", stageId:"adm" }, { date:"2026-07-07", stageId:"dc" }],
+    appts:[{ id:"a1", date:"2026-07-07", kind:"meet", text:"mtg", done:true }, { id:"a2", date:"2026-07-10", kind:"exam", text:"CT", done:false }],
+    next:[{ id:"n1", text:"x", due:"2026-07-11" }],
+    pendings:[{ id:"p1", text:"y", backOn:"2026-07-12" }],
+    discharge:{ plannedOn:"2026-07-13" }
+  },
+  { id:"c2", label:"gone", admittedAt:"2026-07-01", status:"discharged", order:1, stageLog:[{ date:"2026-07-01", stageId:"adm" }], appts:[], next:[], pendings:[], discharge:{ plannedOn:null } }
+], "2026-07-08");
+assert.strictEqual(week.dates.length, 15);
+assert.strictEqual(week.rows.length, 1);
+assert.strictEqual(week.rows[0].dates["2026-07-06"].stageId, "adm");
+assert.strictEqual(week.rows[0].dates["2026-07-08"].stageId, "dc");
+assert.strictEqual(week.rows[0].dates["2026-07-10"].markers[0].kind, "exam");
+assert.strictEqual(week.rows[0].dates["2026-07-13"].markers.some((m) => m.kind === "planned"), true);
+
+const searchCases = [
+  { id:"a", label:"haien", admittedAt:"2026-07-01", stageId:"adm", phaseNote:"CAP", dxTags:["pna"], next:[{ text:"abx" }], todos:[], pendings:[], seeds:[], status:"active" },
+  { id:"b", label:"uti", admittedAt:"2026-06-01", stageId:"dc", phaseNote:"", dxTags:[], next:[], todos:[{ text:"culture" }], pendings:[], seeds:[{ text:"seed" }], status:"discharged" }
+];
+assert.strictEqual(L.searchCases(searchCases, "cap", {}).map((x) => x.case.id).join(","), "a");
+assert.strictEqual(L.searchCases(searchCases, "CULTURE", {}).map((x) => x.case.id).join(","), "b");
+assert.strictEqual(L.searchCases(searchCases, "", { month:"2026-06", stageId:"dc" }).map((x) => x.case.id).join(","), "b");
+
+assert.strictEqual(L.reviewStreak({}, "2026-07-08"), 0);
+assert.strictEqual(L.reviewStreak({ "2026-07-08":true }, "2026-07-08"), 1);
+assert.strictEqual(L.reviewStreak({ "2026-07-07":true, "2026-07-06":true }, "2026-07-08"), 2);
+assert.strictEqual(L.reviewStreak({ "2026-07-08":true, "2026-07-06":true }, "2026-07-08"), 1);
+
+const normalized = L.normalizeCase({
+  admittedAt:"2026-07-07",
+  stageId:"adm",
+  stageLog:[{ date:"2026-07-07", stageId:"adm" }, { date:"2026-07-07", stageId:"dc" }],
+  seeds:[{ text:"x", snapshot:{} }]
+}, "2026-07-08T00:00:00Z", "2026-07-08");
+assert.strictEqual(normalized.stageLog.length, 1);
+assert.strictEqual(normalized.stageLog[0].stageId, "dc");
+assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
 
 (async () => {
   const salt = L.syncRandomSaltB64();
@@ -120,7 +199,7 @@ assert.strictEqual(L.moveCase([{ id:"a", order:0 }, { id:"b", order:1 }], "b", "
   assert.strictEqual(merge.merged.phaseNote, "local");
   assert.strictEqual(JSON.stringify(merge.merged.labels), JSON.stringify(["b"]));
 
-  const data = { cases:[{ id:"c1", phaseNote:"x" }], config:{ stages:[{ id:"a" }], labels:{ phase:"P" } } };
+  const data = { cases:[{ id:"c1", phaseNote:"x" }], config:{ stages:[{ id:"a" }], labels:{ phase:"P", next:"N", today:"T", pending:"Pd", seeds:"S" } } };
   const state = L.syncEmptyState();
   const first = L.syncReconcile(data, state, [], "2026-07-07T10:00:00Z");
   assert.strictEqual(first.pushes.length, 1);
