@@ -29,7 +29,9 @@ const L = sandbox.module.exports;
 
 for (const name of [
   "defaultStages", "normalizeState", "normalizeCase", "computeDay",
-  "rolloverTodos", "hasBackToday", "boardOrder", "makeSeed", "moveCase"
+  "rolloverTodos", "hasBackToday", "boardOrder", "stalenessLevel",
+  "needsReview", "reviewQueue", "unsentSeeds", "countSeedsOn",
+  "formatSeedExport", "missSeedText", "makeSeed", "moveCase"
 ]) {
   if (typeof L[name] !== "function") fail("missing export " + name);
 }
@@ -79,8 +81,73 @@ const ordered = L.boardOrder([
 ], "2026-07-07");
 if (ordered.map((x) => x.id).join(",") !== "a,b,c") fail("boardOrder sequence");
 
-const seed = L.makeSeed("s1", "seed text", { label:"haien", day:3, stageName:"急性期", phaseNote:"CAP" });
+if (L.stalenessLevel("2026-07-06T00:01:00.000Z", "2026-07-07T00:00:00.000Z") !== 0) fail("stalenessLevel 23h59m");
+if (L.stalenessLevel("2026-07-06T00:00:00.000Z", "2026-07-07T00:00:00.000Z") !== 1) fail("stalenessLevel 24h");
+if (L.stalenessLevel("2026-07-05T01:00:00.000Z", "2026-07-07T00:00:00.000Z") !== 1) fail("stalenessLevel 47h");
+if (L.stalenessLevel("2026-07-05T00:00:00.000Z", "2026-07-07T00:00:00.000Z") !== 2) fail("stalenessLevel 48h");
+if (L.stalenessLevel("garbage", "2026-07-07T00:00:00.000Z") !== 0) fail("stalenessLevel invalid");
+
+if (L.needsReview({ lastTouchedAt:"2026-07-07T08:00:00+09:00" }, "2026-07-07") !== false) fail("needsReview touched today");
+if (L.needsReview({ lastTouchedAt:"2026-07-06T23:00:00+09:00" }, "2026-07-07") !== true) fail("needsReview yesterday");
+if (L.needsReview({ lastTouchedAt:"nope" }, "2026-07-07") !== true) fail("needsReview invalid");
+
+const queue = L.reviewQueue([
+  { id:"c3", status:"active", order:2, lastTouchedAt:"2026-07-06T01:00:00+09:00", pendings:[] },
+  { id:"c1", status:"active", order:0, lastTouchedAt:"2026-07-06T01:00:00+09:00", pendings:[] },
+  { id:"dc", status:"discharged", order:1, lastTouchedAt:"2026-07-06T01:00:00+09:00", pendings:[] },
+  { id:"c2", status:"active", order:1, lastTouchedAt:"2026-07-07T08:00:00+09:00", pendings:[] }
+], "2026-07-07");
+if (queue.map((x) => x.id).join(",") !== "c1,c3") fail("reviewQueue order/exclusions");
+
+const seed = L.makeSeed("s1", "seed text", "2026-07-07", { label:"haien", day:3, stageName:"急性期", phaseNote:"CAP" });
+if (seed.createdOn !== "2026-07-07") fail("makeSeed createdOn");
 if (seed.snapshot.label !== "haien" || seed.snapshot.day !== 3 || seed.snapshot.stageName !== "急性期" || seed.snapshot.phaseNote !== "CAP") fail("makeSeed snapshot");
+
+if (L.countSeedsOn([
+  { seeds:[{ createdOn:"2026-07-07" }, { createdOn:"2026-07-06" }] },
+  { seeds:[{ createdOn:"2026-07-07", sentAt:"x" }] }
+], "2026-07-07") !== 2) fail("countSeedsOn");
+
+const unsent = L.unsentSeeds([
+  { id:"a", status:"active", order:1, seeds:[{ id:"s1", text:"a1", sentAt:null }, { id:"s2", text:"a2", sentAt:"done" }] },
+  { id:"b", status:"active", order:0, seeds:[{ id:"s3", text:"b1", sentAt:null }] },
+  { id:"dc", status:"discharged", order:0, seeds:[{ id:"s4", text:"dc1", sentAt:null }] }
+]);
+if (unsent.map((x) => x.id).join(",") !== "s3,s1,s4") fail("unsentSeeds ordering");
+
+const exportA = L.formatSeedExport([
+  { text:"seed1", snapshot:{ label:"haien", day:3, stageName:"急性期", phaseNote:"CAP" } },
+  { text:"seed2", snapshot:{ label:"hf", day:5, stageName:"退院調整", phaseNote:"TRX" } }
+], "2026-07-07");
+const expectA = [
+  "## 2026-07-07 の種（Wardbook 手動書き出し）",
+  "- [ ] seed1",
+  "  - 局面: haien D3｜急性期｜CAP",
+  "- [ ] seed2",
+  "  - 局面: hf D5｜退院調整｜TRX"
+].join("\n");
+if (exportA !== expectA) fail("formatSeedExport full snapshot");
+
+const exportB = L.formatSeedExport([
+  { text:"seed3", snapshot:{ label:"uti", day:2, stageName:"急性期", phaseNote:"" } }
+], "2026-07-07");
+const expectB = [
+  "## 2026-07-07 の種（Wardbook 手動書き出し）",
+  "- [ ] seed3",
+  "  - 局面: uti D2｜急性期"
+].join("\n");
+if (exportB !== expectB) fail("formatSeedExport empty phaseNote");
+
+const exportC = L.formatSeedExport([], "2026-07-07");
+if (exportC !== "## 2026-07-07 の種（Wardbook 手動書き出し）") fail("formatSeedExport empty");
+
+if (L.missSeedText("old next", "why") !== "予測外れ: old next → why") fail("missSeedText with why");
+if (L.missSeedText("old next", "   ") !== "予測外れ: old next") fail("missSeedText without why");
+
+const n1 = L.normalizeCase({ seeds:[{ id:"s1", text:"x", snapshot:{}, sentAt:null }] }, "2026-07-07T10:00:00.000Z", "2026-07-07");
+if (n1.seeds[0].createdOn !== "2026-07-07") fail("normalizeCase seed createdOn default");
+const n2 = L.normalizeCase({ seeds:[{ id:"s1", text:"x", createdOn:"2026-07-01", snapshot:{}, sentAt:null }] }, "2026-07-07T10:00:00.000Z", "2026-07-07");
+if (n2.seeds[0].createdOn !== "2026-07-01") fail("normalizeCase seed createdOn preserve");
 
 const moved = L.moveCase([
   { id:"a", order:0 },
