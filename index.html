@@ -254,9 +254,9 @@
   .seg button{flex:1}
   .searchbar,.filters{display:flex;gap:8px;flex-wrap:wrap}
   .searchbar input,.filters select{flex:1}
-  .weekwrap,.chartwrap{overflow:auto}
-  .weekgrid,.chartgrid{border-collapse:separate;border-spacing:0;min-width:max-content}
-  .weekgrid th,.weekgrid td,.chartgrid th,.chartgrid td{
+  .weekwrap{overflow:auto}
+  .weekgrid{border-collapse:separate;border-spacing:0;min-width:max-content}
+  .weekgrid th,.weekgrid td{
     border:1px solid var(--line);
     background:var(--card);
     min-width:28px;
@@ -265,7 +265,7 @@
     text-align:center;
     vertical-align:middle;
   }
-  .weekgrid .sticky,.chartgrid .sticky{
+  .weekgrid .sticky{
     position:sticky;
     left:0;
     z-index:2;
@@ -276,24 +276,10 @@
   .weekgrid .casecell{cursor:pointer}
   .weekgrid .suncol{color:var(--weekend-sun)}
   .weekgrid .satcol{color:var(--weekend-sat)}
-  .weekgrid .todaycol,.chartgrid .todaycol{background:var(--panel)}
+  .weekgrid .todaycol{background:var(--panel)}
   .weekband{height:10px;border-radius:999px}
   .markerstack{display:flex;gap:2px;justify-content:center;flex-wrap:wrap}
   .mark{display:inline-flex;min-width:16px;height:16px;padding:0 3px;border-radius:999px;align-items:center;justify-content:center;background:var(--panel);font-size:10px}
-  .chartlabel{white-space:nowrap}
-  .bandcell{position:relative;height:22px}
-  .band{
-    position:absolute;
-    left:2px;
-    right:2px;
-    top:5px;
-    height:10px;
-    border-radius:999px;
-    background:var(--stage-dc);
-    opacity:.72;
-  }
-  .band-inj{background:var(--stage-acute)}
-  .band-oral{background:var(--stage-improv)}
   .collapsehead{display:flex;justify-content:space-between;align-items:center;gap:8px}
   .subtleline{font-size:12px;color:var(--muted);margin-top:6px}
   .checklist{display:flex;flex-direction:column;gap:6px}
@@ -409,18 +395,6 @@ function normalizeCase(raw, nowIso, todayIso){
   }).filter(function(item){ return item.text; });
   out.stageLog = normalizeStageLog(src.stageLog, out.admittedAt, out.stageId);
   out.stageId = out.stageLog[out.stageLog.length - 1].stageId || out.stageId;
-  out.appts = cloneArr(src.appts).map(function(item, idx){
-    var row = isObj(item) ? item : {};
-    var date = safeDate(row.date, "");
-    if (!date) return null;
-    return {
-      id: typeof row.id === "string" && row.id ? row.id : "appt-" + idx,
-      date: date,
-      text: typeof row.text === "string" ? row.text : "",
-      kind: row.kind === "ic" || row.kind === "exam" || row.kind === "other" ? row.kind : "meet",
-      done: row.done === true
-    };
-  }).filter(Boolean);
   out.seeds = cloneArr(src.seeds).map(function(item, idx){
     var row = isObj(item) ? item : {};
     var snap = isObj(row.snapshot) ? row.snapshot : {};
@@ -441,9 +415,12 @@ function normalizeCase(raw, nowIso, todayIso){
     checklist:isObj(src.discharge && src.discharge.checklist) ? src.discharge.checklist : {},
     plannedOn:src.discharge && src.discharge.plannedOn ? safeDate(src.discharge.plannedOn, null) : null
   };
-  out.chart = normalizeChart(src.chart);
   out.order = toNum(src.order, 0);
   out.lastTouchedAt = typeof src.lastTouchedAt === "string" && src.lastTouchedAt ? src.lastTouchedAt : nowIso;
+  // Removed features (2026-07-09): purge legacy fields here so old local/remote
+  // payloads cannot re-introduce them through the unknown-key passthrough above.
+  delete out.appts;
+  delete out.chart;
   return out;
 }
 
@@ -455,9 +432,12 @@ function trashCutoffIso(nowIso){
 
 function normalizeTrashEntry(entry, nowIso){
   var row = isObj(entry) ? entry : {};
-  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true, "appt":true, "chartMed":true, "chartEvent":true };
+  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true };
+  // Entries of removed types (appt / chartMed / chartEvent) are dropped, not
+  // coerced to "case": coercion would turn their payload into a garbage case on restore.
+  if (!types[row.type]) return null;
   var deletedAt = typeof row.deletedAt === "string" && row.deletedAt ? row.deletedAt : nowIso;
-  var type = types[row.type] ? row.type : "case";
+  var type = row.type;
   var payload = JSON.parse(JSON.stringify(isObj(row.payload) ? row.payload : {}));
   var caseId = typeof row.caseId === "string" ? row.caseId : "";
   var caseLabel = typeof row.caseLabel === "string" ? row.caseLabel : "";
@@ -499,7 +479,7 @@ function normalizeState(raw, nowIso, todayIso){
     },
     trash: cloneArr(src.trash).map(function(entry){
       return normalizeTrashEntry(entry, nowStamp);
-    }).filter(function(entry){
+    }).filter(Boolean).filter(function(entry){
       if (!cutoff) return true;
       return String(entry.deletedAt || "") >= cutoff;
     })
@@ -644,49 +624,6 @@ function normalizeStageLog(raw, admittedAt, stageId){
   }, []);
 }
 
-function normalizeChart(raw){
-  var src = isObj(raw) ? raw : {};
-  return {
-    meds:cloneArr(src.meds).map(function(item, idx){
-      var row = isObj(item) ? item : {};
-      var startDate = safeDate(row.startDate, "");
-      if (!startDate) return null;
-      return {
-        id:typeof row.id === "string" && row.id ? row.id : "med-" + idx,
-        name:typeof row.name === "string" ? row.name : "",
-        route:row.route === "oral" ? "oral" : "inj",
-        startDate:startDate,
-        endDate:row.endDate == null ? null : safeDate(row.endDate, null)
-      };
-    }).filter(Boolean),
-    events:cloneArr(src.events).map(function(item, idx){
-      var row = isObj(item) ? item : {};
-      var date = safeDate(row.date, "");
-      if (!date) return null;
-      return {
-        id:typeof row.id === "string" && row.id ? row.id : "event-" + idx,
-        date:date,
-        type:row.type === "proc" || row.type === "ic" || row.type === "other" ? row.type : "exam",
-        title:typeof row.title === "string" ? row.title : ""
-      };
-    }).filter(Boolean),
-    rows:cloneArr(src.rows).map(function(item, idx){
-      var row = isObj(item) ? item : {};
-      var values = {};
-      Object.keys(isObj(row.values) ? row.values : {}).forEach(function(date){
-        if (/^\d{4}-\d{2}-\d{2}$/.test(date)) values[date] = String(row.values[date]);
-      });
-      if ((row.group !== "vital" && row.group !== "lab") || !row.name) return null;
-      return {
-        id:typeof row.id === "string" && row.id ? row.id : "row-" + idx,
-        group:row.group,
-        name:String(row.name),
-        values:values
-      };
-    }).filter(Boolean)
-  };
-}
-
 function dcChecklistItems(){
   return [
     { k:"summary", t:"\u9000\u9662\u30b5\u30de\u30ea\u4f5c\u6210", h:"\u7d4c\u904e\u3092\u8981\u7d04" },
@@ -710,35 +647,6 @@ function stageOn(stageLog, date){
   return active;
 }
 
-function chartDates(c, todayIso){
-  var start = safeDate(c && c.admittedAt, todayIso);
-  var end = todayIso;
-  cloneArr(c && c.appts).forEach(function(item){ if (item && item.date && item.date > end) end = item.date; });
-  if (c && c.discharge && c.discharge.plannedOn && c.discharge.plannedOn > end) end = c.discharge.plannedOn;
-  var chart = c && c.chart ? c.chart : {};
-  cloneArr(chart.meds).forEach(function(item){
-    if (item && item.startDate && item.startDate > end) end = item.startDate;
-    if (item && item.endDate && item.endDate > end) end = item.endDate;
-  });
-  cloneArr(chart.events).forEach(function(item){ if (item && item.date && item.date > end) end = item.date; });
-  var out = [];
-  var cur = Date.parse(start + "T00:00:00");
-  var max = Date.parse(end + "T00:00:00");
-  while (Number.isFinite(cur) && Number.isFinite(max) && cur <= max && out.length < 370) {
-    var d = new Date(cur);
-    out.push(d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"));
-    cur += 86400000;
-  }
-  return out;
-}
-
-function medOnDate(med, date){
-  if (!med || !med.startDate) return false;
-  if (date < med.startDate) return false;
-  if (med.endDate && date > med.endDate) return false;
-  return true;
-}
-
 function buildWeekGrid(cases, todayIso, pastDays, futureDays){
   var base = Date.parse(todayIso + "T00:00:00");
   var past = Number.isFinite(Number(pastDays)) ? Math.max(0, Number(pastDays)) : 7;
@@ -753,14 +661,6 @@ function buildWeekGrid(cases, todayIso, pastDays, futureDays){
     var firstStageId = c && c.stageLog && c.stageLog[0] && c.stageLog[0].stageId ? c.stageLog[0].stageId : "";
     dates.forEach(function(date){
       var markers = [];
-      cloneArr(c.appts).forEach(function(item){
-        if (!item || item.date !== date) return;
-        if (date <= todayIso) {
-          if (item.done) markers.push({ kind:"done", text:"\u2713" });
-        } else {
-          markers.push({ kind:item.kind || "other", text:item.kind || "other" });
-        }
-      });
       cloneArr(c.next).forEach(function(item){ if (item && item.due === date && date > todayIso) markers.push({ kind:"next", text:"\u6b21" }); });
       cloneArr(c.pendings).forEach(function(item){ if (item && item.backOn === date && date > todayIso) markers.push({ kind:"pending", text:"\u5f85" }); });
       if (c.discharge && c.discharge.plannedOn === date && date > todayIso) markers.push({ kind:"planned", text:"\u2605" });
@@ -1169,11 +1069,8 @@ if (typeof module !== "undefined") {
     missSeedText:missSeedText,
     makeSeed:makeSeed,
     moveCase:moveCase,
-    normalizeChart:normalizeChart,
     dcChecklistItems:dcChecklistItems,
     stageOn:stageOn,
-    chartDates:chartDates,
-    medOnDate:medOnDate,
     buildWeekGrid:buildWeekGrid,
     searchCases:searchCases,
     reviewStreak:reviewStreak,
@@ -1276,27 +1173,13 @@ Object.assign(STR, {
   dischargedAtLine:"\u9000\u9662\u6e08\u307f",
   dcExport:"\u9000\u9662\u66f8\u304d\u51fa\u3057",
   dayExport:"\u65e5\u6b21\u66f8\u304d\u51fa\u3057",
-  chartPanel:"\u7d4c\u904e\u8868",
-  addMed:"＋薬剤",
-  addEvent:"＋イベント",
-  addRow:"＋行",
-  groupVital:"\u30d0\u30a4\u30bf\u30eb",
-  groupLab:"\u691c\u67fb",
-  groupMed:"薬剤",
-  groupEvent:"\u30a4\u30d9\u30f3\u30c8",
-  apptSection:"\u4e88\u5b9a",
-  cellItemAppt:"\u4e88\u5b9a",
   cellItemNext:"\u6b21\u306e\u4e00\u624b",
   cellItemPending:"\u4fdd\u7559",
-  medOral:"\u5185\u670d",
-  medInj:"\u6ce8\u5c04",
-  apptKinds:{ meet:"\u9762", ic:"IC", exam:"\u691c", other:"\u4ed6" },
   streakLine:"\u9023\u7d9a\u68da\u5378\u3057",
   seedsTotal:"種 通算",
   stageEditor:"\u30b9\u30c6\u30fc\u30b8\u7de8\u96c6",
   labelEditor:"5\u8981\u7d20\u30e9\u30d9\u30eb\u540d",
   cardPrefs:"\u30ab\u30fc\u30c9\u8868\u793a",
-  chartPrefs:"\u7d4c\u904e\u8868\u306e\u8868\u793a",
   themePrefs:"\u30c6\u30fc\u30de",
   themeOs:"OS準拠",
   themeLight:"\u30e9\u30a4\u30c8",
@@ -1312,6 +1195,7 @@ let DB = normalizeState(null);
 let VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:"board", searchQuery:"", searchMonth:"", searchStageId:"", weekPast:7, weekFuture:7 };
 let SHEET = { name:"", draft:{}, syncBusy:false };
 let DND = { activeId:"", hoverIndex:-1 };
+let NAV = { stack:[], ignore:0 };
 let REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
 let MISS = null;
 let PENDING_FOCUS = null;
@@ -1402,9 +1286,8 @@ function weekHeaderClass(date, today){
 
 function defaultSettings(){
   return {
-    cardSections:["phase", "next", "appts", "today", "pending", "seeds"],
-    cardHidden:[],
-    chartHidden:[]
+    cardSections:["phase", "next", "today", "pending", "seeds"],
+    cardHidden:[]
   };
 }
 
@@ -1431,7 +1314,6 @@ function loadSettings(){
   if (!isObj(src)) return base;
   base.cardSections = normalizeCardSections(cloneArr(src.cardSections).filter(Boolean));
   base.cardHidden = cloneArr(src.cardHidden).filter(Boolean);
-  base.chartHidden = cloneArr(src.chartHidden).filter(Boolean);
   return base;
 }
 
@@ -1457,9 +1339,6 @@ function trashTypeLabel(type){
   if (type === "todo") return DB.config.labels.today;
   if (type === "pending") return DB.config.labels.pending;
   if (type === "seed") return DB.config.labels.seeds;
-  if (type === "appt") return STR.apptSection;
-  if (type === "chartMed") return STR.groupMed;
-  if (type === "chartEvent") return STR.groupEvent;
   return type;
 }
 
@@ -1467,8 +1346,6 @@ function trashItemLabel(entry){
   var payload = entry && entry.payload || {};
   if (!entry) return "";
   if (entry.type === "case") return entry.caseLabel || payload.label || "";
-  if (entry.type === "chartMed") return payload.name || "";
-  if (entry.type === "chartEvent") return payload.title || "";
   return payload.text || "";
 }
 
@@ -1501,9 +1378,6 @@ function restoreTrash(trashId){
     else if (entry.type === "todo") c.todos.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "pending") c.pendings.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "seed") c.seeds.push(JSON.parse(JSON.stringify(entry.payload)));
-    else if (entry.type === "appt") c.appts.push(JSON.parse(JSON.stringify(entry.payload)));
-    else if (entry.type === "chartMed") c.chart.meds.push(JSON.parse(JSON.stringify(entry.payload)));
-    else if (entry.type === "chartEvent") c.chart.events.push(JSON.parse(JSON.stringify(entry.payload)));
     removeTrashEntry(entry.id);
     restoredSub = true;
   });
@@ -1560,14 +1434,6 @@ function caseMonthOptions(){
     seen[month] = true;
     return true;
   }).sort().reverse();
-}
-
-function chartGroupHidden(group){
-  return SETTINGS && cloneArr(SETTINGS.chartHidden).includes(group);
-}
-
-function sectionHidden(name){
-  return SETTINGS && cloneArr(SETTINGS.cardHidden).includes(name);
 }
 
 function loadState(){
@@ -2154,7 +2020,58 @@ function boardCases(){
   return boardOrder(DB.cases, todayISO());
 }
 
+// Android back-button support. Every deepening step (board -> search/review/detail,
+// or opening a bottom sheet) pushes one history entry plus a restore snapshot on
+// NAV.stack. popstate pops the snapshot and restores it. UI-initiated closes must
+// consume their history entry too (NAV.ignore skips the resulting popstate), or
+// stale entries would leave "dead" back presses.
+function navPush(entry){
+  NAV.stack.push(entry);
+  try { history.pushState({ wb:NAV.stack.length }, ""); } catch (e) {}
+}
+
+function navSnapshotView(){
+  return { kind:"view", view:JSON.parse(JSON.stringify(VIEW)) };
+}
+
+function navNoteSheetOpen(){
+  if (!SHEET.name) navPush({ kind:"sheet" });
+}
+
+function navUnwindAll(){
+  var n = NAV.stack.length;
+  if (!n) return;
+  NAV.stack = [];
+  NAV.ignore += 1;
+  try { history.go(-n); } catch (e) {}
+}
+
+function handlePopState(ev){
+  if (NAV.ignore > 0) {
+    NAV.ignore -= 1;
+    return;
+  }
+  var target = ev && ev.state && Number(ev.state.wb);
+  if (!Number.isFinite(target) || target < 0) target = 0;
+  var entry = null;
+  while (NAV.stack.length > target) entry = NAV.stack.pop();
+  if (!entry) return;
+  if (entry.kind === "sheet") {
+    SHEET.name = "";
+    SHEET.draft = {};
+    renderSheet();
+    return;
+  }
+  SHEET.name = "";
+  SHEET.draft = {};
+  clearMiss();
+  VIEW = entry.view;
+  if (VIEW.name === "board" && VIEW.boardMode === "week") WEEK_SCROLL_RT.initPending = true;
+  render();
+}
+
 function openBoard(){
+  navUnwindAll();
   clearMiss();
   REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
   if ((VIEW.boardMode || "board") === "week") WEEK_SCROLL_RT.initPending = true;
@@ -2163,6 +2080,7 @@ function openBoard(){
 }
 
 function openDetail(caseId){
+  if (VIEW.name !== "detail") navPush(navSnapshotView());
   clearMiss();
   if (VIEW.boardMode === "week") resetWeekRange();
   VIEW.name = "detail";
@@ -2170,12 +2088,11 @@ function openDetail(caseId){
   VIEW.editingMeta = false;
   VIEW.editingLabel = false;
   VIEW.dischargeOpen = false;
-  VIEW.chartDateMode = VIEW.chartDateMode || "day";
-  VIEW.chartCollapsed = isObj(VIEW.chartCollapsed) ? VIEW.chartCollapsed : {};
   render();
 }
 
 function openReview(){
+  if (VIEW.name !== "review") navPush(navSnapshotView());
   clearMiss();
   if (VIEW.boardMode === "week") resetWeekRange();
   var queue = reviewQueue(DB.cases, todayISO());
@@ -2197,6 +2114,7 @@ function openReview(){
 }
 
 function openSearch(){
+  if (VIEW.name !== "search") navPush(navSnapshotView());
   clearMiss();
   if (VIEW.boardMode === "week") resetWeekRange();
   VIEW = { name:"search", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", searchQuery:VIEW.searchQuery || "", searchMonth:VIEW.searchMonth || "", searchStageId:VIEW.searchStageId || "", weekPast:7, weekFuture:7 };
@@ -2228,12 +2146,14 @@ function reviewAdvance(){
 }
 
 function openSettingsSheet(){
+  navNoteSheetOpen();
   SHEET.name = "settings";
   SHEET.draft = {};
   renderSheet();
 }
 
 function openAdmissionSheet(){
+  navNoteSheetOpen();
   SHEET.name = "admission";
   SHEET.draft = { label:"", phaseNote:"", ageBand:"", sex:"", admittedAt:todayISO() };
   renderSheet();
@@ -2242,18 +2162,25 @@ function openAdmissionSheet(){
 }
 
 function closeSheet(){
+  if (SHEET.name && NAV.stack.length && NAV.stack[NAV.stack.length - 1].kind === "sheet") {
+    NAV.stack.pop();
+    NAV.ignore += 1;
+    try { history.back(); } catch (e) {}
+  }
   SHEET.name = "";
   SHEET.draft = {};
   renderSheet();
 }
 
 function openStagePicker(caseId){
+  navNoteSheetOpen();
   VIEW.stagePickerFor = caseId;
   SHEET.name = "stage";
   renderSheet();
 }
 
 function openSyncSheet(){
+  navNoteSheetOpen();
   SHEET.name = "sync";
   SHEET.syncBusy = false;
   SHEET.draft = SHEET.draft || {};
@@ -2270,6 +2197,7 @@ function openSyncSheet(){
 }
 
 function openDataSheet(){
+  navNoteSheetOpen();
   SHEET.name = "data";
   renderSheet();
 }
@@ -2346,11 +2274,9 @@ function registerAdmission(){
     next:[],
     todos:[],
     pendings:[],
-    appts:[],
     seeds:[],
     dxTags:[],
     discharge:null,
-    chart:null,
     order:boardCases().length,
     lastTouchedAt:nowISO()
   }, nowISO(), admittedAt);
@@ -2642,33 +2568,13 @@ function cardSectionsVisible(){
   });
 }
 
-function chartCollapseKey(caseId, group){
-  return caseId + ":" + group;
-}
-
-function chartGroupCollapsed(caseId, group){
-  var map = isObj(VIEW.chartCollapsed) ? VIEW.chartCollapsed : {};
-  return !!map[chartCollapseKey(caseId, group)];
-}
-
-function toggleChartGroup(caseId, group){
-  VIEW.chartCollapsed = isObj(VIEW.chartCollapsed) ? VIEW.chartCollapsed : {};
-  var key = chartCollapseKey(caseId, group);
-  VIEW.chartCollapsed[key] = !VIEW.chartCollapsed[key];
-  render();
-}
-
-function toggleChartDateMode(){
-  VIEW.chartDateMode = VIEW.chartDateMode === "date" ? "day" : "date";
-  render();
-}
-
 function toggleDischargePanel(){
   VIEW.dischargeOpen = !VIEW.dischargeOpen;
   render();
 }
 
 function openSheetWithDraft(name, draft, focusId, shouldSelect){
+  navNoteSheetOpen();
   SHEET.name = name;
   SHEET.draft = draft || {};
   renderSheet();
@@ -2680,230 +2586,34 @@ function sheetDraftValue(key, value){
   SHEET.draft[key] = value;
 }
 
-function chartEventMark(type){
-  return type === "exam" ? STR.apptKinds.exam : type === "proc" ? "\u51e6" : type === "ic" ? "IC" : STR.apptKinds.other;
-}
-
-function openApptCell(caseId, date){
+function openWeekCell(caseId, date){
   var c = DB.cases.find(function(item){ return item.id === caseId; });
   if (!c) return;
-  openSheetWithDraft("apptCell", {
+  openSheetWithDraft("weekCell", {
     caseId:caseId,
     date:date,
-    itemType:"appt",
-    text:"",
-    kind:"meet"
-  }, "apptCellInput", false);
+    itemType:"next",
+    text:""
+  }, "weekCellInput", false);
 }
 
 function setCellDraftType(type){
-  SHEET.draft.itemType = type === "next" || type === "pending" ? type : "appt";
-  renderSheet();
-}
-
-function setApptDraftKind(kind){
-  SHEET.draft.kind = kind;
+  SHEET.draft.itemType = type === "pending" ? "pending" : "next";
   renderSheet();
 }
 
 function addCellItem(caseId, date){
-  var itemType = SHEET.draft && SHEET.draft.itemType || "appt";
+  var itemType = SHEET.draft && SHEET.draft.itemType || "next";
   var text = String(SHEET.draft && SHEET.draft.text || "").trim();
-  var kind = SHEET.draft && SHEET.draft.kind || "meet";
   if (!text) return;
   mutateCase(caseId, function(c){
-    if (itemType === "next") c.next.push({ id:uid(), text:text, due:date });
-    else if (itemType === "pending") c.pendings.push({ id:uid(), text:text, backOn:date });
-    else c.appts.push({ id:uid(), date:date, text:text, kind:kind, done:false });
+    if (itemType === "pending") c.pendings.push({ id:uid(), text:text, backOn:date });
+    else c.next.push({ id:uid(), text:text, due:date });
   });
   SHEET.draft.text = "";
   renderSheet();
-  queueFocusTarget("apptCellInput", false);
+  queueFocusTarget("weekCellInput", false);
   flushQueuedFocus();
-}
-
-function addAppt(caseId, date){
-  addCellItem(caseId, date);
-}
-
-function addDetailAppt(caseId){
-  var dateEl = document.getElementById("detailApptDate");
-  var textEl = document.getElementById("detailApptText");
-  var kindEl = document.getElementById("detailApptKind");
-  var date = safeDate(dateEl && dateEl.value, todayISO());
-  var text = String(textEl && textEl.value || "").trim();
-  var kind = kindEl && kindEl.value || "meet";
-  if (!text) return;
-  mutateCase(caseId, function(c){
-    c.appts.push({ id:uid(), date:date, text:text, kind:kind, done:false });
-  });
-  if (textEl) textEl.value = "";
-}
-
-function toggleAppt(caseId, apptId){
-  mutateCase(caseId, function(c){
-    var item = c.appts.find(function(x){ return x.id === apptId; });
-    if (item) item.done = !item.done;
-  });
-  renderSheet();
-}
-
-function deleteAppt(caseId, apptId){
-  mutateCase(caseId, function(c){
-    var item = c.appts.find(function(x){ return x.id === apptId; });
-    if (item) pushTrashEntry("appt", c, item);
-    c.appts = c.appts.filter(function(x){ return x.id !== apptId; });
-  });
-  renderSheet();
-}
-
-function addChartMed(caseId, medId){
-  var c = DB.cases.find(function(item){ return item.id === caseId; });
-  if (!c) return;
-  var med = cloneArr(c.chart && c.chart.meds).find(function(item){ return item.id === medId; });
-  openSheetWithDraft("chartMed", {
-    caseId:caseId,
-    medId:med ? med.id : "",
-    name:med ? med.name : "",
-    route:med ? med.route : "oral",
-    startDate:med ? med.startDate : todayISO(),
-    endDate:med && med.endDate ? med.endDate : ""
-  }, "chartMedName", false);
-}
-
-function setChartMedRoute(route){
-  SHEET.draft.route = route;
-  renderSheet();
-}
-
-function saveChartMed(){
-  var d = SHEET.draft || {};
-  var name = String(d.name || "").trim();
-  var startDate = safeDate(d.startDate, "");
-  if (!name || !startDate) return;
-  mutateCase(d.caseId, function(c){
-    c.chart = normalizeChart(c.chart);
-    if (d.medId) {
-      var med = c.chart.meds.find(function(item){ return item.id === d.medId; });
-      if (med) {
-        med.name = name;
-        med.route = d.route === "inj" ? "inj" : "oral";
-        med.startDate = startDate;
-        med.endDate = d.endDate ? safeDate(d.endDate, null) : null;
-      }
-    } else {
-      c.chart.meds.push({ id:uid(), name:name, route:d.route === "inj" ? "inj" : "oral", startDate:startDate, endDate:d.endDate ? safeDate(d.endDate, null) : null });
-    }
-  });
-  closeSheet();
-}
-
-function deleteChartMed(){
-  var d = SHEET.draft || {};
-  if (!d.medId) return;
-  mutateCase(d.caseId, function(c){
-    var item = cloneArr(c.chart.meds).find(function(row){ return row.id === d.medId; });
-    if (item) pushTrashEntry("chartMed", c, item);
-    c.chart.meds = cloneArr(c.chart.meds).filter(function(item){ return item.id !== d.medId; });
-  });
-  closeSheet();
-}
-
-function addChartEvent(caseId, eventId){
-  var c = DB.cases.find(function(item){ return item.id === caseId; });
-  if (!c) return;
-  var event = cloneArr(c.chart && c.chart.events).find(function(item){ return item.id === eventId; });
-  openSheetWithDraft("chartEvent", {
-    caseId:caseId,
-    eventId:event ? event.id : "",
-    date:event ? event.date : todayISO(),
-    type:event ? event.type : "exam",
-    title:event ? event.title : ""
-  }, "chartEventTitle", false);
-}
-
-function setChartEventType(type){
-  SHEET.draft.type = type;
-  renderSheet();
-}
-
-function saveChartEvent(){
-  var d = SHEET.draft || {};
-  var date = safeDate(d.date, "");
-  var title = String(d.title || "").trim();
-  if (!date || !title) return;
-  mutateCase(d.caseId, function(c){
-    c.chart = normalizeChart(c.chart);
-    if (d.eventId) {
-      var event = c.chart.events.find(function(item){ return item.id === d.eventId; });
-      if (event) {
-        event.date = date;
-        event.type = d.type === "proc" || d.type === "ic" || d.type === "other" ? d.type : "exam";
-        event.title = title;
-      }
-    } else {
-      c.chart.events.push({ id:uid(), date:date, type:d.type === "proc" || d.type === "ic" || d.type === "other" ? d.type : "exam", title:title });
-    }
-  });
-  closeSheet();
-}
-
-function deleteChartEvent(){
-  var d = SHEET.draft || {};
-  if (!d.eventId) return;
-  mutateCase(d.caseId, function(c){
-    var item = cloneArr(c.chart.events).find(function(row){ return row.id === d.eventId; });
-    if (item) pushTrashEntry("chartEvent", c, item);
-    c.chart.events = cloneArr(c.chart.events).filter(function(item){ return item.id !== d.eventId; });
-  });
-  closeSheet();
-}
-
-function addChartRow(caseId){
-  openSheetWithDraft("chartRow", {
-    caseId:caseId,
-    group:"vital",
-    name:""
-  }, "chartRowName", false);
-}
-
-function setChartRowGroup(group){
-  SHEET.draft.group = group;
-  renderSheet();
-}
-
-function saveChartRow(){
-  var d = SHEET.draft || {};
-  var name = String(d.name || "").trim();
-  if (!name) return;
-  mutateCase(d.caseId, function(c){
-    c.chart.rows.push({ id:uid(), group:d.group === "lab" ? "lab" : "vital", name:name, values:{} });
-  });
-  closeSheet();
-}
-
-function setChartValue(caseId, rowId, date){
-  var c = DB.cases.find(function(item){ return item.id === caseId; });
-  if (!c) return;
-  var row = cloneArr(c.chart && c.chart.rows).find(function(item){ return item.id === rowId; });
-  openSheetWithDraft("chartValue", {
-    caseId:caseId,
-    rowId:rowId,
-    date:date,
-    value:row && row.values ? row.values[date] || "" : ""
-  }, "chartValueInput", true);
-}
-
-function saveChartValue(){
-  var d = SHEET.draft || {};
-  mutateCase(d.caseId, function(c){
-    var row = c.chart.rows.find(function(item){ return item.id === d.rowId; });
-    if (!row) return;
-    row.values = isObj(row.values) ? row.values : {};
-    if (String(d.value || "").trim()) row.values[d.date] = String(d.value).trim();
-    else delete row.values[d.date];
-  });
-  closeSheet();
 }
 
 function updateStageName(index, value){
@@ -2970,13 +2680,6 @@ function moveCardSection(name, direction){
   list[index] = list[target];
   list[target] = picked;
   SETTINGS.cardSections = list;
-  saveLocalPrefs();
-}
-
-function toggleChartGroupPref(group, checked){
-  SETTINGS = SETTINGS || defaultSettings();
-  SETTINGS.chartHidden = cloneArr(SETTINGS.chartHidden).filter(function(item){ return item !== group; });
-  if (!checked) SETTINGS.chartHidden.push(group);
   saveLocalPrefs();
 }
 
@@ -3111,22 +2814,55 @@ function moveCaseDirection(caseId, direction){
   });
   saveState();
   render();
+  syncAfterSave();
 }
 
+// Drag & drop: no re-render between pointerdown and pointerup. Re-rendering
+// mid-gesture destroys the captured element, which kills the pointer stream on
+// touch devices (the original bug). Hit-testing runs on document-level
+// pointermove against the always-present dropzones instead.
 function startDragCase(ev, caseId){
-  if (ev && ev.stopPropagation) ev.stopPropagation();
-  if (ev && ev.pointerId != null && ev.target && ev.target.releasePointerCapture) {
-    try { ev.target.releasePointerCapture(ev.pointerId); } catch (e) {}
+  if (!ev) return;
+  if (ev.stopPropagation) ev.stopPropagation();
+  if (ev.preventDefault) ev.preventDefault();
+  if (ev.pointerId != null && ev.target && ev.target.setPointerCapture) {
+    try { ev.target.setPointerCapture(ev.pointerId); } catch (e) {}
   }
   DND.activeId = caseId;
   DND.hoverIndex = -1;
-  render();
+  var card = ev.target && ev.target.closest ? ev.target.closest(".card") : null;
+  if (card && card.classList) card.classList.add("dragging");
 }
 
-function hoverDrop(index){
+function nearestDropIndex(clientY){
+  if (!document.querySelectorAll) return -1;
+  var zones = document.querySelectorAll(".dropzone");
+  var best = -1;
+  var bestDist = Infinity;
+  for (var i = 0; i < zones.length; i += 1) {
+    var rect = zones[i].getBoundingClientRect();
+    var dist = Math.abs(rect.top + rect.height / 2 - clientY);
+    if (dist < bestDist) { bestDist = dist; best = i; }
+  }
+  return best;
+}
+
+function dragMove(ev){
   if (!DND.activeId) return;
-  DND.hoverIndex = index;
-  render();
+  if (ev && ev.preventDefault) ev.preventDefault();
+  var idx = nearestDropIndex(ev.clientY);
+  if (idx === DND.hoverIndex) return;
+  DND.hoverIndex = idx;
+  var zones = document.querySelectorAll(".dropzone");
+  for (var i = 0; i < zones.length; i += 1) {
+    if (zones[i].classList) zones[i].classList.toggle("on", i === idx);
+  }
+}
+
+function dragEnd(){
+  if (!DND.activeId) return;
+  if (DND.hoverIndex >= 0) dropReorder(DND.hoverIndex);
+  else cancelDrag();
 }
 
 function dropReorder(index){
@@ -3151,6 +2887,7 @@ function dropReorder(index){
   DND.hoverIndex = -1;
   saveState();
   render();
+  syncAfterSave();
 }
 
 function cancelDrag(){
@@ -3169,11 +2906,6 @@ function renderTopbar(){
 function renderBoardCard(c){
   var stage = stageById(c.stageId);
   var dueNext = c.next.slice(0, 2);
-  var upcomingAppts = cloneArr(c.appts).filter(function(item){
-    return item && item.done !== true && item.date && item.date >= todayISO();
-  }).sort(function(a, b){
-    return String(a.date || "").localeCompare(String(b.date || "")) || String(a.text || "").localeCompare(String(b.text || ""));
-  });
   var undone = c.todos.filter(function(x){ return !x.done; });
   var showPendings = c.pendings.length > 0;
   var stageStyle = 'border-left-color:' + esc(stage.color);
@@ -3184,9 +2916,6 @@ function renderBoardCard(c){
     next:dueNext.length ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.next) + '</div><div class="plain">' + dueNext.map(function(item){
       return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + (item.due ? '<div class="faint">' + esc(item.due) + '</div>' : '') + '</div></div>';
     }).join('') + '</div></div>' : '',
-    appts:upcomingAppts.length ? '<div class="section"><div class="sectiontitle">' + esc(STR.apptSection) + '</div><div class="plain">' + upcomingAppts.slice(0, 2).map(function(item){
-      return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(Number(String(item.date || "").slice(5, 7)) + "/" + Number(String(item.date || "").slice(8, 10)) + " " + item.text) + '</div></div></div>';
-    }).join('') + (upcomingAppts.length > 2 ? '<div class="faint">+' + (upcomingAppts.length - 2) + '</div>' : '') + '</div></div>' : '',
     today:undone.length ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.today) + ' ' + undone.length + '</div><div class="plain">' + undone.slice(0, 2).map(function(item){
       return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div></label>';
     }).join('') + '</div></div>' : '',
@@ -3251,14 +2980,11 @@ function renderSearch(){
     }).join('') + '</div>') + '</div></section>';
 }
 
-function renderApptCellSheet(){
+function renderWeekCellSheet(){
   var d = SHEET.draft || {};
   var c = DB.cases.find(function(item){ return item.id === d.caseId; });
   var rows = [];
   if (c) {
-    cloneArr(c.appts).filter(function(item){ return item.date === d.date; }).forEach(function(item){
-      rows.push('<div class="lineitem"><span class="badge">' + esc(STR.cellItemAppt) + '</span><label class="row" style="flex:1" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleAppt(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div><div class="faint">' + esc(STR.apptKinds[item.kind] || STR.apptKinds.other) + '</div></div></label><button class="iconbtn" onclick="deleteAppt(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\')">\u00d7</button></div>');
-    });
     cloneArr(c.next).filter(function(item){ return item.due === d.date; }).forEach(function(item){
       rows.push('<div class="lineitem"><span class="badge">' + esc(STR.cellItemNext) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deleteNext(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
     });
@@ -3267,43 +2993,9 @@ function renderApptCellSheet(){
     });
   }
   return '<div class="sheetcard"><div class="sheettitle">' + esc((c ? c.label + " " : "") + (d.date || "")) + '</div><div class="stack">' +
-    '<div class="chips"><button class="chipbtn' + ((d.itemType || "appt") === "appt" ? ' on' : '') + '" onclick="setCellDraftType(\'appt\')">' + esc(STR.cellItemAppt) + '</button><button class="chipbtn' + ((d.itemType || "appt") === "next" ? ' on' : '') + '" onclick="setCellDraftType(\'next\')">' + esc(STR.cellItemNext) + '</button><button class="chipbtn' + ((d.itemType || "appt") === "pending" ? ' on' : '') + '" onclick="setCellDraftType(\'pending\')">' + esc(STR.cellItemPending) + '</button></div>' +
-    '<div class="row"><input id="apptCellInput" class="input" value="' + esc(d.text || "") + '" oninput="sheetDraftValue(\'text\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addCellItem(\'' + esc(d.caseId) + '\',\'' + esc(d.date) + '\')}"><button class="ghostbtn" onclick="addCellItem(\'' + esc(d.caseId) + '\',\'' + esc(d.date) + '\')">+</button></div>' +
-    ((d.itemType || "appt") === "appt" ? '<div class="chips">' + Object.keys(STR.apptKinds).map(function(kind){
-      return '<button class="chipbtn' + ((d.kind || "meet") === kind ? ' on' : '') + '" onclick="setApptDraftKind(\'' + esc(kind) + '\')">' + esc(STR.apptKinds[kind]) + '</button>';
-    }).join('') + '</div>' : '') +
+    '<div class="chips"><button class="chipbtn' + ((d.itemType || "next") === "next" ? ' on' : '') + '" onclick="setCellDraftType(\'next\')">' + esc(STR.cellItemNext) + '</button><button class="chipbtn' + ((d.itemType || "next") === "pending" ? ' on' : '') + '" onclick="setCellDraftType(\'pending\')">' + esc(STR.cellItemPending) + '</button></div>' +
+    '<div class="row"><input id="weekCellInput" class="input" value="' + esc(d.text || "") + '" oninput="sheetDraftValue(\'text\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addCellItem(\'' + esc(d.caseId) + '\',\'' + esc(d.date) + '\')}"><button class="ghostbtn" onclick="addCellItem(\'' + esc(d.caseId) + '\',\'' + esc(d.date) + '\')">+</button></div>' +
     '<div class="plain">' + (rows.length ? rows.join('') : '<div class="faint">-</div>') + '</div><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
-}
-
-function renderChartMedSheet(){
-  var d = SHEET.draft || {};
-  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.addMed) + '</div><div class="stack">' +
-    '<div class="field"><input id="chartMedName" class="input" value="' + esc(d.name || "") + '" oninput="sheetDraftValue(\'name\',this.value)" placeholder="name"></div>' +
-    '<div class="chips"><button class="chipbtn' + ((d.route || "oral") === "oral" ? ' on' : '') + '" onclick="setChartMedRoute(\'oral\')">' + esc(STR.medOral) + '</button><button class="chipbtn' + ((d.route || "oral") === "inj" ? ' on' : '') + '" onclick="setChartMedRoute(\'inj\')">' + esc(STR.medInj) + '</button></div>' +
-    '<div class="row wrap"><input class="date" type="date" value="' + esc(d.startDate || "") + '" onchange="sheetDraftValue(\'startDate\',this.value)"><input class="date" type="date" value="' + esc(d.endDate || "") + '" onchange="sheetDraftValue(\'endDate\',this.value)"></div>' +
-    '<div class="row wrap"><button class="primary" onclick="saveChartMed()">' + esc(STR.confirm) + '</button>' + (d.medId ? '<button class="ghostbtn danger" onclick="deleteChartMed()">Delete</button>' : '') + '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div></div>';
-}
-
-function renderChartEventSheet(){
-  var d = SHEET.draft || {};
-  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.addEvent) + '</div><div class="stack">' +
-    '<div class="row wrap"><input class="date" type="date" value="' + esc(d.date || "") + '" onchange="sheetDraftValue(\'date\',this.value)"></div>' +
-    '<div class="chips"><button class="chipbtn' + ((d.type || "exam") === "exam" ? ' on' : '') + '" onclick="setChartEventType(\'exam\')">' + esc(STR.apptKinds.exam) + '</button><button class="chipbtn' + ((d.type || "exam") === "proc" ? ' on' : '') + '" onclick="setChartEventType(\'proc\')">\u51e6</button><button class="chipbtn' + ((d.type || "exam") === "ic" ? ' on' : '') + '" onclick="setChartEventType(\'ic\')">IC</button><button class="chipbtn' + ((d.type || "exam") === "other" ? ' on' : '') + '" onclick="setChartEventType(\'other\')">' + esc(STR.apptKinds.other) + '</button></div>' +
-    '<div class="field"><input id="chartEventTitle" class="input" value="' + esc(d.title || "") + '" oninput="sheetDraftValue(\'title\',this.value)" placeholder="title"></div>' +
-    '<div class="row wrap"><button class="primary" onclick="saveChartEvent()">' + esc(STR.confirm) + '</button>' + (d.eventId ? '<button class="ghostbtn danger" onclick="deleteChartEvent()">Delete</button>' : '') + '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div></div>';
-}
-
-function renderChartRowSheet(){
-  var d = SHEET.draft || {};
-  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.addRow) + '</div><div class="stack">' +
-    '<div class="chips"><button class="chipbtn' + ((d.group || "vital") === "vital" ? ' on' : '') + '" onclick="setChartRowGroup(\'vital\')">' + esc(STR.groupVital) + '</button><button class="chipbtn' + ((d.group || "vital") === "lab" ? ' on' : '') + '" onclick="setChartRowGroup(\'lab\')">' + esc(STR.groupLab) + '</button></div>' +
-    '<div class="field"><input id="chartRowName" class="input" value="' + esc(d.name || "") + '" oninput="sheetDraftValue(\'name\',this.value)" placeholder="name"></div>' +
-    '<div class="row wrap"><button class="primary" onclick="saveChartRow()">' + esc(STR.confirm) + '</button><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div></div>';
-}
-
-function renderChartValueSheet(){
-  var d = SHEET.draft || {};
-  return '<div class="sheetcard"><div class="sheettitle">' + esc((d.date || "") + " " + (d.rowId || "")) + '</div><div class="stack"><div class="field"><input id="chartValueInput" class="input" value="' + esc(d.value || "") + '" oninput="sheetDraftValue(\'value\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){saveChartValue()}"></div><div class="row wrap"><button class="primary" onclick="saveChartValue()">' + esc(STR.confirm) + '</button><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div></div>';
 }
 
 function renderSettingsSheet(){
@@ -3324,12 +3016,8 @@ function renderSettingsSheet(){
     }).join('') + '</div></section>' +
     '<section class="settingssec"><div class="one">' + esc(STR.cardPrefs) + '</div><div class="stack">' + cardSettings.cardSections.map(function(name){
       var checked = !cloneArr(cardSettings.cardHidden).includes(name);
-      var label = name === "appts" ? STR.apptSection : (DB.config.labels[name] || name);
+      var label = DB.config.labels[name] || name;
       return '<div class="lineitem"><label class="row" style="flex:1"><input class="check" type="checkbox" ' + (checked ? 'checked ' : '') + 'onclick="toggleCardSection(\'' + name + '\',this.checked)"><div class="linegrow"><div class="text">' + esc(label) + '</div></div></label><button class="smallbtn" onclick="moveCardSection(\'' + name + '\',\'up\')">\u2191</button><button class="smallbtn" onclick="moveCardSection(\'' + name + '\',\'down\')">\u2193</button></div>';
-    }).join('') + '</div></section>' +
-    '<section class="settingssec"><div class="one">' + esc(STR.chartPrefs) + '</div><div class="stack">' + [["vital", STR.groupVital], ["lab", STR.groupLab], ["med", STR.groupMed], ["event", STR.groupEvent]].map(function(row){
-      var checked = !cloneArr(cardSettings.chartHidden).includes(row[0]);
-      return '<label class="lineitem"><input class="check" type="checkbox" ' + (checked ? 'checked ' : '') + 'onclick="toggleChartGroupPref(\'' + row[0] + '\',this.checked)"><div class="linegrow"><div class="text">' + esc(row[1]) + '</div></div></label>';
     }).join('') + '</div></section>' +
     '<section class="settingssec"><div class="one">' + esc(STR.trashSection) + '</div><div class="stack">' + (trashRows.length ? trashRows.map(function(entry){
       var stamp = String(entry.deletedAt || "");
@@ -3397,54 +3085,10 @@ function renderSeedList(c){
   }).join('');
 }
 
-function renderApptList(c){
-  return cloneArr(c.appts).sort(function(a, b){
-    return String(a.date || "").localeCompare(String(b.date || "")) || String(a.text || "").localeCompare(String(b.text || ""));
-  }).map(function(item){
-    return '<div class="lineitem"><label class="row" style="flex:1" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleAppt(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div><div class="row wrap" style="margin-top:6px"><span class="fieldlabel">' + esc(weekHeaderLabel(item.date)) + '</span><span class="badge">' + esc(STR.apptKinds[item.kind] || STR.apptKinds.other) + '</span></div></div></label><button class="iconbtn" onclick="deleteAppt(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">\u00d7</button></div>';
-  }).join('');
-}
-
-function renderApptSection(c){
-  return '<section class="panelcard"><div class="one">' + esc(STR.apptSection) + '</div><div class="stack" style="margin-top:10px">' +
-    (renderApptList(c) || '<div class="faint">-</div>') +
-    '<div class="stack"><div class="row wrap"><input id="detailApptDate" class="date" type="date" value="' + esc(todayISO()) + '"><select id="detailApptKind" class="input" style="width:auto">' + Object.keys(STR.apptKinds).map(function(kind){
-      return '<option value="' + esc(kind) + '">' + esc(STR.apptKinds[kind]) + '</option>';
-    }).join('') + '</select></div><div class="row"><input id="detailApptText" class="input" placeholder="' + esc(STR.apptSection) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addDetailAppt(\'' + esc(c.id) + '\')}"><button class="ghostbtn" onclick="addDetailAppt(\'' + esc(c.id) + '\')">+</button></div></div>' +
-  '</div></section>';
-}
-
 function renderSectionCard(title, body, addId, placeholder, addFn, caseId){
   return '<section class="panelcard"><div class="one">' + esc(title) + '</div><div class="stack" style="margin-top:10px">' +
     (body || '<div class="faint">-</div>') +
     (addId ? '<div class="row"><input id="' + esc(addId) + '" class="input" placeholder="' + esc(placeholder) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){' + addFn + '(\'' + esc(caseId) + '\',this.value);this.value=\'\';}"><button class="ghostbtn" onclick="' + addFn + '(\'' + esc(caseId) + '\',document.getElementById(\'' + esc(addId) + '\').value);document.getElementById(\'' + esc(addId) + '\').value=\'\'">＋</button></div>' : '') +
-  '</div></section>';
-}
-
-function renderDetail(caseId){
-  var c = DB.cases.find(function(item){ return item.id === caseId; });
-  if (!c) return '<section class="screen"><div class="empty">not found</div></section>';
-  var stage = stageById(c.stageId);
-  return '<section class="screen detail"><div class="stack">' +
-    '<section class="panelcard"><div class="detailhead"><div class="linegrow">' +
-      (VIEW.editingLabel
-        ? '<input class="editline" value="' + esc(c.label) + '" onblur="setViewEditingLabel(false);updateCaseLabel(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}" autofocus>'
-        : '<div class="caseid one" onclick="setViewEditingLabel(true)">' + esc(c.label || '—') + '</div>') +
-      '<div class="meta" onclick="setViewEditingMeta(' + (!VIEW.editingMeta ? 'true' : 'false') + ')">D' + computeDay(c.admittedAt, todayISO()) + ' ・ ' + esc(compactMeta(c)) + '</div>' +
-      (VIEW.editingMeta ? renderMetaEditor(c) : '') +
-    '</div>' +
-    '<button class="pickbtn" onclick="openStagePicker(\'' + esc(c.id) + '\')">' + stageDot(stage) + esc(stage.name) + '</button></div>' +
-    '<div class="field" style="margin-top:10px"><div class="fieldlabel">' + esc(STR.addDxTag) + '</div>' +
-      renderTagList(c) +
-      '<div class="row" style="margin-top:8px"><input id="dxTagInput" class="input" placeholder="' + esc(STR.dxTagPh) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addDxTag(\'' + esc(c.id) + '\',this.value);this.value=\'\'}"><button class="ghostbtn" onclick="addDxTag(\'' + esc(c.id) + '\',document.getElementById(\'dxTagInput\').value);document.getElementById(\'dxTagInput\').value=\'\'">＋</button></div>' +
-    '</div></section>' +
-    '<section class="panelcard"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
-    renderSectionCard(DB.config.labels.next, renderNextList(c), "nextInput", STR.nextPh, "addNext", c.id) +
-    renderApptSection(c) +
-    renderSectionCard(DB.config.labels.today, renderTodoList(c), "todoInput", STR.todayPh, "addTodo", c.id) +
-    renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id) +
-    renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id) +
-    '<section class="panelcard"><button class="ghostbtn danger" onclick="deleteCase(\'' + esc(c.id) + '\')">' + esc(STR.deleteCase) + '</button></section>' +
   '</div></section>';
 }
 
@@ -3563,17 +3207,16 @@ renderBoard = function(){
       return '<tr><th class="sticky casecell" onclick="openDetail(\'' + esc(row.case.id) + '\')">' + esc(row.case.label) + ' D' + computeDay(row.case.admittedAt, todayISO()) + '</th>' + week.dates.map(function(date){
         var cell = row.dates[date];
         var bandColor = cell.stageId ? stageById(cell.stageId).color : "transparent";
-        return '<td class="' + (date === week.today ? 'todaycol' : '') + '" onclick="openApptCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="markerstack">' + cell.markers.slice(0, 2).map(function(marker){
-          var label = marker.kind === "planned" ? "\u2605" : marker.kind === "pending" ? "\u5f85" : marker.kind === "next" ? "\u6b21" : marker.kind === "done" ? "\u2713" : (STR.apptKinds[marker.kind] || STR.apptKinds.other);
-          return '<span class="mark">' + esc(label) + '</span>';
+        return '<td class="' + (date === week.today ? 'todaycol' : '') + '" onclick="openWeekCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="markerstack">' + cell.markers.slice(0, 2).map(function(marker){
+          return '<span class="mark">' + esc(marker.text) + '</span>';
         }).join('') + (cell.markers.length > 2 ? '<span class="mark">+' + (cell.markers.length - 2) + '</span>' : '') + '</div></td>';
       }).join('') + '</tr>';
     }).join('') + '</tbody></table></div>'
     : (cases.length ? '<div class="list">' +
       cases.map(function(c, idx){
-        return '<div class="dropzone' + (DND.hoverIndex === idx ? ' on' : '') + '" onpointerenter="hoverDrop(' + idx + ')" onpointerup="dropReorder(' + idx + ')"></div>' + renderBoardCard(c);
+        return '<div class="dropzone" data-drop-index="' + idx + '"></div>' + renderBoardCard(c);
       }).join('') +
-      '<div class="dropzone' + (DND.hoverIndex === cases.length ? ' on' : '') + '" onpointerenter="hoverDrop(' + cases.length + ')" onpointerup="dropReorder(' + cases.length + ')"></div>' +
+      '<div class="dropzone" data-drop-index="' + cases.length + '"></div>' +
     '</div>' : '<div class="empty">' + esc(STR.emptyBoard) + '</div>');
   return '<section class="screen"><div class="seg"><button class="chipbtn' + (VIEW.boardMode !== "week" ? ' on' : '') + '" onclick="setBoardMode(\'board\')">' + esc(STR.boardView) + '</button><button class="chipbtn' + (VIEW.boardMode === "week" ? ' on' : '') + '" onclick="setBoardMode(\'week\')">' + esc(STR.weekView) + '</button></div>' + body +
   '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openReview()">' + esc(STR.review) + '</button></div><div class="row wrap" style="margin-top:8px"><button class="ghostbtn smallbtn" onclick="openSyncSheet()"><span data-sync-status>' + esc(syncStatusLabel()) + '</span></button><button class="ghostbtn smallbtn" onclick="openDataSheet()">' + esc(STR.dataRow) + '</button><button class="ghostbtn smallbtn" onclick="openSearch()">' + esc(STR.searchRow) + '</button><button class="ghostbtn smallbtn" onclick="openSettingsSheet()">' + esc(STR.settingsRow) + '</button></div></div></div>';
@@ -3583,35 +3226,8 @@ renderDetail = function(caseId){
   var c = DB.cases.find(function(item){ return item.id === caseId; });
   if (!c) return '<section class="screen"><div class="empty">not found</div></section>';
   var stage = stageById(c.stageId);
-  var dates = chartDates(c, todayISO());
-  var dateMode = VIEW.chartDateMode === "date" ? "date" : "day";
   var dischargeInline = c.stageId === "dc";
   var dischargeOpen = dischargeInline || !!VIEW.dischargeOpen;
-  var chartGroups = [
-    { key:"vital", label:STR.groupVital, items:cloneArr(c.chart.rows).filter(function(row){ return row.group === "vital"; }), kind:"row" },
-    { key:"lab", label:STR.groupLab, items:cloneArr(c.chart.rows).filter(function(row){ return row.group === "lab"; }), kind:"row" },
-    { key:"med", label:STR.groupMed, items:cloneArr(c.chart.meds), kind:"med" },
-    { key:"event", label:STR.groupEvent, items:cloneArr(c.chart.events), kind:"event" }
-  ].filter(function(group){ return !chartGroupHidden(group.key); });
-  var chartBody = chartGroups.map(function(group){
-    var collapsed = chartGroupCollapsed(c.id, group.key);
-    var rows = collapsed ? '' : group.items.map(function(entry){
-      if (group.kind === "row") {
-        return '<tr><th class="sticky chartlabel">' + esc(entry.name) + '</th>' + dates.map(function(date){
-          return '<td class="' + (date === todayISO() ? 'todaycol' : '') + '" onclick="setChartValue(\'' + esc(c.id) + '\',\'' + esc(entry.id) + '\',\'' + esc(date) + '\')">' + esc(entry.values[date] || '') + '</td>';
-        }).join('') + '</tr>';
-      }
-      if (group.kind === "med") {
-        return '<tr><th class="sticky chartlabel" onclick="addChartMed(\'' + esc(c.id) + '\',\'' + esc(entry.id) + '\')">' + esc((entry.name || '-').slice(0, 4)) + '</th>' + dates.map(function(date){
-          return '<td class="bandcell' + (date === todayISO() ? ' todaycol' : '') + '">' + (medOnDate(entry, date) ? '<div class="band ' + (entry.route === "oral" ? 'band-oral' : 'band-inj') + '"></div>' : '') + '</td>';
-        }).join('') + '</tr>';
-      }
-      return '<tr><th class="sticky chartlabel" onclick="addChartEvent(\'' + esc(c.id) + '\',\'' + esc(entry.id) + '\')">' + esc((entry.title || '-').slice(0, 8)) + '</th>' + dates.map(function(date){
-        return '<td class="' + (date === todayISO() ? 'todaycol' : '') + '"' + (entry.date === date ? ' onclick="addChartEvent(\'' + esc(c.id) + '\',\'' + esc(entry.id) + '\')"' : '') + '>' + (entry.date === date ? '<span class="mark">' + chartEventMark(entry.type) + '</span>' : '') + '</td>';
-      }).join('') + '</tr>';
-    }).join('');
-    return '<tr><th class="sticky" colspan="' + (dates.length + 1) + '" onclick="toggleChartGroup(\'' + esc(c.id) + '\',\'' + esc(group.key) + '\')">' + esc(group.label) + ' ' + (collapsed ? '+' : '-') + '</th></tr>' + rows;
-  }).join('');
   var dischargePanel = '<section class="panelcard"><div class="collapsehead"' + (dischargeInline ? '' : ' onclick="toggleDischargePanel()"') + '><div class="one">' + esc(STR.dischargePanel) + '</div><div class="meta">' + dischargeProgress(c) + '/' + dcChecklistItems().length + (dischargeInline ? '' : (dischargeOpen ? ' -' : ' +')) + '</div></div>' +
     (dischargeOpen ? '<div class="stack" style="margin-top:10px"><div class="row wrap"><span class="fieldlabel">' + esc(STR.plannedOn) + '</span><input class="date" type="date" value="' + esc(c.discharge.plannedOn || '') + '" onchange="mutateCase(\'' + esc(c.id) + '\',function(row){row.discharge.plannedOn=this.value||null}.bind(this))"></div><div class="checklist">' + dcChecklistItems().map(function(item){
       return '<label class="checkitem"><input class="check" type="checkbox" ' + (c.discharge.checklist[item.k] ? 'checked ' : '') + 'onclick="mutateCase(\'' + esc(c.id) + '\',function(row){row.discharge.checklist[\'' + esc(item.k) + '\']=this.checked}.bind(this))"><div class="linegrow"><div class="text">' + esc(item.t) + '</div><div class="faint">' + esc(item.h) + '</div></div></label>';
@@ -3627,44 +3243,11 @@ renderDetail = function(caseId){
     '<section class="panelcard"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
     (dischargeInline ? dischargePanel : '') +
     renderSectionCard(DB.config.labels.next, renderNextList(c), "nextInput", STR.nextPh, "addNext", c.id) +
-    renderApptSection(c) +
     renderSectionCard(DB.config.labels.today, renderTodoList(c), "todoInput", STR.todayPh, "addTodo", c.id) +
     renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id) +
     renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id) +
-    '<section class="panelcard"><div class="one">' + esc(STR.chartPanel) + '</div><div class="chartwrap" style="margin-top:10px"><table class="chartgrid"><thead><tr onclick="toggleChartDateMode()"><th class="sticky">Item</th>' + dates.map(function(date){ return '<th class="' + (date === todayISO() ? 'todaycol' : '') + '">' + esc(dateMode === "date" ? (Number(date.slice(5, 7)) + '/' + Number(date.slice(8, 10))) : ('D' + computeDay(c.admittedAt, date))) + '</th>'; }).join('') + '</tr></thead><tbody>' + chartBody + '</tbody></table></div><div class="row wrap" style="margin-top:10px"><button class="ghostbtn" onclick="addChartMed(\'' + esc(c.id) + '\')">' + esc(STR.addMed) + '</button><button class="ghostbtn" onclick="addChartEvent(\'' + esc(c.id) + '\')">' + esc(STR.addEvent) + '</button><button class="ghostbtn" onclick="addChartRow(\'' + esc(c.id) + '\')">' + esc(STR.addRow) + '</button></div></section>' +
     (!dischargeInline ? dischargePanel : '') +
     '<section class="panelcard"><textarea id="dayExportText" class="reviewtextarea hidden" readonly>' + esc(dayExportText(c.id)) + '</textarea><button class="ghostbtn" onclick="copyDayExport(\'' + esc(c.id) + '\')">' + esc(STR.dayExport) + '</button></section>' +
-    '<section class="panelcard"><button class="ghostbtn danger" onclick="deleteCase(\'' + esc(c.id) + '\')">' + esc(STR.deleteCase) + '</button></section>' +
-  '</div></section>';
-  var chartRows = [];
-  if (!chartGroupHidden("lab")) cloneArr(c.chart.rows).filter(function(row){ return row.group === "lab"; }).forEach(function(row){ chartRows.push({ kind:"row", label:row.name, row:row }); });
-  if (!chartGroupHidden("vital")) cloneArr(c.chart.rows).filter(function(row){ return row.group === "vital"; }).forEach(function(row){ chartRows.push({ kind:"row", label:row.name, row:row }); });
-  if (!chartGroupHidden("med")) cloneArr(c.chart.meds).forEach(function(med){ chartRows.push({ kind:"med", label:med.name, med:med }); });
-  if (!chartGroupHidden("event")) cloneArr(c.chart.events).forEach(function(event){ chartRows.push({ kind:"event", label:event.title, event:event }); });
-  return '<section class="screen detail"><div class="stack">' +
-    '<section class="panelcard"><div class="detailhead"><div class="linegrow">' +
-      (VIEW.editingLabel ? '<input class="editline" value="' + esc(c.label) + '" onblur="setViewEditingLabel(false);updateCaseLabel(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}">' : '<div class="caseid one" onclick="setViewEditingLabel(true)">' + esc(c.label || '-') + '</div>') +
-      '<div class="meta" onclick="setViewEditingMeta(' + (!VIEW.editingMeta ? 'true' : 'false') + ')">D' + computeDay(c.admittedAt, todayISO()) + ' ' + esc(compactMeta(c)) + (c.discharge.plannedOn ? ' / ' + esc(STR.plannedOn) + ' ' + esc(c.discharge.plannedOn.slice(5)) : '') + '</div>' +
-      (c.status === "discharged" ? '<div class="subtleline">' + esc(STR.dischargedAtLine + ' ' + (c.dischargedAt || '')) + '</div>' : '') +
-      (VIEW.editingMeta ? renderMetaEditor(c) : '') +
-    '</div><button class="pickbtn" onclick="openStagePicker(\'' + esc(c.id) + '\')">' + stageDot(stage) + esc(stage.name) + '</button></div>' +
-    '<div class="field" style="margin-top:10px"><div class="fieldlabel">' + esc(STR.addDxTag) + '</div>' + renderTagList(c) + '<div class="row" style="margin-top:8px"><input id="dxTagInput" class="input" placeholder="' + esc(STR.dxTagPh) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addDxTag(\'' + esc(c.id) + '\',this.value);this.value=\'\'}"><button class="ghostbtn" onclick="addDxTag(\'' + esc(c.id) + '\',document.getElementById(\'dxTagInput\').value);document.getElementById(\'dxTagInput\').value=\'\'">+</button></div></div></section>' +
-    '<section class="panelcard"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
-    renderSectionCard(DB.config.labels.next, renderNextList(c), "nextInput", STR.nextPh, "addNext", c.id) +
-    renderSectionCard(DB.config.labels.today, renderTodoList(c), "todoInput", STR.todayPh, "addTodo", c.id) +
-    renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id) +
-    renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id) +
-    '<section class="panelcard"><div class="one">' + esc(STR.chartPanel) + '</div><div class="chartwrap" style="margin-top:10px"><table class="chartgrid"><thead><tr><th class="sticky">Item</th>' + dates.map(function(date){ return '<th class="' + (date === todayISO() ? 'todaycol' : '') + '">' + esc('D' + computeDay(c.admittedAt, date)) + '</th>'; }).join('') + '</tr></thead><tbody>' + chartRows.map(function(entry){
-      return '<tr><th class="sticky chartlabel">' + esc((entry.label || '-').slice(0, 4)) + '</th>' + dates.map(function(date){
-        if (entry.kind === "med") return '<td class="bandcell' + (date === todayISO() ? ' todaycol' : '') + '">' + (medOnDate(entry.med, date) ? '<div class="band ' + (entry.med.route === "oral" ? 'band-oral' : 'band-inj') + '"></div>' : '') + '</td>';
-        if (entry.kind === "event") return '<td class="' + (date === todayISO() ? 'todaycol' : '') + '">' + (entry.event.date === date ? '<span class="mark">' + esc(entry.event.type === "exam" ? "検" : entry.event.type === "proc" ? "処" : entry.event.type === "ic" ? "IC" : "他") + '</span>' : '') + '</td>';
-        return '<td class="' + (date === todayISO() ? 'todaycol' : '') + '">' + esc(entry.row.values[date] || '') + '</td>';
-      }).join('') + '</tr>';
-    }).join('') + '</tbody></table></div></section>' +
-    '<section class="panelcard"><div class="collapsehead"><div class="one">' + esc(STR.dischargePanel) + '</div><div class="meta">' + dischargeProgress(c) + '/' + dcChecklistItems().length + '</div></div><div class="stack" style="margin-top:10px"><div class="row wrap"><span class="fieldlabel">' + esc(STR.plannedOn) + '</span><input class="date" type="date" value="' + esc(c.discharge.plannedOn || '') + '" onchange="mutateCase(\'' + esc(c.id) + '\',function(row){row.discharge.plannedOn=this.value||null}.bind(this))"></div><div class="checklist">' + dcChecklistItems().map(function(item){
-      return '<label class="checkitem"><input class="check" type="checkbox" ' + (c.discharge.checklist[item.k] ? 'checked ' : '') + 'onclick="mutateCase(\'' + esc(c.id) + '\',function(row){row.discharge.checklist[\'' + esc(item.k) + '\']=this.checked}.bind(this))"><div class="linegrow"><div class="text">' + esc(item.t) + '</div><div class="faint">' + esc(item.h) + '</div></div></label>';
-    }).join('') + '</div><div class="row wrap"><button class="ghostbtn" onclick="copyReviewExport()">' + esc(STR.dcExport) + '</button>' + (c.status === "discharged" ? '<button class="ghostbtn" onclick="mutateCase(\'' + esc(c.id) + '\',function(row){row.status=\'active\';row.dischargedAt=null})">' + esc(STR.backToActive) + '</button>' : '<button class="ghostbtn danger" onclick="if(confirm(STR.dischargeConfirm)){mutateCase(\'' + esc(c.id) + '\',function(row){row.status=\'discharged\';row.dischargedAt=todayISO();appendStageLog(row,\'dc\',todayISO())});openBoard()}">' + esc(STR.doDischarge) + '</button>') + '</div></div></section>' +
-    '<section class="panelcard"><button class="ghostbtn" onclick="copyReviewExport()">' + esc(STR.dayExport) + '</button></section>' +
     '<section class="panelcard"><button class="ghostbtn danger" onclick="deleteCase(\'' + esc(c.id) + '\')">' + esc(STR.deleteCase) + '</button></section>' +
   '</div></section>';
 };
@@ -3690,11 +3273,7 @@ renderSheet = function(){
   if (SHEET.name === "sync") html = renderSyncSheet();
   if (SHEET.name === "data") html = renderDataSheet();
   if (SHEET.name === "settings") html = renderSettingsSheet();
-  if (SHEET.name === "apptCell") html = renderApptCellSheet();
-  if (SHEET.name === "chartMed") html = renderChartMedSheet();
-  if (SHEET.name === "chartEvent") html = renderChartEventSheet();
-  if (SHEET.name === "chartRow") html = renderChartRowSheet();
-  if (SHEET.name === "chartValue") html = renderChartValueSheet();
+  if (SHEET.name === "weekCell") html = renderWeekCellSheet();
   el.className = "sheet" + (html ? " open" : "");
   el.innerHTML = html;
 };
@@ -3713,6 +3292,7 @@ function render(){
 }
 
 function boot(){
+  try { history.replaceState({ wb:0 }, ""); } catch (e) {}
   STATS = loadStats();
   SETTINGS = loadSettings();
   THEME_MODE = loadThemeMode();
@@ -3742,8 +3322,12 @@ if (typeof document !== "undefined" && document.addEventListener) {
   document.addEventListener("visibilitychange", function(){
     if (!document.visibilityState || document.visibilityState === "visible") ensureToday();
   });
-  document.addEventListener("pointerup", cancelDrag);
+  document.addEventListener("pointermove", dragMove);
+  document.addEventListener("pointerup", dragEnd);
   document.addEventListener("pointercancel", cancelDrag);
+}
+if (typeof window !== "undefined" && window.addEventListener) {
+  window.addEventListener("popstate", handlePopState);
 }
 
 boot();

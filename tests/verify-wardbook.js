@@ -41,8 +41,8 @@ const L = sandbox.module.exports;
   "defaultStages", "normalizeState", "normalizeCase", "computeDay", "rolloverTodos",
   "hasBackToday", "boardOrder", "stalenessLevel", "needsReview", "reviewQueue",
   "unsentSeeds", "countSeedsOn", "formatSeedExport", "missSeedText", "makeSeed",
-  "moveCase", "normalizeChart", "dcChecklistItems", "stageOn", "chartDates",
-  "medOnDate", "buildWeekGrid", "searchCases", "reviewStreak", "syncDiffFields",
+  "moveCase", "dcChecklistItems", "stageOn",
+  "buildWeekGrid", "searchCases", "reviewStreak", "syncDiffFields",
   "syncMergeCase", "syncEmptyState", "syncMarkRestored", "syncNoteLocalChanges", "syncReconcile",
   "syncClearDirty", "syncDeriveKey", "syncEncryptJson", "syncDecryptJson",
   "syncRandomSaltB64", "statsSummary", "buildOutboxBatch"
@@ -114,55 +114,56 @@ assert.ok(L.formatSeedExport([], "2026-07-07").startsWith("## 2026-07-07"));
 assert.ok(L.missSeedText("old", "why").includes("old"));
 assert.strictEqual(L.moveCase([{ id:"a", order:0 }, { id:"b", order:1 }], "b", "up").map((x) => x.id).join(","), "b,a");
 
-const chart = L.normalizeChart({
-  meds:[{ name:"abx", route:"inj", startDate:"2026-07-07", endDate:null }, null],
-  events:[{ date:"2026-07-08", type:"exam", title:"CT" }, { bad:true }],
-  rows:[{ group:"lab", name:"CRP", values:{ "2026-07-07":"1.2", nope:"x" } }, {}]
-});
-assert.strictEqual(chart.meds.length, 1);
-assert.strictEqual(chart.events.length, 1);
-assert.strictEqual(chart.rows[0].values["2026-07-07"], "1.2");
 assert.strictEqual(L.dcChecklistItems().some((x) => x.k === "dxtags"), true);
+
+// Removed features (appts / chart) must be purged from legacy payloads,
+// even though unknown keys normally pass through normalizeCase.
+const purgedCase = L.normalizeCase({
+  id:"c-legacy", label:"old", admittedAt:"2026-07-01", extra:"keep",
+  appts:[{ id:"a1", date:"2026-07-10", text:"CT", kind:"exam", done:false }],
+  chart:{ meds:[{ id:"m1", name:"abx", route:"inj", startDate:"2026-07-02" }], events:[], rows:[] }
+}, "2026-07-08T00:00:00Z", "2026-07-08");
+assert.strictEqual("appts" in purgedCase, false);
+assert.strictEqual("chart" in purgedCase, false);
+assert.strictEqual(purgedCase.extra, "keep");
+
+// Trash entries of removed types are dropped instead of being coerced to "case".
+const legacyTrash = L.normalizeState({
+  trash:[
+    { id:"t1", deletedAt:"2026-07-08T09:00:00.000Z", type:"appt", caseId:"c1", payload:{ id:"a1", text:"CT" } },
+    { id:"t2", deletedAt:"2026-07-08T09:00:00.000Z", type:"chartMed", caseId:"c1", payload:{ id:"m1", name:"abx" } },
+    { id:"t3", deletedAt:"2026-07-08T09:00:00.000Z", type:"todo", caseId:"c1", payload:{ id:"td1", text:"lab" } }
+  ]
+}, "2026-07-08T10:00:00.000Z", "2026-07-08");
+assert.strictEqual(legacyTrash.trash.map((x) => x.id).join(","), "t3");
 
 assert.strictEqual(L.stageOn([{ date:"2026-07-05", stageId:"adm" }, { date:"2026-07-07", stageId:"dc" }], "2026-07-04"), "adm");
 assert.strictEqual(L.stageOn([{ date:"2026-07-05", stageId:"adm" }, { date:"2026-07-07", stageId:"dc" }], "2026-07-06"), "adm");
 assert.strictEqual(L.stageOn([{ date:"2026-07-05", stageId:"adm" }, { date:"2026-07-07", stageId:"dc" }], "2026-07-09"), "dc");
 
-const dates = L.chartDates({
-  admittedAt:"2026-07-01",
-  appts:[{ date:"2026-07-15" }],
-  discharge:{ plannedOn:"2026-07-14" },
-  chart:{ meds:[{ startDate:"2026-07-02", endDate:"2026-07-09" }], events:[{ date:"2026-07-13" }] }
-}, "2026-07-07");
-assert.strictEqual(dates[0], "2026-07-01");
-assert.strictEqual(dates[dates.length - 1], "2026-07-15");
-
-assert.strictEqual(L.medOnDate({ startDate:"2026-07-07", endDate:null }, "2026-07-20"), true);
-assert.strictEqual(L.medOnDate({ startDate:"2026-07-07", endDate:"2026-07-07" }, "2026-07-08"), false);
-
 const week = L.buildWeekGrid([
   {
     id:"c1", label:"haien", admittedAt:"2026-07-01", status:"active", order:0,
     stageLog:[{ date:"2026-07-01", stageId:"adm" }, { date:"2026-07-07", stageId:"dc" }],
-    appts:[{ id:"a1", date:"2026-07-07", kind:"meet", text:"mtg", done:true }, { id:"a2", date:"2026-07-10", kind:"exam", text:"CT", done:false }],
     next:[{ id:"n1", text:"x", due:"2026-07-11" }],
     pendings:[{ id:"p1", text:"y", backOn:"2026-07-12" }],
     discharge:{ plannedOn:"2026-07-13" }
   },
-  { id:"c2", label:"gone", admittedAt:"2026-07-01", status:"discharged", order:1, stageLog:[{ date:"2026-07-01", stageId:"adm" }], appts:[], next:[], pendings:[], discharge:{ plannedOn:null } }
+  { id:"c2", label:"gone", admittedAt:"2026-07-01", status:"discharged", order:1, stageLog:[{ date:"2026-07-01", stageId:"adm" }], next:[], pendings:[], discharge:{ plannedOn:null } }
 ], "2026-07-08");
 assert.strictEqual(week.dates.length, 15);
 assert.strictEqual(week.rows.length, 1);
 assert.strictEqual(week.rows[0].dates["2026-07-06"].stageId, "adm");
 assert.strictEqual(week.rows[0].dates["2026-07-08"].stageId, "dc");
-assert.strictEqual(week.rows[0].dates["2026-07-10"].markers[0].kind, "exam");
+assert.strictEqual(week.rows[0].dates["2026-07-11"].markers[0].kind, "next");
+assert.strictEqual(week.rows[0].dates["2026-07-12"].markers[0].kind, "pending");
 assert.strictEqual(week.rows[0].dates["2026-07-13"].markers.some((m) => m.kind === "planned"), true);
 
 const weekAdmissionBand = L.buildWeekGrid([
   {
     id:"c1", label:"hf", admittedAt:"2026-07-05", status:"active", order:0,
     stageLog:[{ date:"2026-07-07", stageId:"adm" }],
-    appts:[], next:[], pendings:[], discharge:{ plannedOn:null }
+    next:[], pendings:[], discharge:{ plannedOn:null }
   }
 ], "2026-07-08");
 assert.strictEqual(weekAdmissionBand.rows[0].dates["2026-07-04"].stageId, "");
@@ -174,7 +175,7 @@ const customWeek = L.buildWeekGrid([
   {
     id:"c1", label:"uti", admittedAt:"2026-07-01", status:"active", order:0,
     stageLog:[{ date:"2026-07-01", stageId:"adm" }],
-    appts:[], next:[], pendings:[], discharge:{ plannedOn:null }
+    next:[], pendings:[], discharge:{ plannedOn:null }
   }
 ], "2026-07-08", 3, 10);
 assert.strictEqual(customWeek.dates.length, 14);
