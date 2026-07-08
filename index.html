@@ -33,6 +33,10 @@
     --ok-soft:#dcfce7;
     --badge:#fff7ed;
     --badge-line:#fdba74;
+    --btn:#ffffff;
+    --on-accent:#fff;
+    --bar:rgba(245,246,248,.96);
+    --drop:rgba(17,24,39,.14);
     --shadow:0 1px 2px rgba(0,0,0,.06);
   }
   :root[data-theme="dark"]{
@@ -49,6 +53,10 @@
     --ok-soft:#173327;
     --badge:#342516;
     --badge-line:#855f38;
+    --btn:#232b33;
+    --on-accent:#13161a;
+    --bar:rgba(19,22,26,.96);
+    --drop:rgba(237,242,247,.22);
     --shadow:0 1px 2px rgba(0,0,0,.28);
   }
   *{box-sizing:border-box}
@@ -64,7 +72,7 @@
   .app{max-width:720px;margin:0 auto;padding:0 0 88px}
   .topbar{
     position:sticky;top:0;z-index:20;
-    background:rgba(245,246,248,.96);
+    background:var(--bar);
     backdrop-filter:blur(8px);
     border-bottom:1px solid var(--line);
     padding:10px 14px calc(10px + env(safe-area-inset-top));
@@ -86,7 +94,7 @@
   .cardhead{display:flex;gap:8px;align-items:flex-start}
   .handle,.iconbtn,.ghostbtn,.chipbtn,.pickbtn,.smallbtn,.primary{
     border:1px solid var(--line);
-    background:#fff;
+    background:var(--btn);
     color:var(--text);
     border-radius:10px;
     min-height:36px;
@@ -96,7 +104,7 @@
   .primary{
     background:var(--accent);
     border-color:var(--accent);
-    color:#fff;
+    color:var(--on-accent);
     font-weight:700;
     padding:0 14px;
   }
@@ -107,14 +115,14 @@
     padding:0 10px;
     font-size:12px;
   }
-  .chipbtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .chipbtn.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
   .labelrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   .caseid{font-weight:700;font-size:16px}
   .meta{color:var(--muted);font-size:12px}
   .stagechip{
     display:inline-flex;align-items:center;gap:6px;
     border:1px solid var(--line);
-    background:#fff;
+    background:var(--btn);
     border-radius:999px;
     padding:3px 8px;
     font-size:12px;
@@ -151,7 +159,7 @@
   }
   .bottom{
     position:fixed;left:0;right:0;bottom:0;z-index:25;
-    background:rgba(245,246,248,.96);
+    background:var(--bar);
     backdrop-filter:blur(8px);
     border-top:1px solid var(--line);
     padding:10px 12px calc(10px + env(safe-area-inset-bottom));
@@ -177,7 +185,7 @@
     min-height:38px;
     border:1px solid var(--line);
     border-radius:10px;
-    background:#fff;
+    background:var(--btn);
     color:var(--text);
     padding:8px 10px;
   }
@@ -217,7 +225,7 @@
   .dropzone{
     height:10px;border-radius:999px;transition:background .12s ease;
   }
-  .dropzone.on{background:rgba(17,24,39,.14)}
+  .dropzone.on{background:var(--drop)}
   .tag{
     display:inline-flex;align-items:center;gap:6px;
     padding:4px 8px;border-radius:999px;
@@ -234,7 +242,7 @@
   .reviewprogress{font-size:12px;color:var(--muted)}
   .reviewactions,.reviewstack{display:flex;flex-direction:column;gap:8px}
   .reviewactions button,.reviewstack button{width:100%;min-height:44px}
-  .reviewtextarea{width:100%;min-height:160px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--text);padding:10px;resize:vertical}
+  .reviewtextarea{width:100%;min-height:160px;border:1px solid var(--line);border-radius:10px;background:var(--btn);color:var(--text);padding:10px;resize:vertical}
   .missrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
   .missrow .input{flex:1 1 180px}
   .hidden{display:none!important}
@@ -831,8 +839,12 @@ function syncNoteLocalChanges(data, state, nowIso){
     var prev = prevJson ? JSON.parse(prevJson) : null;
     var changed = syncDiffFields(prev, c);
     if(changed.length){
+      // First snapshot of a case (sync enable / re-enable) is a baseline, not an
+      // edit: stamp with the case's own lastTouchedAt so older local data cannot
+      // beat newer remote data in the LWW merge. Real edits keep nowIso.
+      var stamp = prev ? nowIso : ((typeof c.lastTouchedAt === "string" && c.lastTouchedAt) ? c.lastTouchedAt : nowIso);
       state.mt[c.id] = state.mt[c.id] || {};
-      changed.forEach(function(k){ state.mt[c.id][k] = nowIso; });
+      changed.forEach(function(k){ state.mt[c.id][k] = stamp; });
       state.snap[c.id] = JSON.stringify(c);
       state.dirty[c.id] = true;
     }
@@ -848,14 +860,19 @@ function syncNoteLocalChanges(data, state, nowIso){
   var currentConfig = { stages:(data.config && data.config.stages) || [], labels:(data.config && data.config.labels) || {} };
   var prevConfig = state.configSnap ? JSON.parse(state.configSnap) : null;
   var mergedCfgMt = state.configMt || {};
-  ["stages", "labels"].forEach(function(k){
-    var a = prevConfig ? JSON.stringify(prevConfig[k] === undefined ? null : prevConfig[k]) : "__none__";
-    var b = JSON.stringify(currentConfig[k] === undefined ? null : currentConfig[k]);
-    if(a !== b){
-      mergedCfgMt[k] = nowIso;
-      state.configDirty = true;
-    }
-  });
+  // First config snapshot is a baseline, not an edit: leave mt/dirty untouched so
+  // a fresh device's default config never overwrites the server's config.
+  // Seeding an empty server is handled in syncReconcileConfig.
+  if(prevConfig){
+    ["stages", "labels"].forEach(function(k){
+      var a = JSON.stringify(prevConfig[k] === undefined ? null : prevConfig[k]);
+      var b = JSON.stringify(currentConfig[k] === undefined ? null : currentConfig[k]);
+      if(a !== b){
+        mergedCfgMt[k] = nowIso;
+        state.configDirty = true;
+      }
+    });
+  }
   state.configMt = mergedCfgMt;
   state.configSnap = JSON.stringify(currentConfig);
   return state;
@@ -980,9 +997,23 @@ function syncConfigPlain(data){
   };
 }
 
-function syncReconcileConfig(data, state, remoteDoc){
+function syncReconcileConfig(data, state, remoteDoc, nowIso){
   state = state || syncEmptyState();
-  if(!remoteDoc || !remoteDoc.config){ return { data:data, state:state, localChanged:false, push:!!state.configDirty }; }
+  if(!remoteDoc || !remoteDoc.config){
+    // Server has no config yet: seed it from this device. Stamping happens here
+    // (not at baseline time) because only an empty server may take unstamped local config.
+    if(nowIso){
+      var cfgMt = state.configMt || {};
+      var seeded = false;
+      ["stages", "labels"].forEach(function(k){
+        if(!cfgMt[k]){ cfgMt[k] = nowIso; seeded = true; }
+      });
+      state.configMt = cfgMt;
+      if(seeded){ state.configDirty = true; }
+      data._configMt = JSON.parse(JSON.stringify(cfgMt));
+    }
+    return { data:data, state:state, localChanged:false, push:!!state.configDirty };
+  }
   var localCfg = { stages:data.config.stages, labels:data.config.labels };
   var res = syncMergeCase(localCfg, state.configMt || {}, remoteDoc.config, remoteDoc.mt || {});
   var changed = JSON.stringify(res.merged) !== JSON.stringify(localCfg);
@@ -1094,46 +1125,46 @@ const RESERVED_KEYS = ["wardbook:stats", "wardbook:settings", "wardbook:sync", "
 const SETTINGS_KEY = "wardbook:settings";
 const THEME_KEY = "wardbook:theme";
 const STR = {
-  addAdmission:"Add admission",
-  register:"Register",
-  cancel:"Cancel",
-  back:"Back",
-  piiWarning:"Do not enter PII.",
-  labelPh:"Label",
-  firstNotePh:"First impression",
-  ageBands:["10s","20s","30s","40s","50s","60s","70s","80s","90s+"],
-  sexM:"M",
-  sexF:"F",
-  unset:"Unset",
-  addDxTag:"Add Dx tag",
-  dxTagPh:"Diagnosis tag",
-  nextPh:"Add next step",
-  todayPh:"Add today task",
-  pendingPh:"Add pending item",
-  seedPh:"Add seed",
-  backTodayBadge:"Back today",
-  emptyBoard:"No active admissions.",
-  deleteCase:"Delete case",
-  deleteConfirm:"Delete this case permanently?",
-  dueLabel:"Due",
-  backOnLabel:"Back on",
-  editMeta:"Edit meta",
-  review:"Review",
-  exitReview:"Exit",
-  noChange:"No change",
-  changeStage:"Change stage",
-  editNote:"Edit note",
-  confirm:"Confirm",
-  reviewDone:"Review done",
-  reviewEmpty:"No cases need review.",
-  seedsToday:"Seeds today",
-  noUnsentSeeds:"No unsent seeds.",
-  copyExport:"Copy export",
-  shareExport:"Share",
-  copied:"Copied",
-  backToBoard:"Back to board",
-  missPrompt:"Missed prediction -> seed",
-  missWhyPh:"Why did it miss?",
+  addAdmission:"＋ 入院を登録",
+  register:"登録",
+  cancel:"キャンセル",
+  back:"← 一覧",
+  piiWarning:"氏名・ID・部屋番号など個人情報は入力しない（匿名ラベルのみ）",
+  labelPh:"ラベル（例：肺炎）",
+  firstNotePh:"見立ての一言（例：CAP、CTRXで3日解熱見込み）",
+  ageBands:["10代以下","20代","30代","40代","50代","60代","70代","80代","90代以上"],
+  sexM:"男",
+  sexF:"女",
+  unset:"未設定",
+  addDxTag:"＋病名タグ",
+  dxTagPh:"病名タグ（確定病名で検索用）",
+  nextPh:"次の展開を追加",
+  todayPh:"今日やることを追加",
+  pendingPh:"待ちを追加（培養・コンサル返事など）",
+  seedPh:"種を追加（引っかかり・疑問）",
+  backTodayBadge:"戻り予定",
+  emptyBoard:"入院患者がいません。「＋ 入院を登録」から始めます。",
+  deleteCase:"この症例を削除",
+  deleteConfirm:"この症例を完全に削除します。よろしいですか？",
+  dueLabel:"期日",
+  backOnLabel:"戻り日",
+  editMeta:"年代・性別",
+  review:"夕の棚卸し",
+  exitReview:"中断",
+  noChange:"変化なし",
+  changeStage:"ステージ変更",
+  editNote:"一言更新",
+  confirm:"確定",
+  reviewDone:"棚卸し完了",
+  reviewEmpty:"全員きょう確認済みです",
+  seedsToday:"今日の種",
+  noUnsentSeeds:"未送信の種はありません",
+  copyExport:"書き出しをコピー",
+  shareExport:"共有",
+  copied:"コピーしました",
+  backToBoard:"一覧へ戻る",
+  missPrompt:"予測が外れた？ 種にする",
+  missWhyPh:"なぜ外れた？（1行）",
   syncRow:"同期",
   dataRow:"データ",
   sendOk:"Vault へ送信しました ✈",
@@ -1235,7 +1266,8 @@ function esc(s){
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function stageById(stageId){
@@ -1617,7 +1649,7 @@ async function syncNow(opts){
     var res = syncReconcile(DB, SYNC.state, remoteCases, nowISO());
     DB = normalizeState(res.data);
     DB._configMt = JSON.parse(JSON.stringify((SYNC.state && SYNC.state.configMt) || {}));
-    var cfgRes = syncReconcileConfig(DB, SYNC.state, remoteConfig);
+    var cfgRes = syncReconcileConfig(DB, SYNC.state, remoteConfig, nowISO());
     DB = normalizeState(cfgRes.data);
     DB._configMt = JSON.parse(JSON.stringify((SYNC.state && SYNC.state.configMt) || {}));
     if (res.localChanged || cfgRes.localChanged) {
@@ -2740,12 +2772,11 @@ function commitMissSeed(){
 
 function deleteCase(caseId){
   if (!confirm(STR.deleteConfirm)) return;
-  DB.cases = DB.cases.filter(function(c){ return c.id !== caseId; }).map(function(c, idx){
-    var out = Object.assign({}, c);
-    if (out.status === "active") out.order = idx;
-    return out;
-  });
+  // Keep remaining orders as-is: DB.cases is insertion-ordered, so renumbering by
+  // array index would destroy the manual board order.
+  DB.cases = DB.cases.filter(function(c){ return c.id !== caseId; });
   saveState();
+  syncAfterSave();
   openBoard();
 }
 
@@ -2900,7 +2931,7 @@ function renderApptCellSheet(){
   var appts = c ? cloneArr(c.appts).filter(function(item){ return item.date === d.date; }) : [];
   return '<div class="sheetcard"><div class="sheettitle">' + esc((c ? c.label + " " : "") + (d.date || "")) + '</div><div class="stack">' +
     '<div class="plain">' + (appts.length ? appts.map(function(item){
-      return '<div class="lineitem"><label class="row" style="flex:1" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleAppt(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div><div class="faint">' + esc(STR.apptKinds[item.kind] || STR.apptKinds.other) + '</div></div></label><button class="iconbtn" onclick="deleteAppt(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\')">ﾃ・/button></div>';
+      return '<div class="lineitem"><label class="row" style="flex:1" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleAppt(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div><div class="faint">' + esc(STR.apptKinds[item.kind] || STR.apptKinds.other) + '</div></div></label><button class="iconbtn" onclick="deleteAppt(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\')">×</button></div>';
     }).join('') : '<div class="faint">-</div>') + '</div>' +
     '<div class="row"><input id="apptCellInput" class="input" value="' + esc(d.text || "") + '" oninput="sheetDraftValue(\'text\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addAppt(\'' + esc(d.caseId) + '\',\'' + esc(d.date) + '\')}"><button class="ghostbtn" onclick="addAppt(\'' + esc(d.caseId) + '\',\'' + esc(d.date) + '\')">+</button></div>' +
     '<div class="chips">' + Object.keys(STR.apptKinds).map(function(kind){
@@ -2946,7 +2977,7 @@ function renderSettingsSheet(){
     '<section class="settingssec"><div class="one">' + esc(STR.stageEditor) + '</div><div class="stack">' + DB.config.stages.map(function(stage, index){
       var useCount = cloneArr(DB.cases).filter(function(c){ return c.stageId === stage.id || cloneArr(c.stageLog).some(function(item){ return item && item.stageId === stage.id; }); }).length;
       return '<div class="panelcard"><div class="row"><input class="input" value="' + esc(stage.name) + '" onchange="updateStageName(' + index + ',this.value)"></div><div class="chips">' + stageColors.map(function(color){
-        return '<button class="chipbtn' + (stage.color === color ? ' on' : '') + '" style="background:' + color + ';color:#fff;border-color:' + color + '" onclick="setStageColor(' + index + ',\'' + color + '\')">' + (stage.color === color ? '\u2713' : '&nbsp;') + '</button>';
+        return '<button class="chipbtn' + (stage.color === color ? ' on' : '') + '" style="background:' + esc(color) + ';color:#fff;border-color:' + esc(color) + '" onclick="setStageColor(' + index + ',\'' + esc(color) + '\')">' + (stage.color === color ? '\u2713' : '&nbsp;') + '</button>';
       }).join('') + '</div><div class="row wrap"><button class="smallbtn" onclick="moveStage(' + index + ',\'up\')">\u2191</button><button class="smallbtn" onclick="moveStage(' + index + ',\'down\')">\u2193</button><button class="smallbtn danger" onclick="deleteStage(' + index + ')">Delete</button><span class="note">' + esc(STR.stageInUse) + ' ' + useCount + '</span></div></div>';
     }).join('') + '<button class="ghostbtn" onclick="addStage()">' + esc(STR.addStage) + '</button></div></section>' +
     '<section class="settingssec"><div class="one">' + esc(STR.labelEditor) + '</div><div class="stack">' + ["phase", "next", "today", "pending", "seeds"].map(function(key){
@@ -3086,7 +3117,7 @@ function renderReview(){
   var body = '<div class="reviewactions"><button class="primary" onclick="reviewNoChange(\'' + esc(c.id) + '\')">' + esc(STR.noChange) + '</button><button class="ghostbtn" onclick="startReviewStageEdit()">' + esc(STR.changeStage) + '</button><button class="ghostbtn" onclick="startReviewNoteEdit()">' + esc(STR.editNote) + '</button></div>';
   if (REVIEW.mode === "stage") {
     body = '<div class="reviewstack">' + DB.config.stages.map(function(stage){
-      return '<button class="lineitem" style="width:100%;text-align:left;' + (stage.id === c.stageId ? 'outline:2px solid ' + stage.color + ';' : '') + '" onclick="setReviewStage(\'' + esc(c.id) + '\',\'' + esc(stage.id) + '\')"><span>' + stageDot(stage) + '</span><span class="text">' + esc(stage.name) + '</span></button>';
+      return '<button class="lineitem" style="width:100%;text-align:left;' + (stage.id === c.stageId ? 'outline:2px solid ' + esc(stage.color) + ';' : '') + '" onclick="setReviewStage(\'' + esc(c.id) + '\',\'' + esc(stage.id) + '\')"><span>' + stageDot(stage) + '</span><span class="text">' + esc(stage.name) + '</span></button>';
     }).join('') + '<button class="ghostbtn" onclick="cancelReviewStageEdit()">' + esc(STR.back) + '</button></div>';
   }
   if (REVIEW.mode === "note") {
@@ -3112,8 +3143,8 @@ function renderAdmissionSheet(){
 function renderStageSheet(){
   var c = DB.cases.find(function(item){ return item.id === VIEW.stagePickerFor; });
   var active = c ? c.stageId : "";
-  return '<div class="sheetcard"><div class="sheettitle">Stage</div><div class="stack">' + DB.config.stages.map(function(stage){
-    return '<button class="lineitem" style="width:100%;text-align:left;' + (active === stage.id ? 'outline:2px solid ' + stage.color + ';' : '') + '" onclick="setStage(\'' + esc(VIEW.stagePickerFor) + '\',\'' + esc(stage.id) + '\')"><span>' + stageDot(stage) + '</span><span class="text">' + esc(stage.name) + '</span></button>';
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.stageFilter) + '</div><div class="stack">' + DB.config.stages.map(function(stage){
+    return '<button class="lineitem" style="width:100%;text-align:left;' + (active === stage.id ? 'outline:2px solid ' + esc(stage.color) + ';' : '') + '" onclick="setStage(\'' + esc(VIEW.stagePickerFor) + '\',\'' + esc(stage.id) + '\')"><span>' + stageDot(stage) + '</span><span class="text">' + esc(stage.name) + '</span></button>';
   }).join('') + '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 

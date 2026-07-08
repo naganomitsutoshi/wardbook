@@ -217,6 +217,37 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   });
   assert.strictEqual(cfgRes.data.config.stages[0].id, "s2");
 
+  // Baseline stamping: enabling sync must NOT stamp old local data with "now".
+  // A remote edit made after the case was last touched must win the merge.
+  const blState = L.syncEmptyState();
+  const blData = { cases:[{ id:"c1", phaseNote:"old-local", lastTouchedAt:"2026-07-01T00:00:00.000Z" }], config:{ stages:[{ id:"a" }], labels:{} } };
+  const blRes = L.syncReconcile(blData, blState, [
+    { id:"c1", deleted:false, case:{ id:"c1", phaseNote:"newer-remote" }, mt:{ phaseNote:"2026-07-05T00:00:00.000Z" } }
+  ], "2026-07-07T10:00:00.000Z");
+  assert.strictEqual(blRes.data.cases[0].phaseNote, "newer-remote");
+  assert.strictEqual(blState.mt.c1.lastTouchedAt, "2026-07-01T00:00:00.000Z");
+
+  // Config baseline: first snapshot leaves configMt/configDirty untouched, so the
+  // remote config always beats a fresh device's defaults.
+  const cbState = L.syncEmptyState();
+  const cbData = L.normalizeState(null);
+  L.syncNoteLocalChanges(cbData, cbState, "2026-07-07T10:00:00.000Z");
+  assert.strictEqual(cbState.configDirty, false);
+  assert.strictEqual(Object.keys(cbState.configMt).length, 0);
+  const cbRes = L.syncReconcileConfig(cbData, cbState, {
+    config:{ stages:[{ id:"remote" }], labels:{ phase:"R" } },
+    mt:{ stages:"2026-01-01T00:00:00.000Z", labels:"2026-01-01T00:00:00.000Z" }
+  }, "2026-07-07T10:00:00.000Z");
+  assert.strictEqual(cbRes.data.config.stages[0].id, "remote");
+
+  // Empty server: local config is seeded (stamped + pushed) instead of staying local-only.
+  const seedState = L.syncEmptyState();
+  const seedData = L.normalizeState(null);
+  L.syncNoteLocalChanges(seedData, seedState, "2026-07-07T10:00:00.000Z");
+  const seedRes = L.syncReconcileConfig(seedData, seedState, null, "2026-07-07T10:00:00.000Z");
+  assert.strictEqual(seedRes.push, true);
+  assert.strictEqual(seedState.configMt.stages, "2026-07-07T10:00:00.000Z");
+
   const stats = L.statsSummary({ openedDays:{ "2026-07-07":true, "2026-07-08":true }, reviewsDone:2, seedsCaptured:3, exportsDone:4 });
   assert.strictEqual(JSON.stringify(stats), JSON.stringify({ openedDays:2, reviewsDone:2, seedsCaptured:3, exportsDone:4 }));
 

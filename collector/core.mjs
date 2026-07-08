@@ -28,8 +28,11 @@ async function readStdin() {
 }
 
 async function writeUtf8(filePath, text) {
+  // Write via temp file + rename so a crash mid-write never leaves a torn inbox.
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, text, "utf8");
+  const tmpPath = `${filePath}.tmp-${process.pid}`;
+  await fs.writeFile(tmpPath, text, "utf8");
+  await fs.rename(tmpPath, filePath);
 }
 
 export async function refreshIdToken(apiKey, refreshToken, fetchImpl = fetch) {
@@ -44,22 +47,29 @@ export async function refreshIdToken(apiKey, refreshToken, fetchImpl = fetch) {
 }
 
 export async function listOutbox(projectId, uid, idToken, fetchImpl = fetch) {
-  const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/(default)/documents/users/${encodeURIComponent(uid)}/wb_outbox`;
-  const res = await fetchImpl(url, { headers: { authorization: `Bearer ${idToken}` } });
-  if (!res.ok) throw new Error(`listDocuments failed: ${res.status}`);
-  const json = await res.json();
-  const docs = Array.isArray(json.documents) ? json.documents : [];
-  return docs.map((doc) => {
-    const fields = doc.fields || {};
-    return {
-      name: doc.name,
-      id: doc.name.split("/").pop(),
-      consumed: fields.consumed ? fields.consumed.booleanValue === true : false,
-      iv: fields.iv ? fields.iv.stringValue : "",
-      blob: fields.blob ? fields.blob.stringValue : "",
-      createdAt: fields.createdAt ? fields.createdAt.timestampValue || "" : ""
-    };
-  }).filter((doc) => !doc.consumed);
+  const base = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/(default)/documents/users/${encodeURIComponent(uid)}/wb_outbox`;
+  const all = [];
+  let pageToken = "";
+  do {
+    const url = `${base}?pageSize=300${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`;
+    const res = await fetchImpl(url, { headers: { authorization: `Bearer ${idToken}` } });
+    if (!res.ok) throw new Error(`listDocuments failed: ${res.status}`);
+    const json = await res.json();
+    const docs = Array.isArray(json.documents) ? json.documents : [];
+    for (const doc of docs) {
+      const fields = doc.fields || {};
+      all.push({
+        name: doc.name,
+        id: doc.name.split("/").pop(),
+        consumed: fields.consumed ? fields.consumed.booleanValue === true : false,
+        iv: fields.iv ? fields.iv.stringValue : "",
+        blob: fields.blob ? fields.blob.stringValue : "",
+        createdAt: fields.createdAt ? fields.createdAt.timestampValue || "" : ""
+      });
+    }
+    pageToken = json.nextPageToken || "";
+  } while (pageToken);
+  return all.filter((doc) => !doc.consumed);
 }
 
 export async function decryptBatch(keyJwk, ivB64, blobB64) {
@@ -139,20 +149,36 @@ export async function collectFlow(payload, deps = {}) {
 
   const refreshed = await refreshIdToken(payload.apiKey, payload.refreshToken, fetchImpl);
   const docs = await listOutbox(payload.projectId, payload.uid, refreshed.idToken, fetchImpl);
+
+  // Decrypt everything BEFORE touching the inbox so the read->write window stays
+  // milliseconds (Obsidian Sync or the user may edit inbox.md while we run).
+  // A batch that fails to decrypt is skipped (left unconsumed), never fatal.
+  const decrypted = [];
+  let decryptFailed = 0;
+  for (const doc of docs) {
+    try {
+      decrypted.push({ doc, batch: await decryptBatchFn(payload.keyJwk, doc.iv, doc.blob) });
+    } catch (err) {
+      decryptFailed += 1;
+    }
+  }
+
   let inboxText = await fsApi.readFile(inboxPath, "utf8").catch(() => "");
   let statsText = await fsApi.readFile(statsPath, "utf8").catch(() => "");
   let appended = 0;
   let skipped = 0;
   let consumedMarked = 0;
+  let markFailed = 0;
   const seen = parseSeenIds(inboxText);
 
-  for (const doc of docs) {
-    const batch = await decryptBatchFn(payload.keyJwk, doc.iv, doc.blob);
+  let inboxDirty = false;
+  let statsDirty = false;
+  for (const { batch } of decrypted) {
     const fresh = filterNewSeeds(batch, seen);
     if ((fresh.seeds || []).length) {
       const block = formatBatchMarkdown(fresh);
       inboxText = insertUnderHeading(inboxText, heading, block);
-      await writeFileFn(inboxPath, inboxText);
+      inboxDirty = true;
       appended += fresh.seeds.length;
       for (const seed of fresh.seeds) seen.seedIds.add(seed.seedId);
       seen.batchIds.add(batch.batchId);
@@ -163,16 +189,27 @@ export async function collectFlow(payload, deps = {}) {
     const exists = statsText.split(/\r?\n/).some((line) => line.startsWith(`| ${batch.date} |`));
     if (!exists) {
       statsText = statsText ? `${statsText}${statsText.endsWith("\n") ? "" : "\n"}${statsLine}\n` : `${statsLine}\n`;
-      await writeFileFn(statsPath, statsText);
+      statsDirty = true;
     }
-    await patchConsumed(payload.projectId, doc.name, refreshed.idToken, fetchImpl);
-    consumedMarked += 1;
+  }
+  // Safe ordering: persist to the vault first, mark consumed only afterwards.
+  if (inboxDirty) await writeFileFn(inboxPath, inboxText);
+  if (statsDirty) await writeFileFn(statsPath, statsText);
+  for (const { doc } of decrypted) {
+    try {
+      await patchConsumed(payload.projectId, doc.name, refreshed.idToken, fetchImpl);
+      consumedMarked += 1;
+    } catch (err) {
+      markFailed += 1;
+    }
   }
 
   return {
     appended,
     skipped,
     consumedMarked,
+    decryptFailed,
+    markFailed,
     newRefreshToken: refreshed.refreshToken !== payload.refreshToken ? refreshed.refreshToken : undefined
   };
 }
