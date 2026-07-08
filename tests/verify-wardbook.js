@@ -38,10 +38,11 @@ vm.runInContext(logicMatch[2], sandbox, { filename:"logic" });
 const L = sandbox.module.exports;
 
 [
-  "defaultStages", "normalizeState", "normalizeCase", "computeDay", "rolloverTodos",
+  "defaultStages", "defaultChartCats", "normalizeState", "normalizeCase", "computeDay", "rolloverTodos",
   "hasBackToday", "boardOrder", "stalenessLevel", "needsReview", "reviewQueue",
   "unsentSeeds", "countSeedsOn", "formatSeedExport", "missSeedText", "makeSeed",
   "moveCase", "dcChecklistItems", "stageOn",
+  "normalizeChart", "chartDates", "bandOnDate", "chartColMarks", "chartRowsForCase",
   "buildWeekGrid", "searchCases", "reviewStreak", "syncDiffFields",
   "syncMergeCase", "syncEmptyState", "syncMarkRestored", "syncNoteLocalChanges", "syncReconcile",
   "syncClearDirty", "syncDeriveKey", "syncEncryptJson", "syncDecryptJson",
@@ -116,26 +117,101 @@ assert.strictEqual(L.moveCase([{ id:"a", order:0 }, { id:"b", order:1 }], "b", "
 
 assert.strictEqual(L.dcChecklistItems().some((x) => x.k === "dxtags"), true);
 
-// Removed features (appts / chart) must be purged from legacy payloads,
-// even though unknown keys normally pass through normalizeCase.
+// Removed feature (appts) is still purged; the OLD chart model (meds/events/rows,
+// removed in da27072) normalizes to empty items under the SPEC-E schema instead
+// of leaking through the unknown-key passthrough.
 const purgedCase = L.normalizeCase({
   id:"c-legacy", label:"old", admittedAt:"2026-07-01", extra:"keep",
   appts:[{ id:"a1", date:"2026-07-10", text:"CT", kind:"exam", done:false }],
   chart:{ meds:[{ id:"m1", name:"abx", route:"inj", startDate:"2026-07-02" }], events:[], rows:[] }
 }, "2026-07-08T00:00:00Z", "2026-07-08");
 assert.strictEqual("appts" in purgedCase, false);
-assert.strictEqual("chart" in purgedCase, false);
+assert.strictEqual(JSON.stringify(purgedCase.chart), JSON.stringify({ items:[] }));
 assert.strictEqual(purgedCase.extra, "keep");
 
 // Trash entries of removed types are dropped instead of being coerced to "case".
+// The new chartItem type must survive.
 const legacyTrash = L.normalizeState({
   trash:[
     { id:"t1", deletedAt:"2026-07-08T09:00:00.000Z", type:"appt", caseId:"c1", payload:{ id:"a1", text:"CT" } },
     { id:"t2", deletedAt:"2026-07-08T09:00:00.000Z", type:"chartMed", caseId:"c1", payload:{ id:"m1", name:"abx" } },
-    { id:"t3", deletedAt:"2026-07-08T09:00:00.000Z", type:"todo", caseId:"c1", payload:{ id:"td1", text:"lab" } }
+    { id:"t3", deletedAt:"2026-07-08T09:00:00.000Z", type:"todo", caseId:"c1", payload:{ id:"td1", text:"lab" } },
+    { id:"t4", deletedAt:"2026-07-08T09:00:00.000Z", type:"chartItem", caseId:"c1", payload:{ id:"ci1", catId:"cat-med", kind:"band", name:"CTRX", startDate:"2026-07-02", endDate:null } }
   ]
 }, "2026-07-08T10:00:00.000Z", "2026-07-08");
-assert.strictEqual(legacyTrash.trash.map((x) => x.id).join(","), "t3");
+assert.strictEqual(legacyTrash.trash.map((x) => x.id).join(","), "t3,t4");
+
+// --- SPEC-E progress chart -------------------------------------------------
+
+assert.strictEqual(L.normalizeState(null).config.chartCats.length, 6);
+assert.strictEqual(L.normalizeState(null).config.chartCats[0].id, "cat-vital");
+assert.strictEqual(L.defaultChartCats().filter((x) => x.kind === "band").length, 3);
+
+const chart = L.normalizeChart({ items:[
+  { id:"v1", catId:"cat-vital", kind:"value", name:"BT", values:{ "2026-07-02":"37.8", "bad-date":"1", "2026-07-03":"" } },
+  { id:"b1", catId:"cat-med", kind:"band", name:"CTRX", startDate:"2026-07-02", endDate:"2026-07-05" },
+  { id:"b2", catId:"cat-med", kind:"band", name:"", startDate:"2026-07-02" },
+  { id:"b3", catId:"cat-med", kind:"band", name:"noStart" },
+  { id:"e1", catId:"cat-ic", kind:"event", name:"family", date:"2026-07-04" },
+  { id:"e2", catId:"cat-ic", kind:"event", name:"noDate" },
+  { id:"x1", kind:"value", name:"noCat", values:{} },
+  { id:"v2", catId:"cat-vital", kind:"value", name:"" }
+] });
+assert.strictEqual(chart.items.map((x) => x.id).join(","), "v1,b1,e1");
+assert.strictEqual(JSON.stringify(chart.items[0].values), JSON.stringify({ "2026-07-02":"37.8" }));
+assert.strictEqual(chart.items[1].endDate, "2026-07-05");
+
+const chartCase = {
+  admittedAt:"2026-07-01",
+  dischargedAt:null,
+  discharge:{ plannedOn:"2026-07-12", checklist:{} },
+  chart:{ items:[
+    { id:"b1", catId:"cat-med", kind:"band", name:"CTRX", startDate:"2026-07-02", endDate:"2026-07-15" }
+  ] }
+};
+const cDates = L.chartDates(chartCase, "2026-07-08");
+assert.strictEqual(cDates[0], "2026-07-01");
+assert.strictEqual(cDates[cDates.length - 1], "2026-07-15");
+const capped = L.chartDates({ admittedAt:"2020-01-01", chart:{ items:[] } }, "2026-07-08");
+assert.strictEqual(capped.length, 370);
+
+const band = { startDate:"2026-07-02", endDate:"2026-07-05" };
+assert.strictEqual(L.bandOnDate(band, "2026-07-01"), false);
+assert.strictEqual(L.bandOnDate(band, "2026-07-02"), true);
+assert.strictEqual(L.bandOnDate(band, "2026-07-05"), true);
+assert.strictEqual(L.bandOnDate(band, "2026-07-06"), false);
+assert.strictEqual(L.bandOnDate({ startDate:"2026-07-02", endDate:null }, "2027-01-01"), true);
+
+const marks = L.chartColMarks({ admittedAt:"2026-07-01", dischargedAt:"2026-07-12", discharge:{ plannedOn:"2026-07-12" } });
+assert.strictEqual(marks["2026-07-01"], "入");
+assert.strictEqual(marks["2026-07-12"], "退");
+const marksPlanned = L.chartColMarks({ admittedAt:"2026-07-01", dischargedAt:null, discharge:{ plannedOn:"2026-07-12" } });
+assert.strictEqual(marksPlanned["2026-07-12"], "★");
+
+const grouped = L.chartRowsForCase({ chart:{ items:[
+  { id:"v1", catId:"cat-vital", kind:"value", name:"BT", values:{} },
+  { id:"o1", catId:"cat-gone", kind:"band", name:"lost", startDate:"2026-07-02", endDate:null }
+] } }, L.defaultChartCats());
+assert.strictEqual(grouped.length, 7);
+assert.strictEqual(grouped[0].cat.id, "cat-vital");
+assert.strictEqual(grouped[0].items.length, 1);
+assert.strictEqual(grouped[6].orphan, true);
+assert.strictEqual(grouped[6].items[0].id, "o1");
+
+// chartCats rides config sync as a third field.
+const ccState = L.syncEmptyState();
+const ccData = L.normalizeState(null);
+L.syncNoteLocalChanges(ccData, ccState, "2026-07-09T10:00:00.000Z");
+ccData.config.chartCats = ccData.config.chartCats.concat([{ id:"cat-new", name:"O2", kind:"value", color:"#64748b" }]);
+L.syncNoteLocalChanges(ccData, ccState, "2026-07-09T11:00:00.000Z");
+assert.strictEqual(ccState.configDirty, true);
+assert.strictEqual(ccState.configMt.chartCats, "2026-07-09T11:00:00.000Z");
+const ccRemote = L.syncReconcileConfig(ccData, ccState, {
+  config:{ stages:ccData.config.stages, labels:ccData.config.labels, chartCats:[{ id:"cat-remote", name:"R", kind:"event", color:"#64748b" }] },
+  mt:{ stages:"2026-07-09T09:00:00.000Z", labels:"2026-07-09T09:00:00.000Z", chartCats:"2026-07-09T12:00:00.000Z" }
+}, "2026-07-09T13:00:00.000Z");
+assert.strictEqual(ccRemote.data.config.chartCats.length, 1);
+assert.strictEqual(ccRemote.data.config.chartCats[0].id, "cat-remote");
 
 assert.strictEqual(L.stageOn([{ date:"2026-07-05", stageId:"adm" }, { date:"2026-07-07", stageId:"dc" }], "2026-07-04"), "adm");
 assert.strictEqual(L.stageOn([{ date:"2026-07-05", stageId:"adm" }, { date:"2026-07-07", stageId:"dc" }], "2026-07-06"), "adm");

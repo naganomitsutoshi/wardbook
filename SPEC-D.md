@@ -55,6 +55,10 @@ chart: {
 
 ## 3. Dense progress chart (経過表, §6.4) — detail view, collapsed panel
 
+> **SUPERSEDED (2026-07-09).** This section's chart was removed in `da27072`
+> (design reset) and reintroduced with a generalized, user-extensible model.
+> The current spec is **SPEC-E.md**; this section is kept for history only.
+
 Replaces the placeholder: panel 「経過表」 between Seeds and 退院管理, collapsed by default.
 
 - Layout: horizontally scrollable table; sticky first column (item names); column per date

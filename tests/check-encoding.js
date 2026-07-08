@@ -29,6 +29,7 @@ const targets = [
   "index.html",
   "manifest.webmanifest",
   "sw.js",
+  "SPEC-E.md",
   "tests/verify-wardbook.js",
   "tests/smoke-render.js",
   "tests/verify-collector.js",

@@ -254,9 +254,9 @@
   .seg button{flex:1}
   .searchbar,.filters{display:flex;gap:8px;flex-wrap:wrap}
   .searchbar input,.filters select{flex:1}
-  .weekwrap{overflow:auto}
-  .weekgrid{border-collapse:separate;border-spacing:0;min-width:max-content}
-  .weekgrid th,.weekgrid td{
+  .weekwrap,.chartwrap{overflow:auto}
+  .weekgrid,.chartgrid{border-collapse:separate;border-spacing:0;min-width:max-content}
+  .weekgrid th,.weekgrid td,.chartgrid th,.chartgrid td{
     border:1px solid var(--line);
     background:var(--card);
     min-width:28px;
@@ -265,7 +265,7 @@
     text-align:center;
     vertical-align:middle;
   }
-  .weekgrid .sticky{
+  .weekgrid .sticky,.chartgrid .sticky{
     position:sticky;
     left:0;
     z-index:2;
@@ -273,10 +273,24 @@
     text-align:left;
     background:var(--card);
   }
+  .chartgrid .sticky{min-width:72px;max-width:110px;overflow:hidden}
   .weekgrid .casecell{cursor:pointer}
   .weekgrid .suncol{color:var(--weekend-sun)}
   .weekgrid .satcol{color:var(--weekend-sat)}
-  .weekgrid .todaycol{background:var(--panel)}
+  .weekgrid .todaycol,.chartgrid .todaycol{background:var(--panel)}
+  .chartlabel{white-space:nowrap;font-weight:400;cursor:pointer}
+  .catrow{cursor:pointer;white-space:nowrap}
+  .colmark{display:block;font-size:9px;color:var(--muted);font-weight:700;min-height:11px}
+  .bandcell{position:relative;height:22px}
+  .band{
+    position:absolute;
+    left:2px;
+    right:2px;
+    top:6px;
+    height:10px;
+    border-radius:999px;
+    opacity:.72;
+  }
   .weekband{height:10px;border-radius:999px}
   .markerstack{display:flex;gap:2px;justify-content:center;flex-wrap:wrap}
   .mark{display:inline-flex;min-width:16px;height:16px;padding:0 3px;border-radius:999px;align-items:center;justify-content:center;background:var(--panel);font-size:10px}
@@ -344,6 +358,118 @@ function normalizeLabels(raw){
     out[k] = typeof src[k] === "string" && src[k] ? src[k] : base[k];
   });
   return out;
+}
+
+function defaultChartCats(){
+  return [
+    { id:"cat-vital", name:"バイタル", kind:"value", color:"#ef4444" },
+    { id:"cat-med", name:"処方", kind:"band", color:"#16a34a" },
+    { id:"cat-inj", name:"注射", kind:"band", color:"#3b82f6" },
+    { id:"cat-diet", name:"食事", kind:"band", color:"#f97316" },
+    { id:"cat-lab", name:"検査", kind:"value", color:"#8b5cf6" },
+    { id:"cat-ic", name:"IC", kind:"event", color:"#eab308" }
+  ];
+}
+
+function normalizeChartCat(raw, index){
+  var d = defaultChartCats()[index] || defaultChartCats()[0];
+  var src = isObj(raw) ? raw : {};
+  return {
+    id: typeof src.id === "string" && src.id ? src.id : d.id,
+    name: typeof src.name === "string" && src.name ? src.name : d.name,
+    kind: src.kind === "value" || src.kind === "band" || src.kind === "event" ? src.kind : d.kind,
+    color: typeof src.color === "string" && src.color ? src.color : d.color
+  };
+}
+
+// The chart holds a flat item list; each item carries its kind (copied from its
+// category at creation) so items whose category was deleted on another device
+// can still be rendered and cleaned up instead of silently vanishing.
+function normalizeChart(raw){
+  var src = isObj(raw) ? raw : {};
+  var items = cloneArr(src.items).map(function(entry, idx){
+    var row = isObj(entry) ? entry : {};
+    if (typeof row.catId !== "string" || !row.catId) return null;
+    var kind = row.kind === "band" || row.kind === "event" ? row.kind : "value";
+    var out = {
+      id: typeof row.id === "string" && row.id ? row.id : "chart-" + idx,
+      catId: row.catId,
+      kind: kind,
+      name: typeof row.name === "string" ? row.name : ""
+    };
+    if (kind === "value") {
+      if (!out.name) return null;
+      var values = {};
+      Object.keys(isObj(row.values) ? row.values : {}).forEach(function(date){
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date) && String(row.values[date])) values[date] = String(row.values[date]);
+      });
+      out.values = values;
+    } else if (kind === "band") {
+      var startDate = safeDate(row.startDate, "");
+      if (!startDate || !out.name) return null;
+      out.startDate = startDate;
+      out.endDate = row.endDate == null ? null : safeDate(row.endDate, null);
+    } else {
+      var date = safeDate(row.date, "");
+      if (!date || !out.name) return null;
+      out.date = date;
+    }
+    return out;
+  }).filter(Boolean);
+  return { items: items };
+}
+
+function chartDates(c, todayIso){
+  var start = safeDate(c && c.admittedAt, todayIso);
+  var end = todayIso;
+  cloneArr(c && c.chart && c.chart.items).forEach(function(item){
+    if (!item) return;
+    if (item.startDate && item.startDate > end) end = item.startDate;
+    if (item.endDate && item.endDate > end) end = item.endDate;
+    if (item.date && item.date > end) end = item.date;
+  });
+  if (c && c.discharge && c.discharge.plannedOn && c.discharge.plannedOn > end) end = c.discharge.plannedOn;
+  if (c && c.dischargedAt && c.dischargedAt > end) end = c.dischargedAt;
+  var out = [];
+  var cur = Date.parse(start + "T00:00:00");
+  var max = Date.parse(end + "T00:00:00");
+  while (Number.isFinite(cur) && Number.isFinite(max) && cur <= max && out.length < 370) {
+    var d = new Date(cur);
+    out.push(d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"));
+    cur += 86400000;
+  }
+  return out;
+}
+
+function bandOnDate(item, date){
+  if (!item || !item.startDate) return false;
+  if (date < item.startDate) return false;
+  if (item.endDate && date > item.endDate) return false;
+  return true;
+}
+
+// Admission / discharge / planned-discharge column marks. Not rows on purpose
+// (confirmed design decision): they derive from case fields, no hand input.
+function chartColMarks(c){
+  var marks = {};
+  if (c && c.discharge && c.discharge.plannedOn) marks[c.discharge.plannedOn] = "★";
+  if (c && c.admittedAt) marks[c.admittedAt] = "入";
+  if (c && c.dischargedAt) marks[c.dischargedAt] = "退";
+  return marks;
+}
+
+function chartRowsForCase(c, cats){
+  var items = cloneArr(c && c.chart && c.chart.items).filter(Boolean);
+  var known = {};
+  var groups = cloneArr(cats).map(function(cat){
+    known[cat.id] = true;
+    return { cat:cat, items:items.filter(function(item){ return item.catId === cat.id; }), orphan:false };
+  });
+  var orphans = items.filter(function(item){ return !known[item.catId]; });
+  if (orphans.length) {
+    groups.push({ cat:{ id:"", name:"その他", kind:"", color:"#64748b" }, items:orphans, orphan:true });
+  }
+  return groups;
 }
 
 function computeDay(admittedAt, todayIso){
@@ -417,10 +543,12 @@ function normalizeCase(raw, nowIso, todayIso){
   };
   out.order = toNum(src.order, 0);
   out.lastTouchedAt = typeof src.lastTouchedAt === "string" && src.lastTouchedAt ? src.lastTouchedAt : nowIso;
-  // Removed features (2026-07-09): purge legacy fields here so old local/remote
-  // payloads cannot re-introduce them through the unknown-key passthrough above.
+  // The chart was reintroduced with a new schema (SPEC-E): normalizeChart only
+  // reads `items`, so old-model payloads (meds/events/rows) collapse to empty.
+  out.chart = normalizeChart(src.chart);
+  // Removed feature (2026-07-09): purge appts so old local/remote payloads
+  // cannot re-introduce them through the unknown-key passthrough above.
   delete out.appts;
-  delete out.chart;
   return out;
 }
 
@@ -432,7 +560,7 @@ function trashCutoffIso(nowIso){
 
 function normalizeTrashEntry(entry, nowIso){
   var row = isObj(entry) ? entry : {};
-  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true };
+  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true, "chartItem":true };
   // Entries of removed types (appt / chartMed / chartEvent) are dropped, not
   // coerced to "case": coercion would turn their payload into a garbage case on restore.
   if (!types[row.type]) return null;
@@ -465,6 +593,8 @@ function normalizeState(raw, nowIso, todayIso){
   var cfg = isObj(src.config) ? src.config : {};
   var stages = cloneArr(cfg.stages).map(normalizeStage).filter(function(x){ return x.id && x.name; });
   if (!stages.length) stages = defaultStages();
+  var chartCats = cloneArr(cfg.chartCats).map(normalizeChartCat).filter(function(x){ return x.id && x.name; });
+  if (!chartCats.length) chartCats = defaultChartCats();
   var cutoff = trashCutoffIso(nowStamp);
   var state = {
     v: 1,
@@ -475,7 +605,8 @@ function normalizeState(raw, nowIso, todayIso){
     }),
     config: {
       stages: stages,
-      labels: normalizeLabels(cfg.labels)
+      labels: normalizeLabels(cfg.labels),
+      chartCats: chartCats
     },
     trash: cloneArr(src.trash).map(function(entry){
       return normalizeTrashEntry(entry, nowStamp);
@@ -825,14 +956,14 @@ function syncNoteLocalChanges(data, state, nowIso){
       state.dirty[id] = true;
     }
   });
-  var currentConfig = { stages:(data.config && data.config.stages) || [], labels:(data.config && data.config.labels) || {} };
+  var currentConfig = { stages:(data.config && data.config.stages) || [], labels:(data.config && data.config.labels) || {}, chartCats:(data.config && data.config.chartCats) || [] };
   var prevConfig = state.configSnap ? JSON.parse(state.configSnap) : null;
   var mergedCfgMt = state.configMt || {};
   // First config snapshot is a baseline, not an edit: leave mt/dirty untouched so
   // a fresh device's default config never overwrites the server's config.
   // Seeding an empty server is handled in syncReconcileConfig.
   if(prevConfig){
-    ["stages", "labels"].forEach(function(k){
+    ["stages", "labels", "chartCats"].forEach(function(k){
       var a = JSON.stringify(prevConfig[k] === undefined ? null : prevConfig[k]);
       var b = JSON.stringify(currentConfig[k] === undefined ? null : currentConfig[k]);
       if(a !== b){
@@ -970,7 +1101,8 @@ function syncConfigPlain(data){
   return {
     config:{
       stages:cloneArr(data && data.config && data.config.stages).map(function(x){ return JSON.parse(JSON.stringify(x)); }),
-      labels:JSON.parse(JSON.stringify((data && data.config && data.config.labels) || {}))
+      labels:JSON.parse(JSON.stringify((data && data.config && data.config.labels) || {})),
+      chartCats:cloneArr(data && data.config && data.config.chartCats).map(function(x){ return JSON.parse(JSON.stringify(x)); })
     },
     mt:JSON.parse(JSON.stringify((data && data._configMt) || {}))
   };
@@ -984,7 +1116,7 @@ function syncReconcileConfig(data, state, remoteDoc, nowIso){
     if(nowIso){
       var cfgMt = state.configMt || {};
       var seeded = false;
-      ["stages", "labels"].forEach(function(k){
+      ["stages", "labels", "chartCats"].forEach(function(k){
         if(!cfgMt[k]){ cfgMt[k] = nowIso; seeded = true; }
       });
       state.configMt = cfgMt;
@@ -993,15 +1125,16 @@ function syncReconcileConfig(data, state, remoteDoc, nowIso){
     }
     return { data:data, state:state, localChanged:false, push:!!state.configDirty };
   }
-  var localCfg = { stages:data.config.stages, labels:data.config.labels };
+  var localCfg = { stages:data.config.stages, labels:data.config.labels, chartCats:data.config.chartCats };
   var res = syncMergeCase(localCfg, state.configMt || {}, remoteDoc.config, remoteDoc.mt || {});
   var changed = JSON.stringify(res.merged) !== JSON.stringify(localCfg);
   if(changed){
     data.config.stages = cloneArr(res.merged.stages);
     data.config.labels = JSON.parse(JSON.stringify(res.merged.labels || {}));
+    data.config.chartCats = cloneArr(res.merged.chartCats);
   }
   state.configMt = res.mt;
-  state.configSnap = JSON.stringify({ stages:data.config.stages, labels:data.config.labels });
+  state.configSnap = JSON.stringify({ stages:data.config.stages, labels:data.config.labels, chartCats:data.config.chartCats });
   state.configDirty = syncDiffFields(remoteDoc.config, res.merged).length > 0;
   data._configMt = JSON.parse(JSON.stringify(res.mt));
   return { data:data, state:state, localChanged:changed, push:!!state.configDirty };
@@ -1054,8 +1187,14 @@ if (typeof module !== "undefined") {
   module.exports = {
     defaultStages:defaultStages,
     defaultLabels:defaultLabels,
+    defaultChartCats:defaultChartCats,
     normalizeState:normalizeState,
     normalizeCase:normalizeCase,
+    normalizeChart:normalizeChart,
+    chartDates:chartDates,
+    bandOnDate:bandOnDate,
+    chartColMarks:chartColMarks,
+    chartRowsForCase:chartRowsForCase,
     computeDay:computeDay,
     rolloverTodos:rolloverTodos,
     hasBackToday:hasBackToday,
@@ -1188,7 +1327,19 @@ Object.assign(STR, {
   addStage:"＋ステージ"
   ,
   admissionDate:"\u5165\u9662\u65e5",
-  weekdays:["\u65e5","\u6708","\u706b","\u6c34","\u6728","\u91d1","\u571f"]
+  weekdays:["\u65e5","\u6708","\u706b","\u6c34","\u6728","\u91d1","\u571f"],
+  chartPanel:"\u7d4c\u904e\u8868",
+  chartItems:"\u7d4c\u904e\u8868\u306e\u9805\u76ee",
+  chartPrefs:"\u7d4c\u904e\u8868\u306e\u8868\u793a",
+  kindValue:"\u5024",
+  kindBand:"\u5e2f",
+  kindEvent:"\u30a4\u30d9\u30f3\u30c8",
+  chartNamePh:"\u540d\u524d\uff08\u4f8b\uff1a\u4f53\u6e29\u30fb\u85ac\u5264\u540d\u30fb\u98df\u7a2e\uff09",
+  chartEventPh:"\u5185\u5bb9\uff08\u4f8b\uff1a\u5bb6\u65cf\u3078IC\u30fb\u9020\u5f71CT\uff09",
+  startLabel:"\u958b\u59cb",
+  endLabel:"\u7d42\u4e86",
+  dateLabel:"\u65e5\u4ed8",
+  deleteRow:"\u524a\u9664"
 });
 
 let DB = normalizeState(null);
@@ -1287,7 +1438,8 @@ function weekHeaderClass(date, today){
 function defaultSettings(){
   return {
     cardSections:["phase", "next", "today", "pending", "seeds"],
-    cardHidden:[]
+    cardHidden:[],
+    chartHidden:[]
   };
 }
 
@@ -1314,6 +1466,7 @@ function loadSettings(){
   if (!isObj(src)) return base;
   base.cardSections = normalizeCardSections(cloneArr(src.cardSections).filter(Boolean));
   base.cardHidden = cloneArr(src.cardHidden).filter(Boolean);
+  base.chartHidden = cloneArr(src.chartHidden).filter(Boolean);
   return base;
 }
 
@@ -1339,6 +1492,7 @@ function trashTypeLabel(type){
   if (type === "todo") return DB.config.labels.today;
   if (type === "pending") return DB.config.labels.pending;
   if (type === "seed") return DB.config.labels.seeds;
+  if (type === "chartItem") return STR.chartPanel;
   return type;
 }
 
@@ -1346,6 +1500,7 @@ function trashItemLabel(entry){
   var payload = entry && entry.payload || {};
   if (!entry) return "";
   if (entry.type === "case") return entry.caseLabel || payload.label || "";
+  if (entry.type === "chartItem") return payload.name || "";
   return payload.text || "";
 }
 
@@ -1378,6 +1533,10 @@ function restoreTrash(trashId){
     else if (entry.type === "todo") c.todos.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "pending") c.pendings.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "seed") c.seeds.push(JSON.parse(JSON.stringify(entry.payload)));
+    else if (entry.type === "chartItem") {
+      c.chart = normalizeChart(c.chart);
+      c.chart.items.push(JSON.parse(JSON.stringify(entry.payload)));
+    }
     removeTrashEntry(entry.id);
     restoredSub = true;
   });
@@ -2088,6 +2247,8 @@ function openDetail(caseId){
   VIEW.editingMeta = false;
   VIEW.editingLabel = false;
   VIEW.dischargeOpen = false;
+  VIEW.chartOpen = false;
+  VIEW.chartCollapsed = {};
   render();
 }
 
@@ -2683,6 +2844,227 @@ function moveCardSection(name, direction){
   saveLocalPrefs();
 }
 
+function chartCatById(catId){
+  return cloneArr(DB.config.chartCats).find(function(cat){ return cat.id === catId; }) || null;
+}
+
+function chartKindLabel(kind){
+  if (kind === "band") return STR.kindBand;
+  if (kind === "event") return STR.kindEvent;
+  return STR.kindValue;
+}
+
+function chartCatUseCount(catId){
+  return cloneArr(DB.cases).reduce(function(total, c){
+    return total + cloneArr(c && c.chart && c.chart.items).filter(function(item){ return item && item.catId === catId; }).length;
+  }, 0);
+}
+
+function chartCatHidden(catId){
+  return !!(SETTINGS && cloneArr(SETTINGS.chartHidden).includes(catId));
+}
+
+function toggleChartCatPref(catId, checked){
+  SETTINGS = SETTINGS || defaultSettings();
+  SETTINGS.chartHidden = cloneArr(SETTINGS.chartHidden).filter(function(item){ return item !== catId; });
+  if (!checked) SETTINGS.chartHidden.push(catId);
+  saveLocalPrefs();
+}
+
+function updateChartCatName(index, value){
+  if (!DB.config.chartCats[index]) return;
+  DB.config.chartCats[index].name = String(value || "").trim() || DB.config.chartCats[index].name;
+  configChanged();
+}
+
+function setChartCatColor(index, color){
+  if (!DB.config.chartCats[index]) return;
+  DB.config.chartCats[index].color = color;
+  configChanged();
+}
+
+function moveChartCat(index, direction){
+  var next = cloneArr(DB.config.chartCats);
+  var target = direction === "up" ? index - 1 : index + 1;
+  if (target < 0 || target >= next.length) return;
+  var picked = next[index];
+  next[index] = next[target];
+  next[target] = picked;
+  DB.config.chartCats = next;
+  configChanged();
+}
+
+function deleteChartCat(index){
+  var cat = DB.config.chartCats[index];
+  if (!cat || DB.config.chartCats.length <= 1) return;
+  var count = chartCatUseCount(cat.id);
+  if (count) {
+    if (typeof alert === "function") alert(STR.stageInUse + " " + count);
+    return;
+  }
+  DB.config.chartCats.splice(index, 1);
+  configChanged();
+}
+
+// kind is chosen at creation and immutable afterwards: changing it would leave
+// per-case items with fields the renderer no longer expects.
+function addChartCat(kind){
+  var k = kind === "band" || kind === "event" ? kind : "value";
+  DB.config.chartCats.push({ id:"cat-" + uid().slice(1, 7), name:chartKindLabel(k), kind:k, color:"#64748b" });
+  configChanged();
+}
+
+function toggleChartPanel(){
+  VIEW.chartOpen = !VIEW.chartOpen;
+  render();
+}
+
+function toggleChartDateMode(){
+  VIEW.chartDateMode = VIEW.chartDateMode === "date" ? "day" : "date";
+  render();
+}
+
+function chartCollapseKey(caseId, catId){
+  return caseId + ":" + catId;
+}
+
+function chartGroupCollapsed(caseId, catId){
+  var map = isObj(VIEW.chartCollapsed) ? VIEW.chartCollapsed : {};
+  return !!map[chartCollapseKey(caseId, catId)];
+}
+
+function toggleChartGroup(caseId, catId){
+  VIEW.chartCollapsed = isObj(VIEW.chartCollapsed) ? VIEW.chartCollapsed : {};
+  var key = chartCollapseKey(caseId, catId);
+  VIEW.chartCollapsed[key] = !VIEW.chartCollapsed[key];
+  render();
+}
+
+function chartNameSuggestions(catId, kind){
+  var names = [];
+  if (kind === "value") names = ["体温", "SpO2", "血圧", "脈拍", "WBC", "CRP"];
+  if (catId === "cat-diet") names = ["絶食", "流動食", "全粥", "常食"];
+  var seen = {};
+  names.forEach(function(name){ seen[name] = true; });
+  cloneArr(DB.cases).forEach(function(c){
+    cloneArr(c && c.chart && c.chart.items).forEach(function(item){
+      if (item && item.catId === catId && item.name && !seen[item.name]) {
+        seen[item.name] = true;
+        names.push(item.name);
+      }
+    });
+  });
+  return names.slice(0, 10);
+}
+
+function openChartItem(caseId, catId, itemId){
+  var c = DB.cases.find(function(row){ return row.id === caseId; });
+  if (!c) return;
+  var cat = chartCatById(catId);
+  var item = itemId ? cloneArr(c.chart && c.chart.items).find(function(row){ return row.id === itemId; }) : null;
+  if (!cat && !item) return;
+  var kind = item ? item.kind : cat.kind;
+  openSheetWithDraft("chartItem", {
+    caseId:caseId,
+    catId:catId,
+    itemId:itemId || "",
+    kind:kind,
+    name:item ? item.name : "",
+    startDate:item && item.startDate ? item.startDate : todayISO(),
+    endDate:item && item.endDate ? item.endDate : "",
+    date:item && item.date ? item.date : todayISO()
+  }, "chartItemName", false);
+}
+
+function saveChartItem(){
+  var d = SHEET.draft || {};
+  var kind = d.kind === "band" || d.kind === "event" ? d.kind : "value";
+  var name = String(d.name || "").trim();
+  if (!name) return;
+  mutateCase(d.caseId, function(c){
+    c.chart = normalizeChart(c.chart);
+    var startDate = safeDate(d.startDate, todayISO());
+    var endDate = d.endDate ? safeDate(d.endDate, null) : null;
+    var date = safeDate(d.date, todayISO());
+    if (d.itemId) {
+      var item = c.chart.items.find(function(row){ return row.id === d.itemId; });
+      if (!item) return;
+      item.name = name;
+      if (kind === "band") { item.startDate = startDate; item.endDate = endDate; }
+      if (kind === "event") item.date = date;
+    } else {
+      var row = { id:uid(), catId:d.catId, kind:kind, name:name };
+      if (kind === "value") row.values = {};
+      if (kind === "band") { row.startDate = startDate; row.endDate = endDate; }
+      if (kind === "event") row.date = date;
+      c.chart.items.push(row);
+    }
+  });
+  closeSheet();
+}
+
+function removeChartItem(caseId, itemId){
+  mutateCase(caseId, function(c){
+    c.chart = normalizeChart(c.chart);
+    var item = c.chart.items.find(function(row){ return row.id === itemId; });
+    if (item) pushTrashEntry("chartItem", c, item);
+    c.chart.items = c.chart.items.filter(function(row){ return row.id !== itemId; });
+  });
+}
+
+function deleteChartItem(){
+  var d = SHEET.draft || {};
+  if (!d.itemId) return;
+  removeChartItem(d.caseId, d.itemId);
+  closeSheet();
+}
+
+function openChartValue(caseId, itemId, date){
+  var c = DB.cases.find(function(row){ return row.id === caseId; });
+  if (!c) return;
+  var item = cloneArr(c.chart && c.chart.items).find(function(row){ return row.id === itemId; });
+  if (!item) return;
+  openSheetWithDraft("chartValue", {
+    caseId:caseId,
+    itemId:itemId,
+    date:date,
+    name:item.name || "",
+    value:(item.values && item.values[date]) || ""
+  }, "chartValueInput", true);
+}
+
+function saveChartValue(){
+  var d = SHEET.draft || {};
+  var value = String(d.value || "").trim();
+  mutateCase(d.caseId, function(c){
+    c.chart = normalizeChart(c.chart);
+    var item = c.chart.items.find(function(row){ return row.id === d.itemId; });
+    if (!item || item.kind !== "value") return;
+    item.values = isObj(item.values) ? item.values : {};
+    if (value) item.values[d.date] = value;
+    else delete item.values[d.date];
+  });
+  closeSheet();
+}
+
+function openChartEventCell(caseId, catId, date){
+  openSheetWithDraft("chartEventCell", { caseId:caseId, catId:catId, date:date, text:"" }, "chartEventInput", false);
+}
+
+function addChartEventItem(){
+  var d = SHEET.draft || {};
+  var text = String(d.text || "").trim();
+  if (!text) return;
+  mutateCase(d.caseId, function(c){
+    c.chart = normalizeChart(c.chart);
+    c.chart.items.push({ id:uid(), catId:d.catId, kind:"event", name:text, date:safeDate(d.date, todayISO()) });
+  });
+  SHEET.draft.text = "";
+  renderSheet();
+  queueFocusTarget("chartEventInput", false);
+  flushQueuedFocus();
+}
+
 function formatSeedSnapshot(seed){
   var snap = isObj(seed && seed.snapshot) ? seed.snapshot : {};
   var parts = [];
@@ -2998,6 +3380,106 @@ function renderWeekCellSheet(){
     '<div class="plain">' + (rows.length ? rows.join('') : '<div class="faint">-</div>') + '</div><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
+function renderChartEventDots(items, date){
+  var hits = cloneArr(items).filter(function(item){ return item && item.date === date; });
+  if (!hits.length) return '';
+  return hits.slice(0, 2).map(function(item){
+    return '<span class="mark">' + esc(String(item.name || '').slice(0, 2) || '●') + '</span>';
+  }).join('') + (hits.length > 2 ? '<span class="mark">+' + (hits.length - 2) + '</span>' : '');
+}
+
+function renderChartPanel(c){
+  var open = !!VIEW.chartOpen;
+  var head = '<div class="collapsehead" onclick="toggleChartPanel()"><div class="one">' + esc(STR.chartPanel) + '</div><div class="meta">' + (open ? '-' : '+') + '</div></div>';
+  if (!open) return '<section class="panelcard">' + head + '</section>';
+  var today = todayISO();
+  var dates = chartDates(c, today);
+  var dateMode = VIEW.chartDateMode === "date" ? "date" : "day";
+  var marks = chartColMarks(c);
+  var groups = chartRowsForCase(c, DB.config.chartCats).filter(function(group){
+    return group.orphan || !chartCatHidden(group.cat.id);
+  });
+  var headRow = '<tr onclick="toggleChartDateMode()"><th class="sticky"></th>' + dates.map(function(date){
+    var label = dateMode === "date" ? (Number(date.slice(5, 7)) + '/' + Number(date.slice(8, 10))) : ('D' + computeDay(c.admittedAt, date));
+    return '<th class="' + (date === today ? 'todaycol' : '') + '">' + esc(label) + '<span class="colmark">' + (marks[date] ? esc(marks[date]) : '&nbsp;') + '</span></th>';
+  }).join('') + '</tr>';
+  var body = groups.map(function(group){
+    var cat = group.cat;
+    var groupKey = cat.id || "orphan";
+    var collapsed = chartGroupCollapsed(c.id, groupKey);
+    var addBtn = group.orphan ? '' : (cat.kind === "event"
+      ? ' <button class="smallbtn" onclick="event.stopPropagation();openChartEventCell(\'' + esc(c.id) + '\',\'' + esc(cat.id) + '\',\'' + esc(today) + '\')">＋</button>'
+      : ' <button class="smallbtn" onclick="event.stopPropagation();openChartItem(\'' + esc(c.id) + '\',\'' + esc(cat.id) + '\',\'\')">＋</button>');
+    var headerRow = '<tr><th class="sticky catrow" onclick="toggleChartGroup(\'' + esc(c.id) + '\',\'' + esc(groupKey) + '\')"><span class="dot" style="display:inline-block;background:' + esc(cat.color) + '"></span> ' + esc(cat.name) + ' ' + (collapsed ? '+' : '-') + addBtn + '</th><td colspan="' + dates.length + '"></td></tr>';
+    if (collapsed) return headerRow;
+    var rows = '';
+    if (!group.orphan && cat.kind === "event") {
+      rows = group.items.length ? '<tr><th class="sticky chartlabel"></th>' + dates.map(function(date){
+        return '<td class="' + (date === today ? 'todaycol' : '') + '" onclick="openChartEventCell(\'' + esc(c.id) + '\',\'' + esc(cat.id) + '\',\'' + esc(date) + '\')">' + renderChartEventDots(group.items, date) + '</td>';
+      }).join('') + '</tr>' : '';
+    } else {
+      rows = group.items.map(function(item){
+        var labelTh = '<th class="sticky chartlabel" onclick="openChartItem(\'' + esc(c.id) + '\',\'' + esc(item.catId) + '\',\'' + esc(item.id) + '\')">' + esc((item.name || '-').slice(0, 4)) + '</th>';
+        if (item.kind === "band") {
+          return '<tr>' + labelTh + dates.map(function(date){
+            return '<td class="bandcell' + (date === today ? ' todaycol' : '') + '">' + (bandOnDate(item, date) ? '<div class="band" style="background:' + esc(cat.color) + '"></div>' : '') + '</td>';
+          }).join('') + '</tr>';
+        }
+        if (item.kind === "event") {
+          return '<tr>' + labelTh + dates.map(function(date){
+            return '<td class="' + (date === today ? 'todaycol' : '') + '">' + (item.date === date ? '<span class="mark">' + esc(String(item.name || '').slice(0, 2) || '●') + '</span>' : '') + '</td>';
+          }).join('') + '</tr>';
+        }
+        return '<tr>' + labelTh + dates.map(function(date){
+          return '<td class="' + (date === today ? 'todaycol' : '') + '" onclick="openChartValue(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',\'' + esc(date) + '\')">' + esc((item.values && item.values[date]) || '') + '</td>';
+        }).join('') + '</tr>';
+      }).join('');
+    }
+    return headerRow + rows;
+  }).join('');
+  return '<section class="panelcard">' + head + '<div class="chartwrap" style="margin-top:10px"><table class="chartgrid"><thead>' + headRow + '</thead><tbody>' + body + '</tbody></table></div></section>';
+}
+
+function renderChartItemSheet(){
+  var d = SHEET.draft || {};
+  var cat = chartCatById(d.catId);
+  var kind = d.kind === "band" || d.kind === "event" ? d.kind : "value";
+  var chips = chartNameSuggestions(d.catId, kind).map(function(name){
+    return '<button class="chipbtn' + (d.name === name ? ' on' : '') + '" onclick="sheetDraftValue(\'name\',\'' + esc(name) + '\');renderSheet()">' + esc(name) + '</button>';
+  }).join('');
+  return '<div class="sheetcard"><div class="sheettitle">' + esc((cat ? cat.name : STR.chartPanel) + '（' + chartKindLabel(kind) + '）') + '</div><div class="stack">' +
+    '<div class="field"><input id="chartItemName" class="input" value="' + esc(d.name || "") + '" oninput="sheetDraftValue(\'name\',this.value)" placeholder="' + esc(STR.chartNamePh) + '"></div>' +
+    (chips ? '<div class="chips">' + chips + '</div>' : '') +
+    (kind === "band" ? '<div class="row wrap"><span class="fieldlabel">' + esc(STR.startLabel) + '</span><input class="date" type="date" value="' + esc(d.startDate || "") + '" onchange="sheetDraftValue(\'startDate\',this.value)"><span class="fieldlabel">' + esc(STR.endLabel) + '</span><input class="date" type="date" value="' + esc(d.endDate || "") + '" onchange="sheetDraftValue(\'endDate\',this.value)"></div>' : '') +
+    (kind === "event" ? '<div class="row wrap"><span class="fieldlabel">' + esc(STR.dateLabel) + '</span><input class="date" type="date" value="' + esc(d.date || "") + '" onchange="sheetDraftValue(\'date\',this.value)"></div>' : '') +
+    '<div class="row wrap"><button class="primary" onclick="saveChartItem()">' + esc(STR.confirm) + '</button>' + (d.itemId ? '<button class="ghostbtn danger" onclick="deleteChartItem()">' + esc(STR.deleteRow) + '</button>' : '') + '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div></div>';
+}
+
+function renderChartValueSheet(){
+  var d = SHEET.draft || {};
+  return '<div class="sheetcard"><div class="sheettitle">' + esc((d.name || "") + ' ' + (d.date || "")) + '</div><div class="stack">' +
+    '<div class="field"><input id="chartValueInput" class="input" value="' + esc(d.value || "") + '" oninput="sheetDraftValue(\'value\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){saveChartValue()}"></div>' +
+    '<div class="row wrap"><button class="primary" onclick="saveChartValue()">' + esc(STR.confirm) + '</button><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div></div>';
+}
+
+function renderChartEventCellSheet(){
+  var d = SHEET.draft || {};
+  var c = DB.cases.find(function(item){ return item.id === d.caseId; });
+  var cat = chartCatById(d.catId);
+  var rows = [];
+  if (c) {
+    cloneArr(c.chart && c.chart.items).filter(function(item){
+      return item && item.catId === d.catId && item.date === d.date;
+    }).forEach(function(item){
+      rows.push('<div class="lineitem"><div class="linegrow"><div class="text">' + esc(item.name || "-") + '</div></div><button class="iconbtn" onclick="removeChartItem(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\')">×</button></div>');
+    });
+  }
+  return '<div class="sheetcard"><div class="sheettitle">' + esc((cat ? cat.name : "") + ' ' + (d.date || "")) + '</div><div class="stack">' +
+    '<div class="row wrap"><span class="fieldlabel">' + esc(STR.dateLabel) + '</span><input class="date" type="date" value="' + esc(d.date || "") + '" onchange="sheetDraftValue(\'date\',this.value);renderSheet()"></div>' +
+    '<div class="row"><input id="chartEventInput" class="input" value="' + esc(d.text || "") + '" placeholder="' + esc(STR.chartEventPh) + '" oninput="sheetDraftValue(\'text\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addChartEventItem()}"><button class="ghostbtn" onclick="addChartEventItem()">+</button></div>' +
+    '<div class="plain">' + (rows.length ? rows.join('') : '<div class="faint">-</div>') + '</div><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
+}
+
 function renderSettingsSheet(){
   var stageColors = ["#8b5cf6", "#ef4444", "#f97316", "#eab308", "#3b82f6", "#16a34a", "#ec4899", "#64748b"];
   var cardSettings = SETTINGS || defaultSettings();
@@ -3011,6 +3493,12 @@ function renderSettingsSheet(){
         return '<button class="chipbtn' + (stage.color === color ? ' on' : '') + '" style="background:' + esc(color) + ';color:#fff;border-color:' + esc(color) + '" onclick="setStageColor(' + index + ',\'' + esc(color) + '\')">' + (stage.color === color ? '\u2713' : '&nbsp;') + '</button>';
       }).join('') + '</div><div class="row wrap"><button class="smallbtn" onclick="moveStage(' + index + ',\'up\')">\u2191</button><button class="smallbtn" onclick="moveStage(' + index + ',\'down\')">\u2193</button><button class="smallbtn danger" onclick="deleteStage(' + index + ')">Delete</button><span class="note">' + esc(STR.stageInUse) + ' ' + useCount + '</span></div></div>';
     }).join('') + '<button class="ghostbtn" onclick="addStage()">' + esc(STR.addStage) + '</button></div></section>' +
+    '<section class="settingssec"><div class="one">' + esc(STR.chartItems) + '</div><div class="stack">' + DB.config.chartCats.map(function(cat, index){
+      var useCount = chartCatUseCount(cat.id);
+      return '<div class="panelcard"><div class="row"><input class="input" value="' + esc(cat.name) + '" onchange="updateChartCatName(' + index + ',this.value)"><span class="note">' + esc(chartKindLabel(cat.kind)) + '</span></div><div class="chips">' + stageColors.map(function(color){
+        return '<button class="chipbtn' + (cat.color === color ? ' on' : '') + '" style="background:' + esc(color) + ';color:#fff;border-color:' + esc(color) + '" onclick="setChartCatColor(' + index + ',\'' + esc(color) + '\')">' + (cat.color === color ? '✓' : '&nbsp;') + '</button>';
+      }).join('') + '</div><div class="row wrap"><button class="smallbtn" onclick="moveChartCat(' + index + ',\'up\')">↑</button><button class="smallbtn" onclick="moveChartCat(' + index + ',\'down\')">↓</button><button class="smallbtn danger" onclick="deleteChartCat(' + index + ')">' + esc(STR.deleteRow) + '</button><span class="note">' + esc(STR.stageInUse) + ' ' + useCount + '</span></div></div>';
+    }).join('') + '<div class="row wrap"><button class="ghostbtn" onclick="addChartCat(\'value\')">＋' + esc(STR.kindValue) + '</button><button class="ghostbtn" onclick="addChartCat(\'band\')">＋' + esc(STR.kindBand) + '</button><button class="ghostbtn" onclick="addChartCat(\'event\')">＋' + esc(STR.kindEvent) + '</button></div></div></section>' +
     '<section class="settingssec"><div class="one">' + esc(STR.labelEditor) + '</div><div class="stack">' + ["phase", "next", "today", "pending", "seeds"].map(function(key){
       return '<input class="input" value="' + esc(DB.config.labels[key] || "") + '" onchange="updateLabelName(\'' + key + '\',this.value)">';
     }).join('') + '</div></section>' +
@@ -3018,6 +3506,10 @@ function renderSettingsSheet(){
       var checked = !cloneArr(cardSettings.cardHidden).includes(name);
       var label = DB.config.labels[name] || name;
       return '<div class="lineitem"><label class="row" style="flex:1"><input class="check" type="checkbox" ' + (checked ? 'checked ' : '') + 'onclick="toggleCardSection(\'' + name + '\',this.checked)"><div class="linegrow"><div class="text">' + esc(label) + '</div></div></label><button class="smallbtn" onclick="moveCardSection(\'' + name + '\',\'up\')">\u2191</button><button class="smallbtn" onclick="moveCardSection(\'' + name + '\',\'down\')">\u2193</button></div>';
+    }).join('') + '</div></section>' +
+    '<section class="settingssec"><div class="one">' + esc(STR.chartPrefs) + '</div><div class="stack">' + DB.config.chartCats.map(function(cat){
+      var checked = !chartCatHidden(cat.id);
+      return '<label class="lineitem"><input class="check" type="checkbox" ' + (checked ? 'checked ' : '') + 'onclick="toggleChartCatPref(\'' + esc(cat.id) + '\',this.checked)"><div class="linegrow"><div class="text">' + esc(cat.name) + '</div></div></label>';
     }).join('') + '</div></section>' +
     '<section class="settingssec"><div class="one">' + esc(STR.trashSection) + '</div><div class="stack">' + (trashRows.length ? trashRows.map(function(entry){
       var stamp = String(entry.deletedAt || "");
@@ -3185,18 +3677,6 @@ function renderDataSheet(){
     '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
-function renderSheet(){
-  var el = document.getElementById("sheet");
-  if (!el) return;
-  var html = "";
-  if (SHEET.name === "admission") html = renderAdmissionSheet();
-  if (SHEET.name === "stage") html = renderStageSheet();
-  if (SHEET.name === "sync") html = renderSyncSheet();
-  if (SHEET.name === "data") html = renderDataSheet();
-  el.className = "sheet" + (html ? " open" : "");
-  el.innerHTML = html;
-}
-
 renderBoard = function(){
   var cases = boardCases();
   var week = buildWeekGrid(DB.cases, todayISO(), VIEW.weekPast, VIEW.weekFuture);
@@ -3246,6 +3726,7 @@ renderDetail = function(caseId){
     renderSectionCard(DB.config.labels.today, renderTodoList(c), "todoInput", STR.todayPh, "addTodo", c.id) +
     renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id) +
     renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id) +
+    renderChartPanel(c) +
     (!dischargeInline ? dischargePanel : '') +
     '<section class="panelcard"><textarea id="dayExportText" class="reviewtextarea hidden" readonly>' + esc(dayExportText(c.id)) + '</textarea><button class="ghostbtn" onclick="copyDayExport(\'' + esc(c.id) + '\')">' + esc(STR.dayExport) + '</button></section>' +
     '<section class="panelcard"><button class="ghostbtn danger" onclick="deleteCase(\'' + esc(c.id) + '\')">' + esc(STR.deleteCase) + '</button></section>' +
@@ -3274,6 +3755,9 @@ renderSheet = function(){
   if (SHEET.name === "data") html = renderDataSheet();
   if (SHEET.name === "settings") html = renderSettingsSheet();
   if (SHEET.name === "weekCell") html = renderWeekCellSheet();
+  if (SHEET.name === "chartItem") html = renderChartItemSheet();
+  if (SHEET.name === "chartValue") html = renderChartValueSheet();
+  if (SHEET.name === "chartEventCell") html = renderChartEventCellSheet();
   el.className = "sheet" + (html ? " open" : "");
   el.innerHTML = html;
 };

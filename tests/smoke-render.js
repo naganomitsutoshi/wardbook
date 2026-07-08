@@ -129,14 +129,42 @@ vm.runInContext(`
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "function") fail("missing runtime fn " + name);
 });
 
-// Removed features must leave no runtime orphans.
+// Removed features must leave no runtime orphans. The SPEC-E chart reintroduced
+// its own function family (openChartItem/openChartValue/...), so only the appt
+// family and the OLD chart model (med/event/row) stay on this list.
 [
   "addChartMed", "addChartEvent", "addChartRow", "setChartValue",
+  "renderChartMedSheet", "renderChartEventSheet", "renderChartRowSheet",
   "toggleAppt", "deleteAppt", "addAppt", "addDetailAppt", "openApptCell",
-  "renderApptCellSheet", "renderApptSection", "toggleChartDateMode", "chartGroupHidden"
+  "renderApptCellSheet", "renderApptSection", "chartGroupHidden", "toggleChartGroupPref"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "undefined") fail("removed fn still defined: " + name);
 });
+
+// SPEC-E chart runtime functions must exist.
+[
+  "openChartItem", "saveChartItem", "removeChartItem", "openChartValue", "saveChartValue",
+  "openChartEventCell", "addChartEventItem", "renderChartPanel", "renderChartItemSheet",
+  "renderChartValueSheet", "renderChartEventCellSheet", "toggleChartPanel", "toggleChartDateMode",
+  "toggleChartGroup", "chartCatHidden", "toggleChartCatPref", "addChartCat", "deleteChartCat"
+].forEach((name) => {
+  if (vm.runInContext(`typeof ${name}`, sandbox) !== "function") fail("missing chart fn " + name);
+});
+
+// Seed chart items for the detail-view checks (today-relative so columns exist).
+vm.runInContext(`
+  (function(){
+    var t = todayISO();
+    var values = {};
+    values[t] = "37.8";
+    DB.cases[0].chart = normalizeChart({ items:[
+      { id:"cv1", catId:"cat-vital", kind:"value", name:"BT", values:values },
+      { id:"cb1", catId:"cat-med", kind:"band", name:"CTRX", startDate:DB.cases[0].admittedAt, endDate:null },
+      { id:"ce1", catId:"cat-ic", kind:"event", name:"IC", date:t },
+      { id:"co1", catId:"cat-gone", kind:"band", name:"lost", startDate:DB.cases[0].admittedAt, endDate:null }
+    ] });
+  })();
+`, sandbox);
 
 const boardHtml = vm.runInContext("renderBoard()", sandbox);
 if (!boardHtml.includes("openSyncSheet()") || !boardHtml.includes("openDataSheet()")) fail("board missing sync/data row");
@@ -155,8 +183,37 @@ if (!weekHtml.includes("onclick=\"openWeekCell(")) fail("week cell missing oncli
 vm.runInContext("VIEW={ name:'detail', caseId:'c1', editingMeta:false, editingLabel:false, stagePickerFor:'', nowDay:todayISO() }", sandbox);
 const detailHtml = vm.runInContext("renderDetail('c1')", sandbox);
 if (!detailHtml.includes("seed-one")) fail("detail missing seed");
-if (detailHtml.includes("chartwrap") || detailHtml.includes("chartgrid")) fail("detail still renders chart");
+if (!detailHtml.includes(vm.runInContext("STR.chartPanel", sandbox))) fail("detail missing chart panel header");
+if (detailHtml.includes("chartgrid")) fail("chart panel must be collapsed by default");
 if (detailHtml.includes("detailAppt")) fail("detail still renders appt section");
+
+// Open the chart panel: grid, value, band (category color), event dot, column marks.
+vm.runInContext("VIEW.chartOpen = true;", sandbox);
+const chartHtml = vm.runInContext("renderDetail('c1')", sandbox);
+if (!chartHtml.includes("chartgrid")) fail("open chart missing grid");
+if (!chartHtml.includes("37.8")) fail("open chart missing value cell");
+if (!chartHtml.includes('class="band"')) fail("open chart missing band");
+if (!chartHtml.includes("#16a34a")) fail("band not colored by category");
+if (!chartHtml.includes("openChartValue('c1','cv1'")) fail("value cell missing tap handler");
+if (!chartHtml.includes("openChartEventCell('c1','cat-ic'")) fail("event row missing tap handler");
+if (!chartHtml.includes(vm.runInContext("'\\u5165'", sandbox))) fail("chart missing admission column mark");
+if (!chartHtml.includes(vm.runInContext("'\\u2605'", sandbox))) fail("chart missing planned-discharge column mark");
+if (!chartHtml.includes(vm.runInContext("'\\u305d\\u306e\\u4ed6'", sandbox))) fail("chart missing orphan group");
+if (!chartHtml.includes("openChartItem('c1','cat-med','')")) fail("chart missing per-category add button");
+vm.runInContext("VIEW.chartOpen = false;", sandbox);
+
+// Chart sheets render.
+vm.runInContext("SHEET={name:'chartItem',draft:{caseId:'c1',catId:'cat-vital',itemId:'',kind:'value',name:'',startDate:'',endDate:'',date:''},syncBusy:false};", sandbox);
+const chartItemSheet = vm.runInContext("renderChartItemSheet()", sandbox);
+if (!chartItemSheet.includes("saveChartItem()")) fail("chartItem sheet missing save");
+if (!chartItemSheet.includes("BT")) fail("chartItem sheet missing name suggestions");
+vm.runInContext("SHEET={name:'chartValue',draft:{caseId:'c1',itemId:'cv1',date:todayISO(),name:'BT',value:'37.8'},syncBusy:false};", sandbox);
+const chartValueSheet = vm.runInContext("renderChartValueSheet()", sandbox);
+if (!chartValueSheet.includes("saveChartValue()")) fail("chartValue sheet missing save");
+vm.runInContext("SHEET={name:'chartEventCell',draft:{caseId:'c1',catId:'cat-ic',date:todayISO(),text:''},syncBusy:false};", sandbox);
+const chartEventSheet = vm.runInContext("renderChartEventCellSheet()", sandbox);
+if (!chartEventSheet.includes("addChartEventItem()")) fail("chartEventCell sheet missing add");
+if (!chartEventSheet.includes("removeChartItem('c1','ce1')")) fail("chartEventCell sheet missing existing event row");
 const dischargeIx = detailHtml.indexOf(vm.runInContext("STR.dischargePanel", sandbox));
 const nextIx = detailHtml.indexOf(vm.runInContext("DB.config.labels.next", sandbox));
 if (dischargeIx < 0) fail("detail missing discharge panel");
@@ -180,8 +237,11 @@ if (!searchArchive.includes(vm.runInContext("STR.dischargedGroup", sandbox))) fa
 const settingsHtml = vm.runInContext("SHEET={name:'settings',draft:{},syncBusy:false}; renderSettingsSheet()", sandbox);
 if (!settingsHtml.includes("updateStageName(")) fail("settings missing stage rename inputs");
 if (!settingsHtml.includes("addStage()")) fail("settings missing add-stage button");
-if (settingsHtml.includes("toggleChartGroupPref")) fail("settings still has chart prefs");
-["stageEditor", "labelEditor", "cardPrefs", "themePrefs"].forEach((key) => {
+if (settingsHtml.includes("toggleChartGroupPref")) fail("settings still has old chart prefs");
+if (!settingsHtml.includes("updateChartCatName(")) fail("settings missing chart category rename inputs");
+if (!settingsHtml.includes("addChartCat('value')") || !settingsHtml.includes("addChartCat('event')")) fail("settings missing add-category buttons");
+if (!settingsHtml.includes("toggleChartCatPref('cat-vital'")) fail("settings missing chart visibility prefs");
+["stageEditor", "labelEditor", "cardPrefs", "themePrefs", "chartItems", "chartPrefs"].forEach((key) => {
   const label = vm.runInContext(`STR.${key}`, sandbox);
   if (!settingsHtml.includes(label)) fail("settings missing " + key);
 });
