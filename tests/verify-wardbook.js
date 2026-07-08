@@ -43,7 +43,7 @@ const L = sandbox.module.exports;
   "unsentSeeds", "countSeedsOn", "formatSeedExport", "missSeedText", "makeSeed",
   "moveCase", "normalizeChart", "dcChecklistItems", "stageOn", "chartDates",
   "medOnDate", "buildWeekGrid", "searchCases", "reviewStreak", "syncDiffFields",
-  "syncMergeCase", "syncEmptyState", "syncNoteLocalChanges", "syncReconcile",
+  "syncMergeCase", "syncEmptyState", "syncMarkRestored", "syncNoteLocalChanges", "syncReconcile",
   "syncClearDirty", "syncDeriveKey", "syncEncryptJson", "syncDecryptJson",
   "syncRandomSaltB64", "statsSummary", "buildOutboxBatch"
 ].forEach((name) => {
@@ -52,6 +52,13 @@ const L = sandbox.module.exports;
 if (typeof L.PBKDF2_ITER !== "number") fail("missing export PBKDF2_ITER");
 
 assert.strictEqual(L.normalizeState(null).config.stages.length, 5);
+const purgedTrash = L.normalizeState({
+  trash:[
+    { id:"t1", deletedAt:"2026-07-01T09:59:59.000Z", type:"case", caseId:"c1", caseLabel:"old", payload:{ id:"c1", label:"old", admittedAt:"2026-07-01" } },
+    { id:"t2", deletedAt:"2026-07-01T10:00:00.000Z", type:"case", caseId:"c2", caseLabel:"keep", payload:{ id:"c2", label:"keep", admittedAt:"2026-07-01" } }
+  ]
+}, "2026-07-08T10:00:00.000Z", "2026-07-08");
+assert.strictEqual(purgedTrash.trash.map((x) => x.id).join(","), "t2");
 assert.strictEqual(L.normalizeCase({ extra:"ok" }, "2026-07-07T10:00:00.000Z", "2026-07-07").extra, "ok");
 assert.strictEqual(L.computeDay("2026-07-07", "2026-07-07"), 1);
 assert.strictEqual(L.computeDay("2026-07-05", "2026-07-07"), 3);
@@ -151,6 +158,29 @@ assert.strictEqual(week.rows[0].dates["2026-07-08"].stageId, "dc");
 assert.strictEqual(week.rows[0].dates["2026-07-10"].markers[0].kind, "exam");
 assert.strictEqual(week.rows[0].dates["2026-07-13"].markers.some((m) => m.kind === "planned"), true);
 
+const weekAdmissionBand = L.buildWeekGrid([
+  {
+    id:"c1", label:"hf", admittedAt:"2026-07-05", status:"active", order:0,
+    stageLog:[{ date:"2026-07-07", stageId:"adm" }],
+    appts:[], next:[], pendings:[], discharge:{ plannedOn:null }
+  }
+], "2026-07-08");
+assert.strictEqual(weekAdmissionBand.rows[0].dates["2026-07-04"].stageId, "");
+assert.strictEqual(weekAdmissionBand.rows[0].dates["2026-07-05"].stageId, "adm");
+assert.strictEqual(weekAdmissionBand.rows[0].dates["2026-07-06"].stageId, "adm");
+assert.strictEqual(weekAdmissionBand.rows[0].dates["2026-07-08"].stageId, "adm");
+
+const customWeek = L.buildWeekGrid([
+  {
+    id:"c1", label:"uti", admittedAt:"2026-07-01", status:"active", order:0,
+    stageLog:[{ date:"2026-07-01", stageId:"adm" }],
+    appts:[], next:[], pendings:[], discharge:{ plannedOn:null }
+  }
+], "2026-07-08", 3, 10);
+assert.strictEqual(customWeek.dates.length, 14);
+assert.strictEqual(customWeek.dates[0], "2026-07-05");
+assert.strictEqual(customWeek.dates[customWeek.dates.length - 1], "2026-07-18");
+
 const searchCases = [
   { id:"a", label:"haien", admittedAt:"2026-07-01", stageId:"adm", phaseNote:"CAP", dxTags:["pna"], next:[{ text:"abx" }], todos:[], pendings:[], seeds:[], status:"active" },
   { id:"b", label:"uti", admittedAt:"2026-06-01", stageId:"dc", phaseNote:"", dxTags:[], next:[], todos:[{ text:"culture" }], pendings:[], seeds:[{ text:"seed" }], status:"discharged" }
@@ -247,6 +277,63 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   const seedRes = L.syncReconcileConfig(seedData, seedState, null, "2026-07-07T10:00:00.000Z");
   assert.strictEqual(seedRes.push, true);
   assert.strictEqual(seedState.configMt.stages, "2026-07-07T10:00:00.000Z");
+
+  const restoreCase = L.normalizeCase({ id:"c1", label:"restored", phaseNote:"back", admittedAt:"2026-07-01", status:"active" }, "2026-07-08T10:30:00.000Z", "2026-07-08");
+  const delData = { cases:[JSON.parse(JSON.stringify(restoreCase))], config:L.defaultLabels ? { stages:[{ id:"adm" }], labels:L.defaultLabels() } : { stages:[{ id:"adm" }], labels:{ phase:"P", next:"N", today:"T", pending:"Pd", seeds:"S" } } };
+  const delState = L.syncEmptyState();
+  let delRes = L.syncReconcile(delData, delState, [], "2026-07-08T10:00:00.000Z");
+  assert.strictEqual(delRes.pushes.length, 1);
+  L.syncClearDirty(delState, ["c1"]);
+  delRes.data.cases = [];
+  delRes = L.syncReconcile(delRes.data, delState, [{ id:"c1", deleted:true, case:null, mt:null }], "2026-07-08T10:05:00.000Z");
+  assert.strictEqual(delRes.data.cases.length, 0);
+  delRes.data.cases.push(JSON.parse(JSON.stringify(restoreCase)));
+  delRes.data.cases[0].lastTouchedAt = "2026-07-08T10:30:00.000Z";
+  L.syncMarkRestored(delState, "c1");
+  const resurrected = L.syncReconcile(delRes.data, delState, [{ id:"c1", deleted:true, case:null, mt:null }], "2026-07-08T10:31:00.000Z");
+  assert.strictEqual(resurrected.data.cases.length, 1);
+  assert.strictEqual(resurrected.pushes.length, 1);
+  assert.strictEqual(resurrected.pushes[0].deleted, false);
+  assert.strictEqual(resurrected.pushes[0].case.label, "restored");
+
+  // Normal delete propagation: an innocent device that still holds the case
+  // (synced, not restored) must delete it when a remote tombstone arrives.
+  const innocentCase = L.normalizeCase({ id:"c1", label:"victim", admittedAt:"2026-07-01", status:"active", lastTouchedAt:"2026-07-08T09:00:00.000Z" }, "2026-07-08T09:00:00.000Z", "2026-07-08");
+  const innocentData = { cases:[JSON.parse(JSON.stringify(innocentCase))], config:{ stages:[{ id:"adm" }], labels:{ phase:"P", next:"N", today:"T", pending:"Pd", seeds:"S" } } };
+  const innocentState = L.syncEmptyState();
+  L.syncReconcile(innocentData, innocentState, [], "2026-07-08T09:00:00.000Z");
+  L.syncClearDirty(innocentState, ["c1"]);
+  const propagated = L.syncReconcile(innocentData, innocentState, [{ id:"c1", deleted:true, case:null, mt:null }], "2026-07-08T12:00:00.000Z");
+  assert.strictEqual(propagated.data.cases.length, 0);
+  assert.strictEqual(propagated.pushes.length, 0);
+  assert.strictEqual(!!innocentState.tombstones.c1, true);
+
+  // Legacy sync state saved before the restored flag existed must not crash.
+  const legacyState = L.syncEmptyState();
+  delete legacyState.restored;
+  const legacyData = { cases:[JSON.parse(JSON.stringify(innocentCase))], config:{ stages:[{ id:"adm" }], labels:{ phase:"P", next:"N", today:"T", pending:"Pd", seeds:"S" } } };
+  const legacyRes = L.syncReconcile(legacyData, legacyState, [{ id:"c1", deleted:true, case:null, mt:null }], "2026-07-08T12:00:00.000Z");
+  assert.strictEqual(legacyRes.data.cases.length, 0);
+
+  const remoteRestoreState = L.syncEmptyState();
+  remoteRestoreState.tombstones.c1 = true;
+  const remoteRestoreData = { cases:[], config:{ stages:[{ id:"adm" }], labels:{ phase:"P", next:"N", today:"T", pending:"Pd", seeds:"S" } } };
+  const remoteRestoreRes = L.syncReconcile(remoteRestoreData, remoteRestoreState, [
+    { id:"c1", deleted:false, case:{ id:"c1", label:"from-remote", admittedAt:"2026-07-01", status:"active" }, mt:{ label:"2026-07-08T11:00:00.000Z" } }
+  ], "2026-07-08T11:00:00.000Z");
+  assert.strictEqual(remoteRestoreRes.data.cases.length, 1);
+  assert.strictEqual(remoteRestoreRes.data.cases[0].label, "from-remote");
+  assert.strictEqual(!!remoteRestoreState.tombstones.c1, false);
+
+  const pendingDeleteState = L.syncEmptyState();
+  pendingDeleteState.tombstones.c1 = true;
+  pendingDeleteState.dirty.c1 = true;
+  const pendingDeleteData = { cases:[], config:{ stages:[{ id:"adm" }], labels:{ phase:"P", next:"N", today:"T", pending:"Pd", seeds:"S" } } };
+  const pendingDeleteRes = L.syncReconcile(pendingDeleteData, pendingDeleteState, [
+    { id:"c1", deleted:false, case:{ id:"c1", label:"ignore-remote", admittedAt:"2026-07-01", status:"active" }, mt:{ label:"2026-07-08T11:00:00.000Z" } }
+  ], "2026-07-08T11:00:00.000Z");
+  assert.strictEqual(pendingDeleteRes.data.cases.length, 0);
+  assert.strictEqual(!!pendingDeleteState.tombstones.c1, true);
 
   const stats = L.statsSummary({ openedDays:{ "2026-07-07":true, "2026-07-08":true }, reviewsDone:2, seedsCaptured:3, exportsDone:4 });
   assert.strictEqual(JSON.stringify(stats), JSON.stringify({ openedDays:2, reviewsDone:2, seedsCaptured:3, exportsDone:4 }));

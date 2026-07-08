@@ -38,6 +38,8 @@
     --bar:rgba(245,246,248,.96);
     --drop:rgba(17,24,39,.14);
     --shadow:0 1px 2px rgba(0,0,0,.06);
+    --weekend-sun:#b44a4a;
+    --weekend-sat:#4f6fb8;
   }
   :root[data-theme="dark"]{
     color-scheme:dark;
@@ -58,6 +60,8 @@
     --bar:rgba(19,22,26,.96);
     --drop:rgba(237,242,247,.22);
     --shadow:0 1px 2px rgba(0,0,0,.28);
+    --weekend-sun:#f09a9a;
+    --weekend-sat:#9db8ff;
   }
   *{box-sizing:border-box}
   html{-webkit-text-size-adjust:100%}
@@ -269,6 +273,9 @@
     text-align:left;
     background:var(--card);
   }
+  .weekgrid .casecell{cursor:pointer}
+  .weekgrid .suncol{color:var(--weekend-sun)}
+  .weekgrid .satcol{color:var(--weekend-sat)}
   .weekgrid .todaycol,.chartgrid .todaycol{background:var(--panel)}
   .weekband{height:10px;border-radius:999px}
   .markerstack{display:flex;gap:2px;justify-content:center;flex-wrap:wrap}
@@ -440,22 +447,62 @@ function normalizeCase(raw, nowIso, todayIso){
   return out;
 }
 
-function normalizeState(raw){
+function trashCutoffIso(nowIso){
+  var now = Date.parse(String(nowIso || ""));
+  if (!Number.isFinite(now)) return null;
+  return new Date(now - (7 * 24 * 60 * 60 * 1000)).toISOString();
+}
+
+function normalizeTrashEntry(entry, nowIso){
+  var row = isObj(entry) ? entry : {};
+  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true, "appt":true, "chartMed":true, "chartEvent":true };
+  var deletedAt = typeof row.deletedAt === "string" && row.deletedAt ? row.deletedAt : nowIso;
+  var type = types[row.type] ? row.type : "case";
+  var payload = JSON.parse(JSON.stringify(isObj(row.payload) ? row.payload : {}));
+  var caseId = typeof row.caseId === "string" ? row.caseId : "";
+  var caseLabel = typeof row.caseLabel === "string" ? row.caseLabel : "";
+  if (type === "case") {
+    payload = normalizeCase(payload, nowIso, todayISOFallback());
+    caseId = caseId || payload.id || "";
+    caseLabel = caseLabel || payload.label || "";
+  } else {
+    caseLabel = caseLabel || (payload && typeof payload.label === "string" ? payload.label : "");
+  }
+  return {
+    id: typeof row.id === "string" && row.id ? row.id : "trash-" + Math.random().toString(36).slice(2, 10),
+    deletedAt: deletedAt,
+    type: type,
+    caseId: caseId,
+    caseLabel: caseLabel,
+    payload: payload
+  };
+}
+
+function normalizeState(raw, nowIso, todayIso){
   var src = isObj(raw) ? raw : {};
+  var nowStamp = typeof nowIso === "string" && nowIso ? nowIso : new Date().toISOString();
+  var todayStamp = typeof todayIso === "string" && todayIso ? todayIso : String(nowStamp).slice(0, 10);
   var cfg = isObj(src.config) ? src.config : {};
   var stages = cloneArr(cfg.stages).map(normalizeStage).filter(function(x){ return x.id && x.name; });
   if (!stages.length) stages = defaultStages();
+  var cutoff = trashCutoffIso(nowStamp);
   var state = {
     v: 1,
     cases: cloneArr(src.cases).map(function(c, idx){
-      var item = normalizeCase(c, "", todayISOFallback());
+      var item = normalizeCase(c, nowStamp, todayStamp);
       if (!Number.isFinite(item.order)) item.order = idx;
       return item;
     }),
     config: {
       stages: stages,
       labels: normalizeLabels(cfg.labels)
-    }
+    },
+    trash: cloneArr(src.trash).map(function(entry){
+      return normalizeTrashEntry(entry, nowStamp);
+    }).filter(function(entry){
+      if (!cutoff) return true;
+      return String(entry.deletedAt || "") >= cutoff;
+    })
   };
   state.cases = state.cases.map(function(c, idx){
     if (!Number.isFinite(c.order)) c.order = idx;
@@ -692,15 +739,18 @@ function medOnDate(med, date){
   return true;
 }
 
-function buildWeekGrid(cases, todayIso){
+function buildWeekGrid(cases, todayIso, pastDays, futureDays){
   var base = Date.parse(todayIso + "T00:00:00");
+  var past = Number.isFinite(Number(pastDays)) ? Math.max(0, Number(pastDays)) : 7;
+  var future = Number.isFinite(Number(futureDays)) ? Math.max(0, Number(futureDays)) : 7;
   var dates = [];
-  for (var i = -7; i <= 7; i += 1) {
+  for (var i = -past; i <= future; i += 1) {
     var d = new Date(base + i * 86400000);
     dates.push(d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"));
   }
   var rows = boardOrder(cases, todayIso).filter(function(c){ return c.status !== "discharged"; }).map(function(c){
     var cells = {};
+    var firstStageId = c && c.stageLog && c.stageLog[0] && c.stageLog[0].stageId ? c.stageLog[0].stageId : "";
     dates.forEach(function(date){
       var markers = [];
       cloneArr(c.appts).forEach(function(item){
@@ -714,8 +764,10 @@ function buildWeekGrid(cases, todayIso){
       cloneArr(c.next).forEach(function(item){ if (item && item.due === date && date > todayIso) markers.push({ kind:"next", text:"\u6b21" }); });
       cloneArr(c.pendings).forEach(function(item){ if (item && item.backOn === date && date > todayIso) markers.push({ kind:"pending", text:"\u5f85" }); });
       if (c.discharge && c.discharge.plannedOn === date && date > todayIso) markers.push({ kind:"planned", text:"\u2605" });
+      var stageId = "";
+      if (date >= c.admittedAt && date <= todayIso) stageId = stageOn(c.stageLog, date) || firstStageId;
       cells[date] = {
-        stageId:date <= todayIso ? stageOn(c.stageLog, date) : "",
+        stageId:stageId,
         markers:markers
       };
     });
@@ -826,7 +878,22 @@ function syncMergeCase(localCase, localMt, remoteCase, remoteMt){
 }
 
 function syncEmptyState(){
-  return { snap:{}, mt:{}, dirty:{}, tombstones:{}, configSnap:null, configMt:{}, configDirty:false };
+  return { snap:{}, mt:{}, dirty:{}, tombstones:{}, restored:{}, configSnap:null, configMt:{}, configDirty:false };
+}
+
+function syncMarkRestored(state, id){
+  state = state || syncEmptyState();
+  if (!id) return state;
+  delete state.tombstones[id];
+  delete state.snap[id];
+  delete state.mt[id];
+  // The restored flag is what lets this case survive a remote tombstone in
+  // syncReconcile; a case that merely exists locally without the flag must
+  // still be deleted when a remote tombstone arrives (normal delete propagation).
+  state.restored = state.restored || {};
+  state.restored[id] = true;
+  state.dirty[id] = true;
+  return state;
 }
 
 function syncNoteLocalChanges(data, state, nowIso){
@@ -853,6 +920,7 @@ function syncNoteLocalChanges(data, state, nowIso){
     if(!seen[id]){
       delete state.snap[id];
       delete state.mt[id];
+      if(state.restored) delete state.restored[id];
       state.tombstones[id] = true;
       state.dirty[id] = true;
     }
@@ -885,10 +953,15 @@ function syncReconcile(data, state, remoteList, nowIso){
   var localChanged = false;
   (remoteList || []).forEach(function(r){
     if(r.deleted){
+      if(byId[r.id] && state.restored && state.restored[r.id]){
+        state.dirty[r.id] = true;
+        return;
+      }
       state.tombstones[r.id] = true;
       delete state.dirty[r.id];
       delete state.snap[r.id];
       delete state.mt[r.id];
+      if(state.restored) delete state.restored[r.id];
       if(byId[r.id]){
         data.cases = data.cases.filter(function(c){ return c.id !== r.id; });
         delete byId[r.id];
@@ -896,7 +969,10 @@ function syncReconcile(data, state, remoteList, nowIso){
       }
       return;
     }
-    if(state.tombstones[r.id]){ return; }
+    if(state.tombstones[r.id]){
+      if(state.dirty[r.id]){ return; }
+      delete state.tombstones[r.id];
+    }
     var local = byId[r.id];
     if(!local){
       var incoming = JSON.parse(JSON.stringify(r.case));
@@ -934,7 +1010,10 @@ function syncReconcile(data, state, remoteList, nowIso){
 }
 
 function syncClearDirty(state, ids){
-  (ids || []).forEach(function(id){ delete state.dirty[id]; });
+  (ids || []).forEach(function(id){
+    delete state.dirty[id];
+    if(state.restored) delete state.restored[id];
+  });
   return state;
 }
 
@@ -1101,6 +1180,7 @@ if (typeof module !== "undefined") {
     syncDiffFields:syncDiffFields,
     syncMergeCase:syncMergeCase,
     syncEmptyState:syncEmptyState,
+    syncMarkRestored:syncMarkRestored,
     syncNoteLocalChanges:syncNoteLocalChanges,
     syncReconcile:syncReconcile,
     syncClearDirty:syncClearDirty,
@@ -1177,6 +1257,10 @@ const STR = {
 Object.assign(STR, {
   searchRow:"\u691c\u7d22",
   settingsRow:"\u8a2d\u5b9a",
+  trashSection:"\u3054\u307f\u3070\u3053",
+  trashEmpty:"\u3054\u307f\u3070\u3053\u306f\u7a7a\u3067\u3059\u30027\u65e5\u9593\u4fdd\u6301\u3057\u307e\u3059\u3002",
+  restoreRow:"\u623b\u3059",
+  restoreMissingCase:"\u5143\u306e\u75c7\u4f8b\u304c\u306a\u3044\u305f\u3081\u623b\u305b\u307e\u305b\u3093",
   boardView:"局面ボード",
   weekView:"週間予定",
   searchPh:"ラベル・病名タグ・本文を検索",
@@ -1200,6 +1284,10 @@ Object.assign(STR, {
   groupLab:"\u691c\u67fb",
   groupMed:"薬剤",
   groupEvent:"\u30a4\u30d9\u30f3\u30c8",
+  apptSection:"\u4e88\u5b9a",
+  cellItemAppt:"\u4e88\u5b9a",
+  cellItemNext:"\u6b21\u306e\u4e00\u624b",
+  cellItemPending:"\u4fdd\u7559",
   medOral:"\u5185\u670d",
   medInj:"\u6ce8\u5c04",
   apptKinds:{ meet:"\u9762", ic:"IC", exam:"\u691c", other:"\u4ed6" },
@@ -1215,15 +1303,19 @@ Object.assign(STR, {
   themeDark:"\u30c0\u30fc\u30af",
   stageInUse:"\u4f7f\u7528\u4e2d\u306e\u305f\u3081\u524a\u9664\u3067\u304d\u307e\u305b\u3093",
   addStage:"＋ステージ"
+  ,
+  admissionDate:"\u5165\u9662\u65e5",
+  weekdays:["\u65e5","\u6708","\u706b","\u6c34","\u6728","\u91d1","\u571f"]
 });
 
 let DB = normalizeState(null);
-let VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:"board", searchQuery:"", searchMonth:"", searchStageId:"" };
+let VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:"board", searchQuery:"", searchMonth:"", searchStageId:"", weekPast:7, weekFuture:7 };
 let SHEET = { name:"", draft:{}, syncBusy:false };
 let DND = { activeId:"", hoverIndex:-1 };
 let REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
 let MISS = null;
 let PENDING_FOCUS = null;
+let WEEK_SCROLL_RT = { busy:false, pendingLeftAdjust:0, initPending:false };
 const SYNC_KEY = "wardbook:sync";
 const STATS_KEY = "wardbook:stats";
 let STATS = null;
@@ -1286,12 +1378,48 @@ function compactMeta(c){
   return (c.ageBand || "") + compactSex(c.sex);
 }
 
+function isoWeekday(date){
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return 0;
+  var y = Number(String(date).slice(0, 4));
+  var m = Number(String(date).slice(5, 7));
+  var d = Number(String(date).slice(8, 10));
+  return new Date(y, m - 1, d).getDay();
+}
+
+function weekHeaderLabel(date){
+  var day = isoWeekday(date);
+  return Number(date.slice(5, 7)) + "/" + Number(date.slice(8, 10)) + "(" + STR.weekdays[day] + ")";
+}
+
+function weekHeaderClass(date, today){
+  var cls = [];
+  var day = isoWeekday(date);
+  if (date === today) cls.push("todaycol");
+  if (day === 0) cls.push("suncol");
+  if (day === 6) cls.push("satcol");
+  return cls.join(" ");
+}
+
 function defaultSettings(){
   return {
-    cardSections:["phase", "next", "today", "pending", "seeds"],
+    cardSections:["phase", "next", "appts", "today", "pending", "seeds"],
     cardHidden:[],
     chartHidden:[]
   };
+}
+
+function normalizeCardSections(sections){
+  var defaults = defaultSettings().cardSections;
+  var seen = {};
+  var ordered = cloneArr(sections).filter(function(name){
+    if (!defaults.includes(name) || seen[name]) return false;
+    seen[name] = true;
+    return true;
+  });
+  defaults.forEach(function(name){
+    if (!seen[name]) ordered.push(name);
+  });
+  return ordered;
 }
 
 function loadSettings(){
@@ -1301,8 +1429,7 @@ function loadSettings(){
   try { src = raw ? JSON.parse(raw) : null; } catch (e) {}
   var base = defaultSettings();
   if (!isObj(src)) return base;
-  base.cardSections = cloneArr(src.cardSections).filter(Boolean);
-  if (!base.cardSections.length) base.cardSections = defaultSettings().cardSections.slice();
+  base.cardSections = normalizeCardSections(cloneArr(src.cardSections).filter(Boolean));
   base.cardHidden = cloneArr(src.cardHidden).filter(Boolean);
   base.chartHidden = cloneArr(src.chartHidden).filter(Boolean);
   return base;
@@ -1310,6 +1437,77 @@ function loadSettings(){
 
 function saveSettings(){
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(SETTINGS || defaultSettings())); } catch (e) {}
+}
+
+function pushTrashEntry(type, caseRow, payload){
+  DB.trash = cloneArr(DB.trash);
+  DB.trash.push({
+    id:uid(),
+    deletedAt:nowISO(),
+    type:type,
+    caseId:caseRow && caseRow.id || "",
+    caseLabel:caseRow && caseRow.label || "",
+    payload:JSON.parse(JSON.stringify(payload || {}))
+  });
+}
+
+function trashTypeLabel(type){
+  if (type === "case") return "\u75c7\u4f8b";
+  if (type === "next") return DB.config.labels.next;
+  if (type === "todo") return DB.config.labels.today;
+  if (type === "pending") return DB.config.labels.pending;
+  if (type === "seed") return DB.config.labels.seeds;
+  if (type === "appt") return STR.apptSection;
+  if (type === "chartMed") return STR.groupMed;
+  if (type === "chartEvent") return STR.groupEvent;
+  return type;
+}
+
+function trashItemLabel(entry){
+  var payload = entry && entry.payload || {};
+  if (!entry) return "";
+  if (entry.type === "case") return entry.caseLabel || payload.label || "";
+  if (entry.type === "chartMed") return payload.name || "";
+  if (entry.type === "chartEvent") return payload.title || "";
+  return payload.text || "";
+}
+
+function removeTrashEntry(trashId){
+  DB.trash = cloneArr(DB.trash).filter(function(entry){ return entry.id !== trashId; });
+}
+
+function restoreTrash(trashId){
+  var entry = cloneArr(DB.trash).find(function(row){ return row.id === trashId; });
+  if (!entry) return;
+  var stamp = nowISO();
+  if (entry.type === "case") {
+    var restored = normalizeCase(entry.payload, stamp, todayISO());
+    restored.lastTouchedAt = stamp;
+    DB.cases = cloneArr(DB.cases).filter(function(c){ return c.id !== restored.id; });
+    DB.cases.push(restored);
+    if (SYNC && SYNC.state) {
+      syncMarkRestored(SYNC.state, restored.id);
+      saveSync();
+    }
+    removeTrashEntry(entry.id);
+    saveState();
+    render();
+    syncAfterSave();
+    return;
+  }
+  var restoredSub = false;
+  mutateCase(entry.caseId, function(c){
+    if (entry.type === "next") c.next.push(JSON.parse(JSON.stringify(entry.payload)));
+    else if (entry.type === "todo") c.todos.push(JSON.parse(JSON.stringify(entry.payload)));
+    else if (entry.type === "pending") c.pendings.push(JSON.parse(JSON.stringify(entry.payload)));
+    else if (entry.type === "seed") c.seeds.push(JSON.parse(JSON.stringify(entry.payload)));
+    else if (entry.type === "appt") c.appts.push(JSON.parse(JSON.stringify(entry.payload)));
+    else if (entry.type === "chartMed") c.chart.meds.push(JSON.parse(JSON.stringify(entry.payload)));
+    else if (entry.type === "chartEvent") c.chart.events.push(JSON.parse(JSON.stringify(entry.payload)));
+    removeTrashEntry(entry.id);
+    restoredSub = true;
+  });
+  if (!restoredSub && typeof alert === "function") alert(STR.restoreMissingCase);
 }
 
 function loadThemeMode(){
@@ -1805,6 +2003,79 @@ function touch(c){
   c.lastTouchedAt = nowISO();
 }
 
+function resetWeekRange(){
+  VIEW.weekPast = 7;
+  VIEW.weekFuture = 7;
+  WEEK_SCROLL_RT.busy = false;
+  WEEK_SCROLL_RT.pendingLeftAdjust = 0;
+  WEEK_SCROLL_RT.initPending = false;
+}
+
+function setBoardMode(mode){
+  var next = mode === "week" ? "week" : "board";
+  var prev = VIEW.boardMode || "board";
+  VIEW.boardMode = next;
+  if (next === "week" && prev !== "week") {
+    VIEW.weekPast = 7;
+    VIEW.weekFuture = 7;
+    WEEK_SCROLL_RT.initPending = true;
+  }
+  if (next !== "week") resetWeekRange();
+  render();
+}
+
+function ensureWeekWrapBehavior(){
+  if (VIEW.name !== "board" || VIEW.boardMode !== "week" || !document || !document.getElementById) return;
+  var wrap = document.getElementById("weekWrap");
+  if (!wrap) return;
+  wrap.onscroll = function(){
+    if (WEEK_SCROLL_RT.busy) return;
+    var left = Number(wrap.scrollLeft) || 0;
+    var width = Number(wrap.scrollWidth) || 0;
+    var view = Number(wrap.clientWidth) || 0;
+    if (left <= 80) {
+      WEEK_SCROLL_RT.busy = true;
+      WEEK_SCROLL_RT.pendingLeftAdjust = width;
+      VIEW.weekPast = (Number(VIEW.weekPast) || 7) + 7;
+      render();
+      return;
+    }
+    if (width - (left + view) <= 80) {
+      WEEK_SCROLL_RT.busy = true;
+      VIEW.weekFuture = (Number(VIEW.weekFuture) || 7) + 7;
+      render();
+    }
+  };
+  if (WEEK_SCROLL_RT.pendingLeftAdjust) {
+    var prevWidth = WEEK_SCROLL_RT.pendingLeftAdjust;
+    var nextWidth = Number(wrap.scrollWidth) || 0;
+    wrap.scrollLeft = (Number(wrap.scrollLeft) || 0) + Math.max(0, nextWidth - prevWidth);
+    WEEK_SCROLL_RT.pendingLeftAdjust = 0;
+    WEEK_SCROLL_RT.busy = false;
+  } else if (WEEK_SCROLL_RT.initPending) {
+    var totalCols = (Number(VIEW.weekPast) || 7) + (Number(VIEW.weekFuture) || 7) + 1;
+    var totalWidth = Number(wrap.scrollWidth) || 0;
+    var viewport = Number(wrap.clientWidth) || 0;
+    if (totalCols > 0 && totalWidth > 0) {
+      var colWidth = totalWidth / totalCols;
+      wrap.scrollLeft = Math.max(0, Math.round(colWidth * (Number(VIEW.weekPast) || 7) - viewport / 3));
+    }
+    WEEK_SCROLL_RT.initPending = false;
+  } else {
+    WEEK_SCROLL_RT.busy = false;
+  }
+}
+
+function updateCaseAdmittedAt(caseId, value){
+  var date = /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? String(value) : todayISO();
+  mutateCase(caseId, function(c){
+    c.admittedAt = date;
+    var rows = cloneArr(c.stageLog);
+    if (rows.length && date > rows[0].date) rows[0].date = date;
+    c.stageLog = normalizeStageLog(rows, c.admittedAt, c.stageId);
+  });
+}
+
 function clearMiss(){
   MISS = null;
 }
@@ -1886,12 +2157,14 @@ function boardCases(){
 function openBoard(){
   clearMiss();
   REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
-  VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", searchQuery:"", searchMonth:"", searchStageId:"" };
+  if ((VIEW.boardMode || "board") === "week") WEEK_SCROLL_RT.initPending = true;
+  VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", searchQuery:"", searchMonth:"", searchStageId:"", weekPast:VIEW.weekPast || 7, weekFuture:VIEW.weekFuture || 7 };
   render();
 }
 
 function openDetail(caseId){
   clearMiss();
+  if (VIEW.boardMode === "week") resetWeekRange();
   VIEW.name = "detail";
   VIEW.caseId = caseId;
   VIEW.editingMeta = false;
@@ -1904,6 +2177,7 @@ function openDetail(caseId){
 
 function openReview(){
   clearMiss();
+  if (VIEW.boardMode === "week") resetWeekRange();
   var queue = reviewQueue(DB.cases, todayISO());
   var ids = queue.map(function(c){ return c.id; });
   REVIEW = {
@@ -1915,7 +2189,7 @@ function openReview(){
     copied:false,
     outboxStatus:(!SYNC || !SYNC.enabled) ? "" : ""
   };
-  VIEW = { name:"review", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", searchQuery:"", searchMonth:"", searchStageId:"" };
+  VIEW = { name:"review", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", searchQuery:"", searchMonth:"", searchStageId:"", weekPast:7, weekFuture:7 };
   render();
   if (!ids.length) {
     patchOutboxStatus("");
@@ -1924,7 +2198,8 @@ function openReview(){
 
 function openSearch(){
   clearMiss();
-  VIEW = { name:"search", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", searchQuery:VIEW.searchQuery || "", searchMonth:VIEW.searchMonth || "", searchStageId:VIEW.searchStageId || "" };
+  if (VIEW.boardMode === "week") resetWeekRange();
+  VIEW = { name:"search", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", searchQuery:VIEW.searchQuery || "", searchMonth:VIEW.searchMonth || "", searchStageId:VIEW.searchStageId || "", weekPast:7, weekFuture:7 };
   render();
 }
 
@@ -1960,7 +2235,7 @@ function openSettingsSheet(){
 
 function openAdmissionSheet(){
   SHEET.name = "admission";
-  SHEET.draft = { label:"", phaseNote:"", ageBand:"", sex:"" };
+  SHEET.draft = { label:"", phaseNote:"", ageBand:"", sex:"", admittedAt:todayISO() };
   renderSheet();
   var el = document.getElementById("admLabelInput");
   if (el && el.focus) el.focus();
@@ -2056,7 +2331,7 @@ function registerAdmission(){
   var draft = SHEET.draft || {};
   var label = String(draft.label || "").trim();
   if (!label) return;
-  var today = todayISO();
+  var admittedAt = /^\d{4}-\d{2}-\d{2}$/.test(String(draft.admittedAt || "")) ? String(draft.admittedAt) : todayISO();
   var c = normalizeCase({
     id:uid(),
     label:label,
@@ -2064,10 +2339,10 @@ function registerAdmission(){
     ageBand:draft.ageBand || "",
     sex:draft.sex || "",
     status:"active",
-    admittedAt:today,
+    admittedAt:admittedAt,
     dischargedAt:null,
     stageId:DB.config.stages[0].id,
-    stageLog:[{ date:today, stageId:DB.config.stages[0].id }],
+    stageLog:[{ date:admittedAt, stageId:DB.config.stages[0].id }],
     next:[],
     todos:[],
     pendings:[],
@@ -2078,7 +2353,7 @@ function registerAdmission(){
     chart:null,
     order:boardCases().length,
     lastTouchedAt:nowISO()
-  }, nowISO(), today);
+  }, nowISO(), admittedAt);
   DB.cases.push(c);
   saveState();
   syncAfterSave();
@@ -2170,6 +2445,8 @@ function updateNextDue(caseId, itemId, value){
 
 function deleteNext(caseId, itemId){
   mutateCase(caseId, function(c){
+    var item = c.next.find(function(x){ return x.id === itemId; });
+    if (item) pushTrashEntry("next", c, item);
     c.next = c.next.filter(function(x){ return x.id !== itemId; });
   });
 }
@@ -2198,6 +2475,8 @@ function updateTodoText(caseId, itemId, value){
 
 function deleteTodo(caseId, itemId){
   mutateCase(caseId, function(c){
+    var item = c.todos.find(function(x){ return x.id === itemId; });
+    if (item) pushTrashEntry("todo", c, item);
     c.todos = c.todos.filter(function(x){ return x.id !== itemId; });
   });
 }
@@ -2226,6 +2505,8 @@ function updatePendingBackOn(caseId, itemId, value){
 
 function deletePending(caseId, itemId){
   mutateCase(caseId, function(c){
+    var item = c.pendings.find(function(x){ return x.id === itemId; });
+    if (item) pushTrashEntry("pending", c, item);
     c.pendings = c.pendings.filter(function(x){ return x.id !== itemId; });
   });
 }
@@ -2247,6 +2528,8 @@ function addSeed(caseId, value){
 
 function deleteSeed(caseId, itemId){
   mutateCase(caseId, function(c){
+    var item = c.seeds.find(function(x){ return x.id === itemId; });
+    if (item) pushTrashEntry("seed", c, item);
     c.seeds = c.seeds.filter(function(x){ return x.id !== itemId; });
   });
 }
@@ -2407,9 +2690,15 @@ function openApptCell(caseId, date){
   openSheetWithDraft("apptCell", {
     caseId:caseId,
     date:date,
+    itemType:"appt",
     text:"",
     kind:"meet"
   }, "apptCellInput", false);
+}
+
+function setCellDraftType(type){
+  SHEET.draft.itemType = type === "next" || type === "pending" ? type : "appt";
+  renderSheet();
 }
 
 function setApptDraftKind(kind){
@@ -2417,17 +2706,38 @@ function setApptDraftKind(kind){
   renderSheet();
 }
 
-function addAppt(caseId, date){
+function addCellItem(caseId, date){
+  var itemType = SHEET.draft && SHEET.draft.itemType || "appt";
   var text = String(SHEET.draft && SHEET.draft.text || "").trim();
   var kind = SHEET.draft && SHEET.draft.kind || "meet";
   if (!text) return;
   mutateCase(caseId, function(c){
-    c.appts.push({ id:uid(), date:date, text:text, kind:kind, done:false });
+    if (itemType === "next") c.next.push({ id:uid(), text:text, due:date });
+    else if (itemType === "pending") c.pendings.push({ id:uid(), text:text, backOn:date });
+    else c.appts.push({ id:uid(), date:date, text:text, kind:kind, done:false });
   });
   SHEET.draft.text = "";
   renderSheet();
   queueFocusTarget("apptCellInput", false);
   flushQueuedFocus();
+}
+
+function addAppt(caseId, date){
+  addCellItem(caseId, date);
+}
+
+function addDetailAppt(caseId){
+  var dateEl = document.getElementById("detailApptDate");
+  var textEl = document.getElementById("detailApptText");
+  var kindEl = document.getElementById("detailApptKind");
+  var date = safeDate(dateEl && dateEl.value, todayISO());
+  var text = String(textEl && textEl.value || "").trim();
+  var kind = kindEl && kindEl.value || "meet";
+  if (!text) return;
+  mutateCase(caseId, function(c){
+    c.appts.push({ id:uid(), date:date, text:text, kind:kind, done:false });
+  });
+  if (textEl) textEl.value = "";
 }
 
 function toggleAppt(caseId, apptId){
@@ -2440,6 +2750,8 @@ function toggleAppt(caseId, apptId){
 
 function deleteAppt(caseId, apptId){
   mutateCase(caseId, function(c){
+    var item = c.appts.find(function(x){ return x.id === apptId; });
+    if (item) pushTrashEntry("appt", c, item);
     c.appts = c.appts.filter(function(x){ return x.id !== apptId; });
   });
   renderSheet();
@@ -2490,6 +2802,8 @@ function deleteChartMed(){
   var d = SHEET.draft || {};
   if (!d.medId) return;
   mutateCase(d.caseId, function(c){
+    var item = cloneArr(c.chart.meds).find(function(row){ return row.id === d.medId; });
+    if (item) pushTrashEntry("chartMed", c, item);
     c.chart.meds = cloneArr(c.chart.meds).filter(function(item){ return item.id !== d.medId; });
   });
   closeSheet();
@@ -2538,6 +2852,8 @@ function deleteChartEvent(){
   var d = SHEET.draft || {};
   if (!d.eventId) return;
   mutateCase(d.caseId, function(c){
+    var item = cloneArr(c.chart.events).find(function(row){ return row.id === d.eventId; });
+    if (item) pushTrashEntry("chartEvent", c, item);
     c.chart.events = cloneArr(c.chart.events).filter(function(item){ return item.id !== d.eventId; });
   });
   closeSheet();
@@ -2772,6 +3088,8 @@ function commitMissSeed(){
 
 function deleteCase(caseId){
   if (!confirm(STR.deleteConfirm)) return;
+  var doomed = DB.cases.find(function(c){ return c.id === caseId; });
+  if (doomed) pushTrashEntry("case", doomed, doomed);
   // Keep remaining orders as-is: DB.cases is insertion-ordered, so renumbering by
   // array index would destroy the manual board order.
   DB.cases = DB.cases.filter(function(c){ return c.id !== caseId; });
@@ -2851,6 +3169,11 @@ function renderTopbar(){
 function renderBoardCard(c){
   var stage = stageById(c.stageId);
   var dueNext = c.next.slice(0, 2);
+  var upcomingAppts = cloneArr(c.appts).filter(function(item){
+    return item && item.done !== true && item.date && item.date >= todayISO();
+  }).sort(function(a, b){
+    return String(a.date || "").localeCompare(String(b.date || "")) || String(a.text || "").localeCompare(String(b.text || ""));
+  });
   var undone = c.todos.filter(function(x){ return !x.done; });
   var showPendings = c.pendings.length > 0;
   var stageStyle = 'border-left-color:' + esc(stage.color);
@@ -2861,6 +3184,9 @@ function renderBoardCard(c){
     next:dueNext.length ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.next) + '</div><div class="plain">' + dueNext.map(function(item){
       return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + (item.due ? '<div class="faint">' + esc(item.due) + '</div>' : '') + '</div></div>';
     }).join('') + '</div></div>' : '',
+    appts:upcomingAppts.length ? '<div class="section"><div class="sectiontitle">' + esc(STR.apptSection) + '</div><div class="plain">' + upcomingAppts.slice(0, 2).map(function(item){
+      return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(Number(String(item.date || "").slice(5, 7)) + "/" + Number(String(item.date || "").slice(8, 10)) + " " + item.text) + '</div></div></div>';
+    }).join('') + (upcomingAppts.length > 2 ? '<div class="faint">+' + (upcomingAppts.length - 2) + '</div>' : '') + '</div></div>' : '',
     today:undone.length ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.today) + ' ' + undone.length + '</div><div class="plain">' + undone.slice(0, 2).map(function(item){
       return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div></label>';
     }).join('') + '</div></div>' : '',
@@ -2928,15 +3254,25 @@ function renderSearch(){
 function renderApptCellSheet(){
   var d = SHEET.draft || {};
   var c = DB.cases.find(function(item){ return item.id === d.caseId; });
-  var appts = c ? cloneArr(c.appts).filter(function(item){ return item.date === d.date; }) : [];
+  var rows = [];
+  if (c) {
+    cloneArr(c.appts).filter(function(item){ return item.date === d.date; }).forEach(function(item){
+      rows.push('<div class="lineitem"><span class="badge">' + esc(STR.cellItemAppt) + '</span><label class="row" style="flex:1" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleAppt(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div><div class="faint">' + esc(STR.apptKinds[item.kind] || STR.apptKinds.other) + '</div></div></label><button class="iconbtn" onclick="deleteAppt(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\')">\u00d7</button></div>');
+    });
+    cloneArr(c.next).filter(function(item){ return item.due === d.date; }).forEach(function(item){
+      rows.push('<div class="lineitem"><span class="badge">' + esc(STR.cellItemNext) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deleteNext(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
+    });
+    cloneArr(c.pendings).filter(function(item){ return item.backOn === d.date; }).forEach(function(item){
+      rows.push('<div class="lineitem"><span class="badge">' + esc(STR.cellItemPending) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deletePending(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
+    });
+  }
   return '<div class="sheetcard"><div class="sheettitle">' + esc((c ? c.label + " " : "") + (d.date || "")) + '</div><div class="stack">' +
-    '<div class="plain">' + (appts.length ? appts.map(function(item){
-      return '<div class="lineitem"><label class="row" style="flex:1" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleAppt(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div><div class="faint">' + esc(STR.apptKinds[item.kind] || STR.apptKinds.other) + '</div></div></label><button class="iconbtn" onclick="deleteAppt(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\')">×</button></div>';
-    }).join('') : '<div class="faint">-</div>') + '</div>' +
-    '<div class="row"><input id="apptCellInput" class="input" value="' + esc(d.text || "") + '" oninput="sheetDraftValue(\'text\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addAppt(\'' + esc(d.caseId) + '\',\'' + esc(d.date) + '\')}"><button class="ghostbtn" onclick="addAppt(\'' + esc(d.caseId) + '\',\'' + esc(d.date) + '\')">+</button></div>' +
-    '<div class="chips">' + Object.keys(STR.apptKinds).map(function(kind){
+    '<div class="chips"><button class="chipbtn' + ((d.itemType || "appt") === "appt" ? ' on' : '') + '" onclick="setCellDraftType(\'appt\')">' + esc(STR.cellItemAppt) + '</button><button class="chipbtn' + ((d.itemType || "appt") === "next" ? ' on' : '') + '" onclick="setCellDraftType(\'next\')">' + esc(STR.cellItemNext) + '</button><button class="chipbtn' + ((d.itemType || "appt") === "pending" ? ' on' : '') + '" onclick="setCellDraftType(\'pending\')">' + esc(STR.cellItemPending) + '</button></div>' +
+    '<div class="row"><input id="apptCellInput" class="input" value="' + esc(d.text || "") + '" oninput="sheetDraftValue(\'text\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addCellItem(\'' + esc(d.caseId) + '\',\'' + esc(d.date) + '\')}"><button class="ghostbtn" onclick="addCellItem(\'' + esc(d.caseId) + '\',\'' + esc(d.date) + '\')">+</button></div>' +
+    ((d.itemType || "appt") === "appt" ? '<div class="chips">' + Object.keys(STR.apptKinds).map(function(kind){
       return '<button class="chipbtn' + ((d.kind || "meet") === kind ? ' on' : '') + '" onclick="setApptDraftKind(\'' + esc(kind) + '\')">' + esc(STR.apptKinds[kind]) + '</button>';
-    }).join('') + '</div><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
+    }).join('') + '</div>' : '') +
+    '<div class="plain">' + (rows.length ? rows.join('') : '<div class="faint">-</div>') + '</div><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
 function renderChartMedSheet(){
@@ -2973,6 +3309,9 @@ function renderChartValueSheet(){
 function renderSettingsSheet(){
   var stageColors = ["#8b5cf6", "#ef4444", "#f97316", "#eab308", "#3b82f6", "#16a34a", "#ec4899", "#64748b"];
   var cardSettings = SETTINGS || defaultSettings();
+  var trashRows = cloneArr(DB.trash).sort(function(a, b){
+    return String(b.deletedAt || "").localeCompare(String(a.deletedAt || ""));
+  });
   return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.settingsRow) + '</div><div class="stack">' +
     '<section class="settingssec"><div class="one">' + esc(STR.stageEditor) + '</div><div class="stack">' + DB.config.stages.map(function(stage, index){
       var useCount = cloneArr(DB.cases).filter(function(c){ return c.stageId === stage.id || cloneArr(c.stageLog).some(function(item){ return item && item.stageId === stage.id; }); }).length;
@@ -2985,19 +3324,25 @@ function renderSettingsSheet(){
     }).join('') + '</div></section>' +
     '<section class="settingssec"><div class="one">' + esc(STR.cardPrefs) + '</div><div class="stack">' + cardSettings.cardSections.map(function(name){
       var checked = !cloneArr(cardSettings.cardHidden).includes(name);
-      var label = DB.config.labels[name] || name;
+      var label = name === "appts" ? STR.apptSection : (DB.config.labels[name] || name);
       return '<div class="lineitem"><label class="row" style="flex:1"><input class="check" type="checkbox" ' + (checked ? 'checked ' : '') + 'onclick="toggleCardSection(\'' + name + '\',this.checked)"><div class="linegrow"><div class="text">' + esc(label) + '</div></div></label><button class="smallbtn" onclick="moveCardSection(\'' + name + '\',\'up\')">\u2191</button><button class="smallbtn" onclick="moveCardSection(\'' + name + '\',\'down\')">\u2193</button></div>';
     }).join('') + '</div></section>' +
     '<section class="settingssec"><div class="one">' + esc(STR.chartPrefs) + '</div><div class="stack">' + [["vital", STR.groupVital], ["lab", STR.groupLab], ["med", STR.groupMed], ["event", STR.groupEvent]].map(function(row){
       var checked = !cloneArr(cardSettings.chartHidden).includes(row[0]);
       return '<label class="lineitem"><input class="check" type="checkbox" ' + (checked ? 'checked ' : '') + 'onclick="toggleChartGroupPref(\'' + row[0] + '\',this.checked)"><div class="linegrow"><div class="text">' + esc(row[1]) + '</div></div></label>';
     }).join('') + '</div></section>' +
+    '<section class="settingssec"><div class="one">' + esc(STR.trashSection) + '</div><div class="stack">' + (trashRows.length ? trashRows.map(function(entry){
+      var stamp = String(entry.deletedAt || "");
+      var shortDate = stamp ? (Number(stamp.slice(5, 7)) + "/" + Number(stamp.slice(8, 10))) : "-";
+      return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(shortDate + " " + trashTypeLabel(entry.type) + " " + trashItemLabel(entry)) + '</div></div><button class="smallbtn" onclick="restoreTrash(\'' + esc(entry.id) + '\')">' + esc(STR.restoreRow) + '</button></div>';
+    }).join('') : '<div class="faint">' + esc(STR.trashEmpty) + '</div>') + '</div></section>' +
     '<section class="settingssec"><div class="one">' + esc(STR.themePrefs) + '</div><div class="chips"><button class="chipbtn' + (THEME_MODE === "os" ? ' on' : '') + '" onclick="setThemeMode(\'os\')">' + esc(STR.themeOs) + '</button><button class="chipbtn' + (THEME_MODE === "light" ? ' on' : '') + '" onclick="setThemeMode(\'light\')">' + esc(STR.themeLight) + '</button><button class="chipbtn' + (THEME_MODE === "dark" ? ' on' : '') + '" onclick="setThemeMode(\'dark\')">' + esc(STR.themeDark) + '</button></div></section>' +
     '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
 function renderMetaEditor(c){
-  return '<div class="field" style="margin-top:8px"><div class="fieldlabel">' + esc(STR.editMeta) + '</div>' +
+  return '<div class="field" style="margin-top:8px"><div class="fieldlabel">' + esc(STR.admissionDate) + '</div><div class="row wrap"><input class="date" type="date" value="' + esc(c.admittedAt || "") + '" onchange="updateCaseAdmittedAt(\'' + esc(c.id) + '\',this.value)"></div></div>' +
+    '<div class="field" style="margin-top:8px"><div class="fieldlabel">' + esc(STR.editMeta) + '</div>' +
     '<div class="chips">' +
       '<button class="chipbtn' + (!c.ageBand ? ' on' : '') + '" onclick="updateCaseAge(\'' + esc(c.id) + '\',\'\')">' + esc(STR.unset) + '</button>' +
       STR.ageBands.map(function(age){
@@ -3052,6 +3397,23 @@ function renderSeedList(c){
   }).join('');
 }
 
+function renderApptList(c){
+  return cloneArr(c.appts).sort(function(a, b){
+    return String(a.date || "").localeCompare(String(b.date || "")) || String(a.text || "").localeCompare(String(b.text || ""));
+  }).map(function(item){
+    return '<div class="lineitem"><label class="row" style="flex:1" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleAppt(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div><div class="row wrap" style="margin-top:6px"><span class="fieldlabel">' + esc(weekHeaderLabel(item.date)) + '</span><span class="badge">' + esc(STR.apptKinds[item.kind] || STR.apptKinds.other) + '</span></div></div></label><button class="iconbtn" onclick="deleteAppt(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">\u00d7</button></div>';
+  }).join('');
+}
+
+function renderApptSection(c){
+  return '<section class="panelcard"><div class="one">' + esc(STR.apptSection) + '</div><div class="stack" style="margin-top:10px">' +
+    (renderApptList(c) || '<div class="faint">-</div>') +
+    '<div class="stack"><div class="row wrap"><input id="detailApptDate" class="date" type="date" value="' + esc(todayISO()) + '"><select id="detailApptKind" class="input" style="width:auto">' + Object.keys(STR.apptKinds).map(function(kind){
+      return '<option value="' + esc(kind) + '">' + esc(STR.apptKinds[kind]) + '</option>';
+    }).join('') + '</select></div><div class="row"><input id="detailApptText" class="input" placeholder="' + esc(STR.apptSection) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addDetailAppt(\'' + esc(c.id) + '\')}"><button class="ghostbtn" onclick="addDetailAppt(\'' + esc(c.id) + '\')">+</button></div></div>' +
+  '</div></section>';
+}
+
 function renderSectionCard(title, body, addId, placeholder, addFn, caseId){
   return '<section class="panelcard"><div class="one">' + esc(title) + '</div><div class="stack" style="margin-top:10px">' +
     (body || '<div class="faint">-</div>') +
@@ -3078,6 +3440,7 @@ function renderDetail(caseId){
     '</div></section>' +
     '<section class="panelcard"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
     renderSectionCard(DB.config.labels.next, renderNextList(c), "nextInput", STR.nextPh, "addNext", c.id) +
+    renderApptSection(c) +
     renderSectionCard(DB.config.labels.today, renderTodoList(c), "todoInput", STR.todayPh, "addTodo", c.id) +
     renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id) +
     renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id) +
@@ -3132,6 +3495,7 @@ function renderAdmissionSheet(){
     '<div class="stack">' +
       '<div class="field"><input id="admLabelInput" class="input" value="' + esc(d.label || "") + '" placeholder="' + esc(STR.labelPh) + '" oninput="sheetTextInput(\'label\',this.value)" autofocus><div class="note">' + esc(STR.piiWarning) + '</div></div>' +
       '<div class="field"><input class="input" value="' + esc(d.phaseNote || "") + '" placeholder="' + esc(STR.firstNotePh) + '" oninput="sheetTextInput(\'phaseNote\',this.value)"></div>' +
+      '<div class="field"><div class="fieldlabel">' + esc(STR.admissionDate) + '</div><input class="date" type="date" value="' + esc(d.admittedAt || todayISO()) + '" oninput="sheetTextInput(\'admittedAt\',this.value)"></div>' +
       '<div class="field"><div class="fieldlabel">' + esc(STR.editMeta) + '</div><div class="chips"><button class="chipbtn' + (!d.ageBand ? ' on' : '') + '" onclick="pickAdmissionAge(\'\')">' + esc(STR.unset) + '</button>' +
         STR.ageBands.map(function(age){ return '<button class="chipbtn' + (d.ageBand === age ? ' on' : '') + '" onclick="pickAdmissionAge(\'' + esc(age) + '\')">' + esc(age) + '</button>'; }).join('') +
       '</div></div>' +
@@ -3191,12 +3555,12 @@ function renderSheet(){
 
 renderBoard = function(){
   var cases = boardCases();
-  var week = buildWeekGrid(DB.cases, todayISO());
+  var week = buildWeekGrid(DB.cases, todayISO(), VIEW.weekPast, VIEW.weekFuture);
   var body = VIEW.boardMode === "week"
-    ? '<div class="weekwrap"><table class="weekgrid"><thead><tr><th class="sticky">Case</th>' + week.dates.map(function(date){
-      return '<th class="' + (date === week.today ? 'todaycol' : '') + '">' + esc(date.slice(5)) + '</th>';
+    ? '<div id="weekWrap" class="weekwrap"><table class="weekgrid"><thead><tr><th class="sticky">Case</th>' + week.dates.map(function(date){
+      return '<th class="' + esc(weekHeaderClass(date, week.today)) + '">' + esc(weekHeaderLabel(date)) + '</th>';
     }).join('') + '</tr></thead><tbody>' + week.rows.map(function(row){
-      return '<tr><th class="sticky">' + esc(row.case.label) + ' D' + computeDay(row.case.admittedAt, todayISO()) + '</th>' + week.dates.map(function(date){
+      return '<tr><th class="sticky casecell" onclick="openDetail(\'' + esc(row.case.id) + '\')">' + esc(row.case.label) + ' D' + computeDay(row.case.admittedAt, todayISO()) + '</th>' + week.dates.map(function(date){
         var cell = row.dates[date];
         var bandColor = cell.stageId ? stageById(cell.stageId).color : "transparent";
         return '<td class="' + (date === week.today ? 'todaycol' : '') + '" onclick="openApptCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="markerstack">' + cell.markers.slice(0, 2).map(function(marker){
@@ -3211,7 +3575,7 @@ renderBoard = function(){
       }).join('') +
       '<div class="dropzone' + (DND.hoverIndex === cases.length ? ' on' : '') + '" onpointerenter="hoverDrop(' + cases.length + ')" onpointerup="dropReorder(' + cases.length + ')"></div>' +
     '</div>' : '<div class="empty">' + esc(STR.emptyBoard) + '</div>');
-  return '<section class="screen"><div class="seg"><button class="chipbtn' + (VIEW.boardMode !== "week" ? ' on' : '') + '" onclick="VIEW.boardMode=\'board\';render()">' + esc(STR.boardView) + '</button><button class="chipbtn' + (VIEW.boardMode === "week" ? ' on' : '') + '" onclick="VIEW.boardMode=\'week\';render()">' + esc(STR.weekView) + '</button></div>' + body +
+  return '<section class="screen"><div class="seg"><button class="chipbtn' + (VIEW.boardMode !== "week" ? ' on' : '') + '" onclick="setBoardMode(\'board\')">' + esc(STR.boardView) + '</button><button class="chipbtn' + (VIEW.boardMode === "week" ? ' on' : '') + '" onclick="setBoardMode(\'week\')">' + esc(STR.weekView) + '</button></div>' + body +
   '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openReview()">' + esc(STR.review) + '</button></div><div class="row wrap" style="margin-top:8px"><button class="ghostbtn smallbtn" onclick="openSyncSheet()"><span data-sync-status>' + esc(syncStatusLabel()) + '</span></button><button class="ghostbtn smallbtn" onclick="openDataSheet()">' + esc(STR.dataRow) + '</button><button class="ghostbtn smallbtn" onclick="openSearch()">' + esc(STR.searchRow) + '</button><button class="ghostbtn smallbtn" onclick="openSettingsSheet()">' + esc(STR.settingsRow) + '</button></div></div></div>';
 };
 
@@ -3263,6 +3627,7 @@ renderDetail = function(caseId){
     '<section class="panelcard"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
     (dischargeInline ? dischargePanel : '') +
     renderSectionCard(DB.config.labels.next, renderNextList(c), "nextInput", STR.nextPh, "addNext", c.id) +
+    renderApptSection(c) +
     renderSectionCard(DB.config.labels.today, renderTodoList(c), "todoInput", STR.todayPh, "addTodo", c.id) +
     renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id) +
     renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id) +
@@ -3342,6 +3707,7 @@ function render(){
   var html = renderTopbar() + body;
   app.innerHTML = html;
   renderSheet();
+  ensureWeekWrapBehavior();
   flushQueuedFocus();
   return html;
 }
