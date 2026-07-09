@@ -455,6 +455,9 @@ function chartDates(c, todayIso){
     if (item.startDate && item.startDate > end) end = item.startDate;
     if (item.endDate && item.endDate > end) end = item.endDate;
     if (item.date && item.date > end) end = item.date;
+    Object.keys(isObj(item.planned) ? item.planned : {}).forEach(function(d){
+      if (d > end) end = d;
+    });
   });
   if (c && c.discharge && c.discharge.plannedOn && c.discharge.plannedOn > end) end = c.discharge.plannedOn;
   if (c && c.dischargedAt && c.dischargedAt > end) end = c.dischargedAt;
@@ -721,6 +724,30 @@ function entriesReconcileLocal(c, nowIso, todayIso){
   }
   return changed;
 }
+// MAR-style overdue = computed, never stored: a planned event whose date has
+// passed, or a value-row plan date with no value entered. Stays visible on the
+// today column / day view until explicitly resolved (done / move / cancel).
+function overdueEntries(c, todayIso){
+  var out = [];
+  cloneArr(c && c.chart && c.chart.items).forEach(function(item){
+    if (!item) return;
+    if (item.kind === "event" && item.status === "planned" && item.date && item.date < todayIso) {
+      out.push({ id:item.id, kind:"event", catId:item.catId, name:item.name, date:item.date });
+    }
+    if (item.kind === "value") {
+      Object.keys(isObj(item.planned) ? item.planned : {}).forEach(function(d){
+        if (d < todayIso && !(isObj(item.values) && item.values[d])) {
+          out.push({ id:item.id, kind:"valuePlan", catId:item.catId, name:item.name, date:d });
+        }
+      });
+    }
+  });
+  return out.sort(function(a, b){
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+}
+
 // Element-level LWW merge. Per-entry updatedAt is the truth; ties prefer the
 // tombstone, then a deterministic symmetric content tiebreak. Output is in
 // canonical order so both devices serialize identically (no dirty ping-pong).
@@ -1552,6 +1579,7 @@ if (typeof module !== "undefined") {
     entryFoldMirrors:entryFoldMirrors,
     entriesReconcileLocal:entriesReconcileLocal,
     mergeEntries:mergeEntries,
+    overdueEntries:overdueEntries,
     entrySortCanonical:entrySortCanonical,
     entryContentKey:entryContentKey,
     entryCtx:entryCtx
@@ -3438,6 +3466,62 @@ function addChartEventItem(){
   renderSheet();
   queueFocusTarget("chartEventInput", false);
   flushQueuedFocus();
+}
+
+// ---- MAR-style plan resolution (SPEC-F) ----
+function toggleEventDone(caseId, itemId, onDate){
+  mutateCase(caseId, function(c){
+    c.chart = normalizeChart(c.chart);
+    var item = c.chart.items.find(function(row){ return row.id === itemId; });
+    if (!item || item.kind !== "event") return;
+    if (item.status === "planned") {
+      item.status = "done";
+      // Resolving an overdue plan records the actual done date, not the planned one.
+      if (onDate) item.date = onDate;
+    } else {
+      item.status = "planned";
+    }
+  });
+}
+
+function rescheduleChartEntry(caseId, itemId, fromDate, newDate){
+  var next = safeDate(newDate, "");
+  if (!next) return;
+  mutateCase(caseId, function(c){
+    c.chart = normalizeChart(c.chart);
+    var item = c.chart.items.find(function(row){ return row.id === itemId; });
+    if (!item) return;
+    if (item.kind === "event") {
+      item.date = next;
+      item.status = "planned";
+    } else if (item.kind === "value") {
+      item.planned = isObj(item.planned) ? item.planned : {};
+      if (fromDate) delete item.planned[fromDate];
+      item.planned[next] = true;
+    }
+  });
+  closeSheet();
+}
+
+// Cancel for a planned EVENT is the normal delete flow (trash + tombstone);
+// a value-row plan is just a mark, so cancelling clears that one date.
+function cancelValuePlan(caseId, itemId, date){
+  mutateCase(caseId, function(c){
+    c.chart = normalizeChart(c.chart);
+    var item = c.chart.items.find(function(row){ return row.id === itemId; });
+    if (!item || item.kind !== "value" || !isObj(item.planned)) return;
+    delete item.planned[date];
+  });
+}
+
+function addValuePlan(caseId, itemId, date){
+  mutateCase(caseId, function(c){
+    c.chart = normalizeChart(c.chart);
+    var item = c.chart.items.find(function(row){ return row.id === itemId; });
+    if (!item || item.kind !== "value") return;
+    item.planned = isObj(item.planned) ? item.planned : {};
+    item.planned[date] = true;
+  });
 }
 
 function formatSeedSnapshot(seed){

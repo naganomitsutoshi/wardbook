@@ -634,5 +634,32 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   const mergedND = L.mergeEntries(caseA2.entries, caseB3.entries);
   assert.strictEqual(mergedND.find((e) => e.id === "a1").kind, "tombstone");
 
+  // ---- SPEC-F MAR state model ---------------------------------------------
+
+  const marCase = {
+    chart:{ items:[
+      { id:"e1", catId:"cat-ic", kind:"event", name:"IC", date:"2026-07-05", status:"planned" },
+      { id:"e2", catId:"cat-ic", kind:"event", name:"done-past", date:"2026-07-05", status:"done" },
+      { id:"e3", catId:"cat-ic", kind:"event", name:"future", date:"2026-07-10", status:"planned" },
+      { id:"v1", catId:"cat-lab", kind:"value", name:"echo", values:{}, planned:{ "2026-07-06":true } },
+      { id:"v2", catId:"cat-lab", kind:"value", name:"cbc", values:{ "2026-07-06":"ok" }, planned:{ "2026-07-06":true } },
+      { id:"v3", catId:"cat-lab", kind:"value", name:"today-plan", values:{}, planned:{ "2026-07-08":true } }
+    ] }
+  };
+  const overdue = L.overdueEntries(marCase, "2026-07-08");
+  assert.strictEqual(overdue.map((x) => x.id).join(","), "e1,v1");
+  assert.strictEqual(overdue[0].kind, "event");
+  assert.strictEqual(overdue[1].kind, "valuePlan");
+  // chartDates extends to future planned dates.
+  const planDates = L.chartDates({ admittedAt:"2026-07-01", chart:{ items:[
+    { id:"v9", catId:"cat-lab", kind:"value", name:"x", values:{}, planned:{ "2026-07-15":true } }
+  ] } }, "2026-07-08");
+  assert.strictEqual(planDates[planDates.length - 1], "2026-07-15");
+  // Round-trip: status/planned survive normalizeCase + entries rebuild.
+  const marNorm = L.normalizeCase({ id:"m1", label:"m", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-08T00:00:00.000Z", chart:marCase.chart }, "2026-07-08T00:00:00.000Z", "2026-07-08");
+  assert.strictEqual(marNorm.chart.items.find((x) => x.id === "e1").status, "planned");
+  assert.strictEqual(JSON.stringify(marNorm.chart.items.find((x) => x.id === "v1").planned), JSON.stringify({ "2026-07-06":true }));
+  assert.strictEqual(marNorm.entries.find((x) => x.id === "e1").status, "planned");
+
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));
