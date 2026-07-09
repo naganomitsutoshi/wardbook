@@ -422,6 +422,14 @@ function normalizeChart(raw){
         if (/^\d{4}-\d{2}-\d{2}$/.test(date) && String(row.values[date])) values[date] = String(row.values[date]);
       });
       out.values = values;
+      // MAR-style plan marks (SPEC-F): planned[date]=true until a value for
+      // that date is entered. Old devices drop this field; accepted (their
+      // edits do not propagate during the mixed-version window anyway).
+      var planned = {};
+      Object.keys(isObj(row.planned) ? row.planned : {}).forEach(function(date){
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date) && row.planned[date]) planned[date] = true;
+      });
+      out.planned = planned;
     } else if (kind === "band") {
       var startDate = safeDate(row.startDate, "");
       if (!startDate || !out.name) return null;
@@ -431,6 +439,8 @@ function normalizeChart(raw){
       var date = safeDate(row.date, "");
       if (!date || !out.name) return null;
       out.date = date;
+      // Events default to done: every pre-SPEC-F event was a recorded fact.
+      out.status = row.status === "planned" ? "planned" : "done";
     }
     return out;
   }).filter(Boolean);
@@ -497,6 +507,221 @@ function computeDay(admittedAt, todayIso){
   var diff = Math.floor((end - start) / 86400000) + 1;
   return diff < 1 ? 1 : diff;
 }
+
+// ---- Unified dated-entry store (SPEC-F) ----------------------------------
+// c.entries is the sync source of truth for every list element (next / todo /
+// pending / seed / chart items). The legacy collections stay on the case as
+// MIRRORS: rebuilt from entries on every normalize, re-absorbed into entries
+// (with fresh element timestamps) at each local write boundary. Element
+// tombstones live in the same array so one merge covers add/edit/delete.
+
+var ENTRY_TOMBSTONE_TTL_MS = 60 * 24 * 60 * 60 * 1000; // > trash TTL (7d) on purpose
+
+function entryCtx(c, nowIso, todayIso){
+  return {
+    nowIso: nowIso,
+    todayIso: todayIso,
+    label: (c && c.label) || "",
+    admittedAt: (c && c.admittedAt) || todayIso,
+    phaseNote: (c && c.phaseNote) || "",
+    lastTouchedAt: (c && typeof c.lastTouchedAt === "string" && c.lastTouchedAt) ? c.lastTouchedAt : nowIso
+  };
+}
+
+// Content only (no createdAt/updatedAt), fixed key order per kind so that
+// JSON.stringify is a stable content signature. Returns null when invalid —
+// same validation rules as the mirror normalizers above.
+function normalizeEntryContent(raw, ctx){
+  var row = isObj(raw) ? raw : {};
+  var id = typeof row.id === "string" && row.id ? row.id : "";
+  if (!id) return null;
+  var text = typeof row.text === "string" ? row.text : "";
+  if (row.kind === "next") {
+    var due = row.due === null || row.due === undefined ? null : safeDate(row.due, null);
+    if (!text && !due) return null;
+    return { kind:"next", id:id, text:text, due:due };
+  }
+  if (row.kind === "todo") {
+    if (!text) return null;
+    return { kind:"todo", id:id, text:text, done:row.done === true, createdOn:safeDate(row.createdOn, ctx.todayIso) };
+  }
+  if (row.kind === "pending") {
+    if (!text) return null;
+    var backOn = row.backOn === null || row.backOn === undefined ? null : safeDate(row.backOn, null);
+    return { kind:"pending", id:id, text:text, backOn:backOn };
+  }
+  if (row.kind === "seed") {
+    if (!text) return null;
+    var snap = isObj(row.snapshot) ? row.snapshot : {};
+    return {
+      kind:"seed", id:id, text:text,
+      createdOn: safeDate(row.createdOn, ctx.todayIso),
+      snapshot: {
+        label: typeof snap.label === "string" ? snap.label : ctx.label,
+        day: Number.isFinite(Number(snap.day)) ? Number(snap.day) : computeDay(ctx.admittedAt, ctx.todayIso),
+        stageName: typeof snap.stageName === "string" ? snap.stageName : "",
+        phaseNote: typeof snap.phaseNote === "string" ? snap.phaseNote : ctx.phaseNote
+      },
+      sentAt: typeof row.sentAt === "string" ? row.sentAt : null
+    };
+  }
+  if (row.kind === "chartValue" || row.kind === "chartBand" || row.kind === "chartEvent") {
+    var catId = typeof row.catId === "string" && row.catId ? row.catId : "";
+    var name = typeof row.name === "string" ? row.name : "";
+    if (!catId || !name) return null;
+    if (row.kind === "chartValue") {
+      var values = {};
+      Object.keys(isObj(row.values) ? row.values : {}).forEach(function(date){
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date) && String(row.values[date])) values[date] = String(row.values[date]);
+      });
+      var planned = {};
+      Object.keys(isObj(row.planned) ? row.planned : {}).forEach(function(date){
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date) && row.planned[date]) planned[date] = true;
+      });
+      return { kind:"chartValue", id:id, catId:catId, name:name, values:values, planned:planned };
+    }
+    if (row.kind === "chartBand") {
+      var startDate = safeDate(row.startDate, "");
+      if (!startDate) return null;
+      return { kind:"chartBand", id:id, catId:catId, name:name, startDate:startDate, endDate:row.endDate == null ? null : safeDate(row.endDate, null) };
+    }
+    var date = safeDate(row.date, "");
+    if (!date) return null;
+    return { kind:"chartEvent", id:id, catId:catId, name:name, date:date, status:row.status === "planned" ? "planned" : "done" };
+  }
+  return null;
+}
+
+function entryContentKey(entry){
+  var copy = {};
+  Object.keys(entry).forEach(function(k){
+    if (k !== "createdAt" && k !== "updatedAt") copy[k] = entry[k];
+  });
+  return JSON.stringify(copy);
+}
+
+// Canonical order (createdAt, id). Merge output MUST be identically ordered on
+// every device or the JSON dirty-check ping-pongs pushes forever.
+function entrySortCanonical(list){
+  return cloneArr(list).sort(function(a, b){
+    if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+}
+
+function normalizeEntries(raw, ctx){
+  var stamp = ctx.lastTouchedAt || ctx.nowIso;
+  var cutoff = Date.parse(ctx.nowIso) - ENTRY_TOMBSTONE_TTL_MS;
+  var seen = {};
+  var list = cloneArr(raw).map(function(e){
+    var row = isObj(e) ? e : {};
+    var id = typeof row.id === "string" && row.id ? row.id : "";
+    if (!id || seen[id]) return null;
+    seen[id] = true;
+    var out;
+    if (row.kind === "tombstone") {
+      var deletedAt = typeof row.deletedAt === "string" && row.deletedAt ? row.deletedAt : stamp;
+      if (Number.isFinite(cutoff) && Date.parse(deletedAt) < cutoff) return null;
+      out = { kind:"tombstone", id:id, deletedAt:deletedAt };
+    } else {
+      out = normalizeEntryContent(row, ctx);
+      if (!out) return null;
+    }
+    out.createdAt = typeof row.createdAt === "string" && row.createdAt ? row.createdAt : stamp;
+    out.updatedAt = typeof row.updatedAt === "string" && row.updatedAt ? row.updatedAt : stamp;
+    return out;
+  }).filter(Boolean);
+  return entrySortCanonical(list);
+}
+
+// Mirror collections -> entry content list (no timestamps).
+function entriesFromMirrors(c, ctx){
+  var rows = [];
+  cloneArr(c && c.next).forEach(function(x){ rows.push({ kind:"next", id:x.id, text:x.text, due:x.due }); });
+  cloneArr(c && c.todos).forEach(function(x){ rows.push({ kind:"todo", id:x.id, text:x.text, done:x.done, createdOn:x.createdOn }); });
+  cloneArr(c && c.pendings).forEach(function(x){ rows.push({ kind:"pending", id:x.id, text:x.text, backOn:x.backOn }); });
+  cloneArr(c && c.seeds).forEach(function(x){ rows.push({ kind:"seed", id:x.id, text:x.text, createdOn:x.createdOn, snapshot:x.snapshot, sentAt:x.sentAt }); });
+  cloneArr(c && c.chart && c.chart.items).forEach(function(x){
+    var kind = x.kind === "band" ? "chartBand" : x.kind === "event" ? "chartEvent" : "chartValue";
+    var row = { kind:kind, id:x.id, catId:x.catId, name:x.name };
+    if (kind === "chartValue") { row.values = x.values; row.planned = x.planned; }
+    else if (kind === "chartBand") { row.startDate = x.startDate; row.endDate = x.endDate; }
+    else { row.date = x.date; row.status = x.status; }
+    rows.push(row);
+  });
+  return rows.map(function(r){ return normalizeEntryContent(r, ctx); }).filter(Boolean);
+}
+
+// Entries -> mirror collections. Entries win: anything not present here
+// disappears from the mirrors (deletions), entry-only fields ride along.
+function entryRebuildMirrors(c){
+  var live = cloneArr(c.entries).filter(function(e){ return e.kind !== "tombstone"; });
+  c.next = live.filter(function(e){ return e.kind === "next"; }).map(function(e){ return { id:e.id, text:e.text, due:e.due }; });
+  c.todos = live.filter(function(e){ return e.kind === "todo"; }).map(function(e){ return { id:e.id, text:e.text, done:e.done, createdOn:e.createdOn }; });
+  c.pendings = live.filter(function(e){ return e.kind === "pending"; }).map(function(e){ return { id:e.id, text:e.text, backOn:e.backOn }; });
+  c.seeds = live.filter(function(e){ return e.kind === "seed"; }).map(function(e){
+    return { id:e.id, text:e.text, createdOn:e.createdOn, snapshot:JSON.parse(JSON.stringify(e.snapshot)), sentAt:e.sentAt };
+  });
+  c.chart = { items: live.filter(function(e){ return e.kind === "chartValue" || e.kind === "chartBand" || e.kind === "chartEvent"; }).map(function(e){
+    if (e.kind === "chartValue") return { id:e.id, catId:e.catId, kind:"value", name:e.name, values:JSON.parse(JSON.stringify(e.values)), planned:JSON.parse(JSON.stringify(e.planned)) };
+    if (e.kind === "chartBand") return { id:e.id, catId:e.catId, kind:"band", name:e.name, startDate:e.startDate, endDate:e.endDate };
+    return { id:e.id, catId:e.catId, kind:"event", name:e.name, date:e.date, status:e.status };
+  }) };
+}
+
+// Additions-only fold-in: mirror elements unknown to entries are adopted with
+// deterministic timestamps derived from lastTouchedAt (+index ms keeps the
+// original list order under the canonical sort). This is both the one-time
+// legacy migration and the mixed-version path for old-device additions;
+// old-device edits/deletions intentionally do not propagate (SPEC-F).
+function entryFoldMirrors(c, ctx){
+  var have = {};
+  cloneArr(c.entries).forEach(function(e){ have[e.id] = true; });
+  var base = Date.parse(ctx.lastTouchedAt);
+  if (!Number.isFinite(base)) base = Date.parse(ctx.nowIso);
+  var adds = [];
+  entriesFromMirrors(c, ctx).forEach(function(content, idx){
+    if (have[content.id]) return;
+    have[content.id] = true;
+    content.createdAt = new Date(base + idx).toISOString();
+    content.updatedAt = content.createdAt;
+    adds.push(content);
+  });
+  if (adds.length) c.entries = entrySortCanonical(cloneArr(c.entries).concat(adds));
+}
+
+// Local write boundary: the mutators edit the mirrors; this absorbs the diff
+// into entries (adds/edits stamped now, disappearances tombstoned, content
+// re-added over a local tombstone = restore wins) and re-derives the mirrors.
+function entriesReconcileLocal(c, nowIso, todayIso){
+  var ctx = entryCtx(c, nowIso, todayIso);
+  var current = {};
+  cloneArr(c.entries).forEach(function(e){ current[e.id] = e; });
+  var derivedIds = {};
+  var changed = false;
+  var base = Date.parse(nowIso);
+  var offset = 0;
+  entriesFromMirrors(c, ctx).forEach(function(content){
+    derivedIds[content.id] = true;
+    var prev = current[content.id];
+    if (prev && prev.kind !== "tombstone" && entryContentKey(prev) === entryContentKey(content)) return;
+    content.createdAt = prev && prev.kind !== "tombstone" ? prev.createdAt : new Date(base + (offset++)).toISOString();
+    content.updatedAt = nowIso;
+    current[content.id] = content;
+    changed = true;
+  });
+  cloneArr(c.entries).forEach(function(e){
+    if (e.kind === "tombstone" || derivedIds[e.id]) return;
+    current[e.id] = { kind:"tombstone", id:e.id, deletedAt:nowIso, createdAt:e.createdAt, updatedAt:nowIso };
+    changed = true;
+  });
+  if (changed) {
+    c.entries = entrySortCanonical(Object.keys(current).map(function(k){ return current[k]; }));
+    entryRebuildMirrors(c);
+  }
+  return changed;
+}
+// ---- end unified entry store ---------------------------------------------
 
 function normalizeCase(raw, nowIso, todayIso){
   var src = isObj(raw) ? raw : {};
@@ -567,6 +792,13 @@ function normalizeCase(raw, nowIso, todayIso){
   // Removed feature (2026-07-09): purge appts so old local/remote payloads
   // cannot re-introduce them through the unknown-key passthrough above.
   delete out.appts;
+  // SPEC-F: entries is the source of truth; the collections above are mirrors.
+  // Fold in mirror-only elements (legacy migration / old-device additions),
+  // then re-derive the mirrors so entry-side deletions and fields win.
+  var ectx = entryCtx(out, nowIso, todayIso);
+  out.entries = normalizeEntries(src.entries, ectx);
+  entryFoldMirrors(out, ectx);
+  entryRebuildMirrors(out);
   return out;
 }
 
@@ -1271,7 +1503,16 @@ if (typeof module !== "undefined") {
     syncReconcileConfig:syncReconcileConfig,
     syncClearConfigDirty:syncClearConfigDirty,
     statsSummary:statsSummary,
-    buildOutboxBatch:buildOutboxBatch
+    buildOutboxBatch:buildOutboxBatch,
+    normalizeEntries:normalizeEntries,
+    normalizeEntryContent:normalizeEntryContent,
+    entriesFromMirrors:entriesFromMirrors,
+    entryRebuildMirrors:entryRebuildMirrors,
+    entryFoldMirrors:entryFoldMirrors,
+    entriesReconcileLocal:entriesReconcileLocal,
+    entrySortCanonical:entrySortCanonical,
+    entryContentKey:entryContentKey,
+    entryCtx:entryCtx
   };
 }
 </script>
@@ -1892,7 +2133,11 @@ async function syncSendOutboxIfNeeded(source){
         return Object.assign({}, seed, { sentAt:sentIso });
       });
       if (!touched) return c;
-      return Object.assign({}, c, { seeds:nextSeeds, lastTouchedAt:c.lastTouchedAt });
+      var updated = Object.assign({}, c, { seeds:nextSeeds, lastTouchedAt:c.lastTouchedAt });
+      // sentAt is a mirror edit outside mutateCase: absorb it into entries so
+      // the stamp survives the next normalize and syncs element-wise.
+      entriesReconcileLocal(updated, sentIso, todayISO());
+      return updated;
     });
     saveState();
     syncAfterSave();
@@ -2234,6 +2479,9 @@ function mutateCase(caseId, fn){
   fn(target);
   touch(target);
   target.todos = rolloverTodos(target, todayISO());
+  // Absorb the mirror edits into the entries store (SPEC-F) so element-level
+  // timestamps exist before this change is pushed by the sync engine.
+  entriesReconcileLocal(target, nowISO(), todayISO());
   persist();
 }
 

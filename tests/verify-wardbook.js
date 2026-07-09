@@ -468,5 +468,85 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(batch.seeds.map((x) => x.seedId).join(","), "s1,s3");
   assert.strictEqual(batch.stats.openedDays, 1);
 
+  // ---- SPEC-F unified entry store ----------------------------------------
+
+  ["normalizeEntries", "entriesFromMirrors", "entryRebuildMirrors", "entryFoldMirrors",
+   "entriesReconcileLocal", "entrySortCanonical", "entryContentKey", "entryCtx"].forEach((name) => {
+    if (typeof L[name] !== "function") fail("missing entry export " + name);
+  });
+
+  const legacyCase = {
+    id:"c1", label:"haien", admittedAt:"2026-07-01", status:"active", lastTouchedAt:"2026-07-05T10:00:00.000Z",
+    next:[{ id:"n1", text:"abx", due:"2026-07-10" }],
+    todos:[{ id:"t1", text:"lab", done:false, createdOn:"2026-07-05" }],
+    pendings:[{ id:"p1", text:"echo", backOn:"2026-07-09" }],
+    seeds:[{ id:"s1", text:"seed", createdOn:"2026-07-05", snapshot:{ label:"haien", day:5, stageName:"", phaseNote:"" }, sentAt:null }],
+    chart:{ items:[
+      { id:"cv1", catId:"cat-vital", kind:"value", name:"BT", values:{ "2026-07-05":"37.0" } },
+      { id:"cb1", catId:"cat-med", kind:"band", name:"CTRX", startDate:"2026-07-01", endDate:null },
+      { id:"ce1", catId:"cat-ic", kind:"event", name:"IC", date:"2026-07-03" }
+    ] }
+  };
+  // Migration: legacy fields fold into entries with lastTouchedAt-based stamps.
+  const migrated = L.normalizeCase(JSON.parse(JSON.stringify(legacyCase)), "2026-07-08T10:00:00.000Z", "2026-07-08");
+  assert.strictEqual(migrated.entries.length, 7);
+  assert.strictEqual(migrated.entries.every((e) => e.createdAt && e.updatedAt), true);
+  assert.strictEqual(migrated.entries.find((e) => e.id === "ce1").status, "done");
+  assert.strictEqual(JSON.stringify(migrated.entries.find((e) => e.id === "cv1").planned), "{}");
+  // Mirrors agree with entries after rebuild.
+  assert.strictEqual(migrated.next.length, 1);
+  assert.strictEqual(migrated.chart.items.length, 3);
+  // Idempotent: normalizing the migrated case again changes nothing.
+  const migratedTwice = L.normalizeCase(JSON.parse(JSON.stringify(migrated)), "2026-07-08T11:00:00.000Z", "2026-07-08");
+  assert.strictEqual(JSON.stringify(migratedTwice), JSON.stringify(migrated));
+
+  // Entries win over stale mirrors: a mirror element absent from entries with a
+  // known id is NOT resurrected... additions (unknown id) ARE folded in.
+  const mixed = JSON.parse(JSON.stringify(migrated));
+  mixed.next.push({ id:"n2", text:"old-device-add", due:null });          // addition -> folds in
+  mixed.todos = [];                                                        // old-device delete -> ignored
+  mixed.entries.find((e) => e.id === "n1").text = "entry-truth";          // entries text wins over mirror
+  const folded = L.normalizeCase(mixed, "2026-07-08T12:00:00.000Z", "2026-07-08");
+  assert.strictEqual(folded.next.map((x) => x.id).sort().join(","), "n1,n2");
+  assert.strictEqual(folded.next.find((x) => x.id === "n1").text, "entry-truth");
+  assert.strictEqual(folded.todos.length, 1); // t1 restored from entries
+
+  // Local write boundary: edits stamp updatedAt, disappearances tombstone,
+  // re-adding content over a local tombstone resurrects it.
+  const localCase = JSON.parse(JSON.stringify(migrated));
+  localCase.next[0].text = "changed";
+  localCase.pendings = [];
+  let changed = L.entriesReconcileLocal(localCase, "2026-07-08T13:00:00.000Z", "2026-07-08");
+  assert.strictEqual(changed, true);
+  const n1 = localCase.entries.find((e) => e.id === "n1");
+  assert.strictEqual(n1.text, "changed");
+  assert.strictEqual(n1.updatedAt, "2026-07-08T13:00:00.000Z");
+  const p1t = localCase.entries.find((e) => e.id === "p1");
+  assert.strictEqual(p1t.kind, "tombstone");
+  assert.strictEqual(p1t.deletedAt, "2026-07-08T13:00:00.000Z");
+  assert.strictEqual(localCase.pendings.length, 0);
+  // Resurrection via mirror re-add (trash restore path).
+  localCase.pendings.push({ id:"p1", text:"echo", backOn:"2026-07-09" });
+  L.entriesReconcileLocal(localCase, "2026-07-08T14:00:00.000Z", "2026-07-08");
+  assert.strictEqual(localCase.entries.find((e) => e.id === "p1").kind, "pending");
+  // No-op reconcile reports no change (dirty-loop guard).
+  assert.strictEqual(L.entriesReconcileLocal(localCase, "2026-07-08T15:00:00.000Z", "2026-07-08"), false);
+
+  // Tombstones older than 60 days purge; fresh ones survive.
+  const purgeCase = L.normalizeCase({
+    id:"c9", label:"x", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-08T00:00:00.000Z",
+    entries:[
+      { kind:"tombstone", id:"old", deletedAt:"2026-04-01T00:00:00.000Z", createdAt:"2026-04-01T00:00:00.000Z", updatedAt:"2026-04-01T00:00:00.000Z" },
+      { kind:"tombstone", id:"fresh", deletedAt:"2026-07-01T00:00:00.000Z", createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-01T00:00:00.000Z" }
+    ]
+  }, "2026-07-08T10:00:00.000Z", "2026-07-08");
+  assert.strictEqual(purgeCase.entries.map((e) => e.id).join(","), "fresh");
+
+  // Canonical order is stable regardless of input order.
+  const shuffled = JSON.parse(JSON.stringify(migrated));
+  shuffled.entries.reverse();
+  const reordered = L.normalizeCase(shuffled, "2026-07-08T16:00:00.000Z", "2026-07-08");
+  assert.strictEqual(JSON.stringify(reordered.entries.map((e) => e.id)), JSON.stringify(migrated.entries.map((e) => e.id)));
+
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));
