@@ -1,5 +1,10 @@
 # Wardbook — SPEC Phase D (discharge, dense chart, week view, search, gamification, customization, theme, PWA)
 
+> **SUPERSEDED IN PART:** section 1's `appts` model and section 4's appt markers were removed
+> in `da27072`; the week grid is today-anchored with infinite past scroll (`aef2570`) and now
+> projects the chart (SPEC-F): event chips, band bits, value-plan marks, overdue pinned on the
+> today column. Section 3 (chart) was replaced by SPEC-E, then extended by SPEC-F.
+
 Final M3 phase. Baseline = Phase A+B+C `index.html`; all existing tests must keep passing.
 **Read first:** `index.html`, SPEC-A/B/C, both app test files, and these Casebook v10 sources
 to port from (`../casebook/index.html`): `DC_ROUTINE` + `ensureCaseShape` (~535–660),

@@ -1,10 +1,12 @@
 # SPEC-F: Unified dated-entry model — week grid × progress chart × day view integration (2026-07-09)
 
-Status: **APPROVED, NOT YET IMPLEMENTED.** Implementation starts after the CEO's
-device QA of `aef2570` (checks A-H) and lands together with the sync redesign
-decisions (restore baseline reset / case tombstone `deletedAt` / element-wise
-merge / seed send timing) and the QA-review P1 fixes. Decided in the CEO
-design session 2026-07-09, informed by the EMR flowsheet/MAR research note
+Status: **IMPLEMENTED (2026-07-09).** Device QA of `aef2570` passed, then the
+whole batch landed as Phases 0-8: QA-review P1 fixes + seed send timing
+(Phase 0), unified entry store with mirrors (1-2), element-wise merge (3),
+MAR state model (4), week/day/chart projections and the dynamic cell menu
+(5-7), case tombstone `deletedAt` + backup-restore baseline reset (8).
+Decided in the CEO design session 2026-07-09, informed by the EMR
+flowsheet/MAR research note
 (Vault: 5_開発部/リサーチ/経過表×週間予定_既存カルテ調査_2026-07-09).
 
 ## Problem

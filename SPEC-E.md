@@ -1,5 +1,10 @@
 # SPEC-E: Progress chart, redesigned (2026-07-09)
 
+> **UPDATED (2026-07-09, SPEC-F):** chart items now live in the unified `c.entries` store and
+> merge ELEMENT-WISE (the "whole chart = one LWW field" note below is obsolete). Events gained
+> `status` (planned/done), value rows gained `planned` date marks, and the date header is a
+> fixed two-row D + M/D pair (the tap toggle was removed). SW cache is now v6.
+
 The original progress chart (SPEC-D section 3) was fully removed in commit
 `da27072` as a deliberate design reset. This spec reintroduces the feature with
 a generalized, user-extensible row model. Decisions confirmed with the CEO:

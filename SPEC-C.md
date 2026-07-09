@@ -1,5 +1,10 @@
 # Wardbook — SPEC Phase C (E2E sync port, seed outbox, PC collector, instruments)
 
+> **UPDATED (2026-07-09, SPEC-F):** seed sending now happens ONLY on review completion and
+> at boot (the per-sync send was removed). Case list fields merge element-wise via
+> `mergeEntries`; case tombstones carry `deletedAt` (delete vs newer edit = edit wins);
+> backup restore resets the sync baseline. Details in SPEC-F.
+
 Phase C adds networked features. Baseline = Phase A+B `index.html` (all existing tests must
 keep passing). **Read first:** `index.html`, `SPEC-A.md`, `SPEC-B.md`, both test files, and the
 Casebook v10 sync engine this phase ports: `../casebook/index.html` — pure sync logic at

@@ -1341,7 +1341,9 @@ function syncNoteLocalChanges(data, state, nowIso){
       delete state.snap[id];
       delete state.mt[id];
       if(state.restored) delete state.restored[id];
-      state.tombstones[id] = true;
+      // Design session 2026-07-09 decision 3: tombstones carry their deletion
+      // time so "delete vs later edit" resolves by newest-wins like everything else.
+      state.tombstones[id] = nowIso;
       state.dirty[id] = true;
     }
   });
@@ -1377,7 +1379,20 @@ function syncReconcile(data, state, remoteList, nowIso){
         state.dirty[r.id] = true;
         return;
       }
-      state.tombstones[r.id] = true;
+      // Remote deletion vs local edits: when the tombstone carries a time and
+      // any local field edit is NEWER, the case survives and is pushed back
+      // (revival). Missing deletedAt = legacy doc = old delete-wins behavior.
+      if(byId[r.id] && typeof r.deletedAt === "string" && r.deletedAt){
+        var localNewest = "";
+        var mtMap = state.mt[r.id] || {};
+        Object.keys(mtMap).forEach(function(k){ if(mtMap[k] > localNewest) localNewest = mtMap[k]; });
+        if(!localNewest && byId[r.id].lastTouchedAt) localNewest = byId[r.id].lastTouchedAt;
+        if(localNewest > r.deletedAt){
+          state.dirty[r.id] = true;
+          return;
+        }
+      }
+      state.tombstones[r.id] = typeof r.deletedAt === "string" && r.deletedAt ? r.deletedAt : nowIso;
       delete state.dirty[r.id];
       delete state.snap[r.id];
       delete state.mt[r.id];
@@ -1390,7 +1405,15 @@ function syncReconcile(data, state, remoteList, nowIso){
       return;
     }
     if(state.tombstones[r.id]){
-      if(state.dirty[r.id]){ return; }
+      if(state.dirty[r.id]){
+        // Local deletion pending push vs a live remote: a remote edit NEWER
+        // than our deletion time wins and resurrects the case.
+        var delAt = typeof state.tombstones[r.id] === "string" ? state.tombstones[r.id] : "";
+        var remoteNewest = "";
+        Object.keys(r.mt || {}).forEach(function(k){ if(r.mt[k] > remoteNewest) remoteNewest = r.mt[k]; });
+        if(!(delAt && remoteNewest > delAt)){ return; }
+        delete state.dirty[r.id];
+      }
       delete state.tombstones[r.id];
     }
     var local = byId[r.id];
@@ -1421,7 +1444,7 @@ function syncReconcile(data, state, remoteList, nowIso){
   var pushes = [];
   Object.keys(state.dirty).forEach(function(id){
     if(state.tombstones[id]){
-      pushes.push({ id:id, deleted:true, case:null, mt:null });
+      pushes.push({ id:id, deleted:true, case:null, mt:null, deletedAt:typeof state.tombstones[id] === "string" ? state.tombstones[id] : null });
     }else if(byId[id]){
       pushes.push({ id:id, deleted:false, case:byId[id], mt:state.mt[id] || {} });
     }
@@ -2176,7 +2199,7 @@ async function syncPullCases(fb, uid){
   for (var i = 0; i < snap.docs.length; i += 1) {
     var d = snap.docs[i];
     var v = d.data();
-    if (v.deleted) { out.push({ id:d.id, deleted:true, case:null, mt:null }); continue; }
+    if (v.deleted) { out.push({ id:d.id, deleted:true, case:null, mt:null, deletedAt:typeof v.deletedAt === "string" ? v.deletedAt : null }); continue; }
     var payload = await syncDecryptJson(key, v.blob, v.iv);
     out.push({ id:d.id, deleted:false, case:payload.case, mt:payload.mt || {} });
   }
@@ -2198,7 +2221,9 @@ async function syncPushCases(fb, uid, pushes){
   for (var i = 0; i < pushes.length; i += 1) {
     var p = pushes[i];
     if (p.deleted) {
-      await fb.fs.setDoc(refs.caseDoc(p.id), { v:1, deleted:true, updatedAt:fb.fs.serverTimestamp() });
+      // deletedAt is a plain timestamp (no clinical content) - same class of
+      // metadata as updatedAt, needed for delete-vs-edit resolution.
+      await fb.fs.setDoc(refs.caseDoc(p.id), { v:1, deleted:true, deletedAt:p.deletedAt || null, updatedAt:fb.fs.serverTimestamp() });
     } else {
       var enc = await syncEncryptJson(key, { case:p.case, mt:p.mt });
       await fb.fs.setDoc(refs.caseDoc(p.id), { v:1, deleted:false, iv:enc.iv, blob:enc.blob, updatedAt:fb.fs.serverTimestamp() });
@@ -2848,9 +2873,19 @@ function restoreBackupFile(input){
       var parsed = JSON.parse(String(reader.result || "null"));
       if (typeof confirm === "function" && !confirm(STR.restoreConfirm)) return;
       DB = normalizeState(parsed);
+      // Design session 2026-07-09 decision 1: restore recovers THIS device only.
+      // Resetting the sync state makes the next sync a baseline (newer server
+      // data wins back; cases missing from the backup return from the server),
+      // and the restored flags keep these cases alive against remote tombstones.
+      if (SYNC && SYNC.enabled) {
+        SYNC.state = syncEmptyState();
+        DB.cases.forEach(function(c){ syncMarkRestored(SYNC.state, c.id); });
+        saveSync();
+      }
       saveState();
       render();
       closeSheet();
+      syncAfterSave();
     } catch (e) {}
   };
   reader.readAsText(file, "utf-8");

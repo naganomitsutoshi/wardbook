@@ -661,6 +661,65 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(JSON.stringify(marNorm.chart.items.find((x) => x.id === "v1").planned), JSON.stringify({ "2026-07-06":true }));
   assert.strictEqual(marNorm.entries.find((x) => x.id === "e1").status, "planned");
 
+  // ---- Case tombstone deletedAt (design decision 3) ------------------------
+
+  function freshDelFixture(){
+    const state = L.syncEmptyState();
+    const data = { cases:[L.normalizeCase({ id:"cd", label:"live", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-08T12:00:00.000Z" }, "2026-07-08T12:00:00.000Z", "2026-07-08")], config:JSON.parse(JSON.stringify(cfg)) };
+    L.syncReconcile(data, state, [], "2026-07-08T12:05:00.000Z");
+    L.syncClearDirty(state, ["cd"]);
+    return { data, state };
+  }
+  // (a) remote deletion OLDER than a local edit -> case survives, revival push.
+  const surv = freshDelFixture();
+  surv.data.cases[0].phaseNote = "edited";
+  surv.data.cases[0].lastTouchedAt = "2026-07-08T13:00:00.000Z";
+  const survRes = L.syncReconcile(surv.data, surv.state, [
+    { id:"cd", deleted:true, case:null, mt:null, deletedAt:"2026-07-08T12:30:00.000Z" }
+  ], "2026-07-08T13:05:00.000Z");
+  assert.strictEqual(surv.data.cases.length, 1);
+  assert.strictEqual(survRes.pushes.some((p) => p.id === "cd" && !p.deleted), true);
+  // (b) remote deletion NEWER than every local edit -> deleted.
+  const gone = freshDelFixture();
+  L.syncReconcile(gone.data, gone.state, [
+    { id:"cd", deleted:true, case:null, mt:null, deletedAt:"2026-07-09T00:00:00.000Z" }
+  ], "2026-07-09T00:05:00.000Z");
+  assert.strictEqual(gone.data.cases.length, 0);
+  assert.strictEqual(gone.state.tombstones.cd, "2026-07-09T00:00:00.000Z");
+  // (c) legacy tombstone without deletedAt keeps old delete-wins behavior.
+  const legacyDel = freshDelFixture();
+  legacyDel.data.cases[0].phaseNote = "edited";
+  legacyDel.data.cases[0].lastTouchedAt = "2026-07-08T13:00:00.000Z";
+  L.syncReconcile(legacyDel.data, legacyDel.state, [
+    { id:"cd", deleted:true, case:null, mt:null }
+  ], "2026-07-08T13:05:00.000Z");
+  assert.strictEqual(legacyDel.data.cases.length, 0);
+  // (d) local deletion pending push vs a NEWER remote edit -> resurrect.
+  const resur = freshDelFixture();
+  const keptCase = JSON.parse(JSON.stringify(resur.data.cases[0]));
+  resur.data.cases = [];
+  L.syncReconcile(resur.data, resur.state, [], "2026-07-08T14:00:00.000Z"); // local delete recorded @14:00
+  assert.strictEqual(typeof resur.state.tombstones.cd, "string");
+  const remoteEdit = JSON.parse(JSON.stringify(keptCase));
+  remoteEdit.phaseNote = "remote-edit";
+  const resurRes = L.syncReconcile(resur.data, resur.state, [
+    { id:"cd", deleted:false, case:remoteEdit, mt:{ phaseNote:"2026-07-08T15:00:00.000Z", lastTouchedAt:"2026-07-08T15:00:00.000Z" } }
+  ], "2026-07-08T15:05:00.000Z");
+  assert.strictEqual(resur.data.cases.length, 1);
+  assert.strictEqual(resur.data.cases[0].phaseNote, "remote-edit");
+  assert.strictEqual(!!resur.state.tombstones.cd, false);
+  // (d') and with an OLDER remote edit the deletion stands and pushes deletedAt.
+  const stayDel = freshDelFixture();
+  stayDel.data.cases = [];
+  L.syncReconcile(stayDel.data, stayDel.state, [], "2026-07-08T14:00:00.000Z");
+  const stayRes = L.syncReconcile(stayDel.data, stayDel.state, [
+    { id:"cd", deleted:false, case:keptCase, mt:{ phaseNote:"2026-07-08T13:30:00.000Z" } }
+  ], "2026-07-08T14:05:00.000Z");
+  assert.strictEqual(stayDel.data.cases.length, 0);
+  const delPush = stayRes.pushes.find((p) => p.id === "cd");
+  assert.strictEqual(delPush.deleted, true);
+  assert.strictEqual(delPush.deletedAt, "2026-07-08T14:00:00.000Z");
+
   // ---- SPEC-F projections (week grid / day plan) --------------------------
 
   const projCase = {

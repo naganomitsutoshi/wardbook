@@ -1,5 +1,10 @@
 # Wardbook — SPEC Phase A (skeleton, data model, ward board, admission, patient detail, stages)
 
+> **SUPERSEDED IN PART (2026-07-09, SPEC-F):** the five collections described here are now
+> MIRRORS of the unified `c.entries` store (see SPEC-F). Board cards show ALL next/today
+> items (the 2-item cap in section 2.1 was removed in `fc1f8a9`), and todos may carry a
+> future `createdOn` (scheduled todos, hidden from the board card until their day).
+
 Wardbook is the successor of Casebook (`C:\Users\nagan\Documents\dev\casebook\index.html`, 3537 lines).
 It is a personal inpatient tool for one physician. The core unit is NOT a problem list but the
 **patient's current phase** ("what scene is this patient in, what happens next").
