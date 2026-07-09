@@ -1,4 +1,4 @@
-const CACHE = "wardbook-v4";
+const CACHE = "wardbook-v5";
 const ASSETS = [
   "./",
   "./index.html",

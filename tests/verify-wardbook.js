@@ -43,7 +43,7 @@ const L = sandbox.module.exports;
   "unsentSeeds", "countSeedsOn", "formatSeedExport", "missSeedText", "makeSeed",
   "moveCase", "dcChecklistItems", "stageOn",
   "normalizeChart", "chartDates", "bandOnDate", "chartColMarks", "chartRowsForCase",
-  "buildWeekGrid", "searchCases", "reviewStreak", "syncDiffFields",
+  "buildWeekGrid", "buildDayPlan", "searchCases", "reviewStreak", "syncDiffFields",
   "syncMergeCase", "syncEmptyState", "syncMarkRestored", "syncNoteLocalChanges", "syncReconcile",
   "syncClearDirty", "syncDeriveKey", "syncEncryptJson", "syncDecryptJson",
   "syncRandomSaltB64", "statsSummary", "buildOutboxBatch"
@@ -257,6 +257,51 @@ const customWeek = L.buildWeekGrid([
 assert.strictEqual(customWeek.dates.length, 14);
 assert.strictEqual(customWeek.dates[0], "2026-07-05");
 assert.strictEqual(customWeek.dates[customWeek.dates.length - 1], "2026-07-18");
+
+// Today-anchored window: past=0 keeps today as the first column.
+const anchoredWeek = L.buildWeekGrid([
+  {
+    id:"c1", label:"uti", admittedAt:"2026-07-01", status:"active", order:0,
+    stageLog:[{ date:"2026-07-01", stageId:"adm" }],
+    next:[], pendings:[], discharge:{ plannedOn:null }
+  }
+], "2026-07-08", 0, 7);
+assert.strictEqual(anchoredWeek.dates.length, 8);
+assert.strictEqual(anchoredWeek.dates[0], "2026-07-08");
+assert.strictEqual(anchoredWeek.dates[anchoredWeek.dates.length - 1], "2026-07-15");
+
+// buildDayPlan: per-case day agenda.
+const dayCases = [
+  {
+    id:"c1", label:"haien", admittedAt:"2026-07-05", status:"active", order:0, stageId:"acute",
+    stageLog:[{ date:"2026-07-05", stageId:"acute" }],
+    next:[{ id:"n1", text:"culture-check", due:"2026-07-08" }, { id:"n2", text:"far", due:"2026-07-20" }],
+    todos:[{ id:"t1", text:"today-task", done:false }, { id:"t2", text:"done-task", done:true }],
+    pendings:[{ id:"p1", text:"blood-cx", backOn:"2026-07-09" }],
+    seeds:[], discharge:{ plannedOn:"2026-07-08" }
+  },
+  {
+    id:"c2", label:"quiet", admittedAt:"2026-07-06", status:"active", order:1, stageId:"adm",
+    stageLog:[{ date:"2026-07-06", stageId:"adm" }],
+    next:[], todos:[], pendings:[], seeds:[], discharge:{ plannedOn:null }
+  },
+  {
+    id:"c3", label:"gone", admittedAt:"2026-07-01", status:"discharged", order:2, stageId:"dc",
+    stageLog:[{ date:"2026-07-01", stageId:"adm" }],
+    next:[{ id:"n3", text:"never", due:"2026-07-08" }], todos:[], pendings:[], seeds:[], discharge:{ plannedOn:null }
+  }
+];
+const dayToday = L.buildDayPlan(dayCases, "2026-07-08", "2026-07-08");
+assert.strictEqual(dayToday.length, 1);
+assert.strictEqual(dayToday[0].caseId, "c1");
+assert.strictEqual(dayToday[0].items.map((x) => x.type).join(","), "todo,next,discharge");
+assert.strictEqual(dayToday[0].items.some((x) => x.text === "done-task"), false);
+assert.strictEqual(dayToday[0].items.some((x) => x.text === "far"), false);
+const dayFuture = L.buildDayPlan(dayCases, "2026-07-09", "2026-07-08");
+assert.strictEqual(dayFuture.length, 1);
+assert.strictEqual(dayFuture[0].items.map((x) => x.type).join(","), "pending");
+const dayEmpty = L.buildDayPlan(dayCases, "2026-07-30", "2026-07-08");
+assert.strictEqual(dayEmpty.length, 0);
 
 const searchCases = [
   { id:"a", label:"haien", admittedAt:"2026-07-01", stageId:"adm", phaseNote:"CAP", dxTags:["pna"], next:[{ text:"abx" }], todos:[], pendings:[], seeds:[], status:"active" },

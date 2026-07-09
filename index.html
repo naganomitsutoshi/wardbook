@@ -283,17 +283,19 @@
     background:var(--card);
   }
   .chartgrid .sticky{min-width:72px;max-width:110px;overflow:hidden}
-  .weekwrap.weekvert{max-height:calc(100vh - 230px);max-height:calc(100dvh - 230px)}
-  .weekgrid th,.weekgrid td{min-width:40px}
-  .weekgrid .sticky{min-width:64px;max-width:72px}
-  .weekgrid .stickytop{position:sticky;top:0;z-index:3;background:var(--card);cursor:pointer}
-  .weekgrid .corner{z-index:4;cursor:default}
-  .weekgrid .caseheadcell{max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}
-  .weekgrid .datecell{font-size:10px;white-space:nowrap;font-weight:400}
-  .weekgrid tr.todayrow>th,.weekgrid tr.todayrow>td{background:var(--panel)}
-  .weekgrid tr.sunrow .datecell{color:var(--weekend-sun)}
-  .weekgrid tr.satrow .datecell{color:var(--weekend-sat)}
-  .chartgrid .todaycol{background:var(--panel)}
+  .weekgrid th,.weekgrid td{min-width:36px}
+  .weekgrid .sticky{min-width:64px;max-width:88px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .weekgrid thead th{cursor:pointer}
+  .weekgrid thead .sticky{cursor:default}
+  .weekgrid .casecell{cursor:pointer}
+  .weekgrid .suncol{color:var(--weekend-sun)}
+  .weekgrid .satcol{color:var(--weekend-sat)}
+  .weekgrid .todaycol,.chartgrid .todaycol{background:var(--panel)}
+  .daynav{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+  .daynavdate{flex:1;text-align:center;font-weight:700}
+  .daygroup{margin-top:12px}
+  .daygroup .dayhead{cursor:pointer}
+  .daygroup .plain{margin-top:6px}
   .chartlabel{white-space:nowrap;font-weight:400;cursor:pointer}
   .catrow{cursor:pointer;white-space:nowrap}
   .colmark{display:block;font-size:9px;color:var(--muted);font-weight:700;min-height:11px}
@@ -823,6 +825,27 @@ function buildWeekGrid(cases, todayIso, pastDays, futureDays){
   return { dates:dates, rows:rows, today:todayIso };
 }
 
+function buildDayPlan(cases, date, todayIso){
+  var groups = [];
+  boardOrder(cases, todayIso).filter(function(c){ return c.status !== "discharged"; }).forEach(function(c){
+    var items = [];
+    if (date === todayIso) {
+      cloneArr(c.todos).forEach(function(item){
+        if (item && !item.done) items.push({ type:"todo", id:String(item.id || ""), text:String(item.text || "") });
+      });
+    }
+    cloneArr(c.next).forEach(function(item){
+      if (item && item.due === date) items.push({ type:"next", id:String(item.id || ""), text:String(item.text || "") });
+    });
+    cloneArr(c.pendings).forEach(function(item){
+      if (item && item.backOn === date) items.push({ type:"pending", id:String(item.id || ""), text:String(item.text || "") });
+    });
+    if (c.discharge && c.discharge.plannedOn === date) items.push({ type:"discharge", id:"", text:"" });
+    if (items.length) groups.push({ caseId:c.id, label:c.label, admittedAt:c.admittedAt, stageId:c.stageId, items:items });
+  });
+  return groups;
+}
+
 function searchCases(cases, query, filters){
   var q = String(query || "").trim().toLowerCase();
   var month = filters && filters.month ? filters.month : "";
@@ -1227,6 +1250,7 @@ if (typeof module !== "undefined") {
     dcChecklistItems:dcChecklistItems,
     stageOn:stageOn,
     buildWeekGrid:buildWeekGrid,
+    buildDayPlan:buildDayPlan,
     searchCases:searchCases,
     reviewStreak:reviewStreak,
     syncDiffFields:syncDiffFields,
@@ -1313,7 +1337,7 @@ Object.assign(STR, {
   trashEmpty:"\u3054\u307f\u3070\u3053\u306f\u7a7a\u3067\u3059\u30027\u65e5\u9593\u4fdd\u6301\u3057\u307e\u3059\u3002",
   restoreRow:"\u623b\u3059",
   restoreMissingCase:"\u5143\u306e\u75c7\u4f8b\u304c\u306a\u3044\u305f\u3081\u623b\u305b\u307e\u305b\u3093",
-  boardView:"局面ボード",
+  boardView:"ボード",
   weekView:"週間予定",
   searchPh:"ラベル・病名タグ・本文を検索",
   searchRun:"\u691c\u7d22",
@@ -1359,18 +1383,25 @@ Object.assign(STR, {
   densityCompact:"\u30b3\u30f3\u30d1\u30af\u30c8",
   countToday:"\u4eca\u65e5",
   countPending:"\u5f85",
-  countSeeds:"\u7a2e"
+  countSeeds:"\u7a2e",
+  dayView:"\u4eca\u65e5",
+  dayEmpty:"\u3053\u306e\u65e5\u306e\u4e88\u5b9a\u306f\u3042\u308a\u307e\u305b\u3093",
+  dayToToday:"\u4eca\u65e5\u3078",
+  dayNextPrefix:"\u6b21",
+  dayPendingPrefix:"\u5f85",
+  dayDischargeLabel:"\u9000\u9662\u4e88\u5b9a",
+  weekCaseCol:"\u60a3\u8005"
 });
 
 let DB = normalizeState(null);
-let VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:"board", searchQuery:"", searchMonth:"", searchStageId:"", weekPast:7, weekFuture:7 };
+let VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:"board", dayDate:todayISO(), searchQuery:"", searchMonth:"", searchStageId:"", weekPast:0, weekFuture:7 };
 let SHEET = { name:"", draft:{}, syncBusy:false };
 let DND = { activeId:"", hoverIndex:-1 };
 let NAV = { stack:[], ignore:0 };
 let REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
 let MISS = null;
 let PENDING_FOCUS = null;
-let WEEK_SCROLL_RT = { busy:false, pendingTopAdjust:0, initPending:false };
+let WEEK_SCROLL_RT = { busy:false, pendingLeftAdjust:0, initPending:false };
 const SYNC_KEY = "wardbook:sync";
 const STATS_KEY = "wardbook:stats";
 let STATS = null;
@@ -1446,12 +1477,12 @@ function weekHeaderLabel(date){
   return Number(date.slice(5, 7)) + "/" + Number(date.slice(8, 10)) + "(" + STR.weekdays[day] + ")";
 }
 
-function weekRowClass(date, today){
+function weekHeaderClass(date, today){
   var cls = [];
   var day = isoWeekday(date);
-  if (date === today) cls.push("todayrow");
-  if (day === 0) cls.push("sunrow");
-  if (day === 6) cls.push("satrow");
+  if (date === today) cls.push("todaycol");
+  if (day === 0) cls.push("suncol");
+  if (day === 6) cls.push("satcol");
   return cls.join(" ");
 }
 
@@ -2050,24 +2081,45 @@ function touch(c){
   c.lastTouchedAt = nowISO();
 }
 
+function weekDefaultFuture(){
+  var width = 0;
+  try { width = Number(window.innerWidth) || 0; } catch (e) {}
+  return width >= 640 ? 14 : 7;
+}
+
 function resetWeekRange(){
-  VIEW.weekPast = 7;
-  VIEW.weekFuture = 7;
+  VIEW.weekPast = 0;
+  VIEW.weekFuture = weekDefaultFuture();
   WEEK_SCROLL_RT.busy = false;
-  WEEK_SCROLL_RT.pendingTopAdjust = 0;
+  WEEK_SCROLL_RT.pendingLeftAdjust = 0;
   WEEK_SCROLL_RT.initPending = false;
 }
 
 function setBoardMode(mode){
-  var next = mode === "week" ? "week" : "board";
+  var next = mode === "week" ? "week" : mode === "day" ? "day" : "board";
   var prev = VIEW.boardMode || "board";
   VIEW.boardMode = next;
+  if (next === "day") VIEW.dayDate = todayISO();
   if (next === "week" && prev !== "week") {
-    VIEW.weekPast = 7;
-    VIEW.weekFuture = 7;
+    VIEW.weekPast = 0;
+    VIEW.weekFuture = weekDefaultFuture();
     WEEK_SCROLL_RT.initPending = true;
   }
   if (next !== "week") resetWeekRange();
+  render();
+}
+
+function openDayView(date){
+  VIEW.boardMode = "day";
+  VIEW.dayDate = /^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) ? String(date) : todayISO();
+  render();
+}
+
+function shiftDayDate(delta){
+  var base = Date.parse((VIEW.dayDate || todayISO()) + "T00:00:00");
+  if (!Number.isFinite(base)) base = Date.parse(todayISO() + "T00:00:00");
+  var d = new Date(base + (Number(delta) || 0) * 86400000);
+  VIEW.dayDate = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   render();
 }
 
@@ -2077,36 +2129,35 @@ function ensureWeekWrapBehavior(){
   if (!wrap) return;
   wrap.onscroll = function(){
     if (WEEK_SCROLL_RT.busy) return;
-    var top = Number(wrap.scrollTop) || 0;
-    var height = Number(wrap.scrollHeight) || 0;
-    var view = Number(wrap.clientHeight) || 0;
-    if (height <= view) return;
-    if (top <= 80) {
+    var left = Number(wrap.scrollLeft) || 0;
+    var width = Number(wrap.scrollWidth) || 0;
+    var view = Number(wrap.clientWidth) || 0;
+    if (width <= view) return;
+    if (left <= 80) {
       WEEK_SCROLL_RT.busy = true;
-      WEEK_SCROLL_RT.pendingTopAdjust = height;
-      VIEW.weekPast = (Number(VIEW.weekPast) || 7) + 7;
+      WEEK_SCROLL_RT.pendingLeftAdjust = width;
+      VIEW.weekPast = (Number(VIEW.weekPast) || 0) + 7;
       render();
       return;
     }
-    if (height - (top + view) <= 80) {
+    if (width - (left + view) <= 80) {
       WEEK_SCROLL_RT.busy = true;
-      VIEW.weekFuture = (Number(VIEW.weekFuture) || 7) + 7;
+      VIEW.weekFuture = (Number(VIEW.weekFuture) || 0) + 7;
       render();
     }
   };
-  if (WEEK_SCROLL_RT.pendingTopAdjust) {
-    var prevHeight = WEEK_SCROLL_RT.pendingTopAdjust;
-    var nextHeight = Number(wrap.scrollHeight) || 0;
-    wrap.scrollTop = (Number(wrap.scrollTop) || 0) + Math.max(0, nextHeight - prevHeight);
-    WEEK_SCROLL_RT.pendingTopAdjust = 0;
+  if (WEEK_SCROLL_RT.pendingLeftAdjust) {
+    var prevWidth = WEEK_SCROLL_RT.pendingLeftAdjust;
+    var nextWidth = Number(wrap.scrollWidth) || 0;
+    wrap.scrollLeft = (Number(wrap.scrollLeft) || 0) + Math.max(0, nextWidth - prevWidth);
+    WEEK_SCROLL_RT.pendingLeftAdjust = 0;
     WEEK_SCROLL_RT.busy = false;
   } else if (WEEK_SCROLL_RT.initPending) {
-    var totalRows = (Number(VIEW.weekPast) || 7) + (Number(VIEW.weekFuture) || 7) + 1;
-    var totalHeight = Number(wrap.scrollHeight) || 0;
-    var viewport = Number(wrap.clientHeight) || 0;
-    if (totalRows > 0 && totalHeight > 0) {
-      var rowHeight = totalHeight / totalRows;
-      wrap.scrollTop = Math.max(0, Math.round(rowHeight * (Number(VIEW.weekPast) || 7) - viewport / 3));
+    var totalCols = (Number(VIEW.weekPast) || 0) + (Number(VIEW.weekFuture) || 0) + 1;
+    var totalWidth = Number(wrap.scrollWidth) || 0;
+    if (totalCols > 0 && totalWidth > 0) {
+      var colWidth = totalWidth / totalCols;
+      wrap.scrollLeft = Math.max(0, Math.round(colWidth * (Number(VIEW.weekPast) || 0)));
     }
     WEEK_SCROLL_RT.initPending = false;
   } else {
@@ -2257,7 +2308,7 @@ function openBoard(){
   clearMiss();
   REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
   if ((VIEW.boardMode || "board") === "week") WEEK_SCROLL_RT.initPending = true;
-  VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", searchQuery:"", searchMonth:"", searchStageId:"", weekPast:VIEW.weekPast || 7, weekFuture:VIEW.weekFuture || 7 };
+  VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", dayDate:VIEW.dayDate || todayISO(), searchQuery:"", searchMonth:"", searchStageId:"", weekPast:Number(VIEW.weekPast) || 0, weekFuture:Number(VIEW.weekFuture) || weekDefaultFuture() };
   render();
 }
 
@@ -2290,7 +2341,7 @@ function openReview(){
     copied:false,
     outboxStatus:(!SYNC || !SYNC.enabled) ? "" : ""
   };
-  VIEW = { name:"review", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", searchQuery:"", searchMonth:"", searchStageId:"", weekPast:7, weekFuture:7 };
+  VIEW = { name:"review", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", dayDate:VIEW.dayDate || todayISO(), searchQuery:"", searchMonth:"", searchStageId:"", weekPast:0, weekFuture:7 };
   render();
   if (!ids.length) {
     patchOutboxStatus("");
@@ -2301,7 +2352,7 @@ function openSearch(){
   if (VIEW.name !== "search") navPush(navSnapshotView());
   clearMiss();
   if (VIEW.boardMode === "week") resetWeekRange();
-  VIEW = { name:"search", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", searchQuery:VIEW.searchQuery || "", searchMonth:VIEW.searchMonth || "", searchStageId:VIEW.searchStageId || "", weekPast:7, weekFuture:7 };
+  VIEW = { name:"search", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", dayDate:VIEW.dayDate || todayISO(), searchQuery:VIEW.searchQuery || "", searchMonth:VIEW.searchMonth || "", searchStageId:VIEW.searchStageId || "", weekPast:0, weekFuture:7 };
   render();
 }
 
@@ -3382,6 +3433,27 @@ function renderBoardCardCompact(c, stage, undone, stageStyle, staleClass){
   '</article>';
 }
 
+function renderDayPlanView(){
+  var today = todayISO();
+  var date = /^\d{4}-\d{2}-\d{2}$/.test(String(VIEW.dayDate || "")) ? VIEW.dayDate : today;
+  var groups = buildDayPlan(DB.cases, date, today);
+  var nav = '<div class="daynav"><button class="iconbtn" onclick="shiftDayDate(-1)">◀</button><div class="daynavdate">' + esc(weekHeaderLabel(date)) + (date === today ? ' <span class="badge">' + esc(STR.dayView) + '</span>' : '') + '</div><button class="iconbtn" onclick="shiftDayDate(1)">▶</button>' + (date !== today ? '<button class="smallbtn" onclick="openDayView(\'' + esc(today) + '\')">' + esc(STR.dayToToday) + '</button>' : '') + '</div>';
+  var bodyHtml = groups.length ? groups.map(function(g){
+    var stage = stageById(g.stageId);
+    return '<div class="daygroup"><div class="labelrow dayhead" onclick="openDetail(\'' + esc(g.caseId) + '\')"><div class="caseid">' + esc(g.label || '—') + ' D' + computeDay(g.admittedAt, today) + '</div><div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div><div class="grow"></div><button class="smallbtn" onclick="event.stopPropagation();openWeekCell(\'' + esc(g.caseId) + '\',\'' + esc(date) + '\')">＋</button></div><div class="plain">' + g.items.map(function(item){
+      if (item.type === "todo") {
+        return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" onclick="toggleTodo(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div></label>';
+      }
+      if (item.type === "discharge") {
+        return '<div class="lineitem" onclick="openDetail(\'' + esc(g.caseId) + '\')"><div class="linegrow"><div class="text">★ ' + esc(STR.dayDischargeLabel) + '</div></div></div>';
+      }
+      var prefix = item.type === "pending" ? STR.dayPendingPrefix : STR.dayNextPrefix;
+      return '<div class="lineitem" onclick="openDetail(\'' + esc(g.caseId) + '\')"><div class="linegrow"><div class="text"><span class="faint">' + esc(prefix) + ':</span> ' + esc(item.text) + '</div></div></div>';
+    }).join('') + '</div></div>';
+  }).join('') : '<div class="empty">' + esc(STR.dayEmpty) + '</div>';
+  return nav + bodyHtml;
+}
+
 function renderTagList(c){
   return '<div class="chips">' + c.dxTags.map(function(tag, i){
     return '<span class="tag">' + esc(tag) + '<button onclick="removeDxTag(\'' + esc(c.id) + '\',' + i + ')">×</button></span>';
@@ -3740,25 +3812,30 @@ function renderDataSheet(){
 renderBoard = function(){
   var cases = boardCases();
   var week = buildWeekGrid(DB.cases, todayISO(), VIEW.weekPast, VIEW.weekFuture);
-  var body = VIEW.boardMode === "week"
-    ? '<div id="weekWrap" class="weekwrap weekvert"><table class="weekgrid"><thead><tr><th class="sticky stickytop corner"></th>' + week.rows.map(function(row){
-      return '<th class="stickytop caseheadcell" onclick="openDetail(\'' + esc(row.case.id) + '\')">' + esc(row.case.label) + '<span class="faint"> D' + computeDay(row.case.admittedAt, todayISO()) + '</span></th>';
-    }).join('') + '</tr></thead><tbody>' + week.dates.map(function(date){
-      return '<tr class="' + esc(weekRowClass(date, week.today)) + '"><th class="sticky datecell">' + esc(weekHeaderLabel(date)) + '</th>' + week.rows.map(function(row){
+  var body;
+  if (VIEW.boardMode === "week") {
+    body = '<div id="weekWrap" class="weekwrap"><table class="weekgrid"><thead><tr><th class="sticky">' + esc(STR.weekCaseCol) + '</th>' + week.dates.map(function(date){
+      return '<th class="' + esc(weekHeaderClass(date, week.today)) + '" onclick="openDayView(\'' + esc(date) + '\')">' + esc(weekHeaderLabel(date)) + '</th>';
+    }).join('') + '</tr></thead><tbody>' + week.rows.map(function(row){
+      return '<tr><th class="sticky casecell" onclick="openDetail(\'' + esc(row.case.id) + '\')">' + esc(row.case.label) + ' D' + computeDay(row.case.admittedAt, todayISO()) + '</th>' + week.dates.map(function(date){
         var cell = row.dates[date];
         var bandColor = cell.stageId ? stageById(cell.stageId).color : "transparent";
-        return '<td onclick="openWeekCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="markerstack">' + cell.markers.slice(0, 2).map(function(marker){
+        return '<td class="' + (date === week.today ? 'todaycol' : '') + '" onclick="openWeekCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="markerstack">' + cell.markers.slice(0, 2).map(function(marker){
           return '<span class="mark">' + esc(marker.text) + '</span>';
         }).join('') + (cell.markers.length > 2 ? '<span class="mark">+' + (cell.markers.length - 2) + '</span>' : '') + '</div></td>';
       }).join('') + '</tr>';
-    }).join('') + '</tbody></table></div>'
-    : (cases.length ? '<div class="list' + (boardDensityCompact() ? ' compact' : '') + '">' +
+    }).join('') + '</tbody></table></div>';
+  } else if (VIEW.boardMode === "day") {
+    body = renderDayPlanView();
+  } else {
+    body = cases.length ? '<div class="list' + (boardDensityCompact() ? ' compact' : '') + '">' +
       cases.map(function(c, idx){
         return '<div class="dropzone" data-drop-index="' + idx + '"></div>' + renderBoardCard(c);
       }).join('') +
       '<div class="dropzone" data-drop-index="' + cases.length + '"></div>' +
-    '</div>' : '<div class="empty">' + esc(STR.emptyBoard) + '</div>');
-  return '<section class="screen"><div class="seg"><button class="chipbtn' + (VIEW.boardMode !== "week" ? ' on' : '') + '" onclick="setBoardMode(\'board\')">' + esc(STR.boardView) + '</button><button class="chipbtn' + (VIEW.boardMode === "week" ? ' on' : '') + '" onclick="setBoardMode(\'week\')">' + esc(STR.weekView) + '</button>' + (VIEW.boardMode !== "week" ? '<div class="grow"></div><button class="chipbtn' + (boardDensityCompact() ? ' on' : '') + '" onclick="toggleDensity()">' + esc(STR.densityCompact) + '</button>' : '') + '</div>' + body +
+    '</div>' : '<div class="empty">' + esc(STR.emptyBoard) + '</div>';
+  }
+  return '<section class="screen"><div class="seg"><button class="chipbtn' + (VIEW.boardMode !== "week" && VIEW.boardMode !== "day" ? ' on' : '') + '" onclick="setBoardMode(\'board\')">' + esc(STR.boardView) + '</button><button class="chipbtn' + (VIEW.boardMode === "day" ? ' on' : '') + '" onclick="setBoardMode(\'day\')">' + esc(STR.dayView) + '</button><button class="chipbtn' + (VIEW.boardMode === "week" ? ' on' : '') + '" onclick="setBoardMode(\'week\')">' + esc(STR.weekView) + '</button>' + (VIEW.boardMode !== "week" && VIEW.boardMode !== "day" ? '<div class="grow"></div><button class="chipbtn' + (boardDensityCompact() ? ' on' : '') + '" onclick="toggleDensity()">' + esc(STR.densityCompact) + '</button>' : '') + '</div>' + body +
   '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openReview()">' + esc(STR.review) + '</button></div><div class="row wrap" style="margin-top:8px"><button class="ghostbtn smallbtn" onclick="openSyncSheet()"><span data-sync-status>' + esc(syncStatusLabel()) + '</span></button><button class="ghostbtn smallbtn" onclick="openDataSheet()">' + esc(STR.dataRow) + '</button><button class="ghostbtn smallbtn" onclick="openSearch()">' + esc(STR.searchRow) + '</button><button class="ghostbtn smallbtn" onclick="openSettingsSheet()">' + esc(STR.settingsRow) + '</button></div></div></div>';
 };
 
@@ -3872,6 +3949,14 @@ if (typeof document !== "undefined" && document.addEventListener) {
 }
 if (typeof window !== "undefined" && window.addEventListener) {
   window.addEventListener("popstate", handlePopState);
+  window.addEventListener("resize", debounce(function(){
+    if (VIEW.name === "board" && VIEW.boardMode === "week") {
+      VIEW.weekPast = 0;
+      VIEW.weekFuture = weekDefaultFuture();
+      WEEK_SCROLL_RT.initPending = true;
+      render();
+    }
+  }, 250));
 }
 
 boot();

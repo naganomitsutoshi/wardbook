@@ -124,7 +124,8 @@ vm.runInContext(`
 [
   "copyDischargeExport", "copyDayExport", "openWeekCell",
   "startDragCase", "dragMove", "dragEnd", "nearestDropIndex",
-  "handlePopState", "navPush", "navUnwindAll", "toggleDensity"
+  "handlePopState", "navPush", "navUnwindAll", "toggleDensity",
+  "openDayView", "shiftDayDate"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "function") fail("missing runtime fn " + name);
 });
@@ -205,11 +206,28 @@ vm.runInContext("SETTINGS.density='normal'", sandbox);
 vm.runInContext("VIEW.boardMode='week'", sandbox);
 const weekHtml = vm.runInContext("renderBoard()", sandbox);
 if (!weekHtml.includes("weekgrid")) fail("week view missing grid");
-if (!weekHtml.includes("todayrow")) fail("week view missing today row");
-if (!weekHtml.includes("caseheadcell")) fail("week view missing case column headers");
+if (!weekHtml.includes("todaycol")) fail("week view missing today column");
+if (!weekHtml.includes("casecell")) fail("week view missing case row headers");
 if (!weekHtml.includes("openDetail('c1')")) fail("week case header missing detail tap");
 if (!weekHtml.includes("onclick=\"openWeekCell(")) fail("week cell missing onclick");
-if (weekHtml.includes("todaycol")) fail("week view still column-oriented");
+if (!weekHtml.includes("openDayView('")) fail("week date header missing day-view tap");
+if (weekHtml.includes("todayrow")) fail("week view still transposed");
+
+// Day overview: today's todos/pendings grouped per case, no density toggle.
+vm.runInContext("setBoardMode('day')", sandbox);
+const dayHtml = vm.runInContext("renderBoard()", sandbox);
+if (!dayHtml.includes("daynav")) fail("day view missing date nav");
+if (!dayHtml.includes("shiftDayDate(1)")) fail("day view missing next-day nav");
+if (!dayHtml.includes("haien")) fail("day view missing case group");
+if (!dayHtml.includes("toggleTodo('c1'")) fail("day view missing todo checkbox");
+if (!dayHtml.includes("cx-back")) fail("day view missing pending due today");
+if (!dayHtml.includes("openWeekCell('c1'")) fail("day view missing add button");
+if (dayHtml.includes("toggleDensity()")) fail("density toggle leaked into day view");
+vm.runInContext("openDayView('2026-07-10')", sandbox);
+const dayFutureHtml = vm.runInContext("renderBoard()", sandbox);
+if (!dayFutureHtml.includes("ABX")) fail("day view missing next item on its due date");
+if (!dayFutureHtml.includes("★")) fail("day view missing planned-discharge row");
+vm.runInContext("setBoardMode('board')", sandbox);
 
 vm.runInContext("VIEW={ name:'detail', caseId:'c1', editingMeta:false, editingLabel:false, stagePickerFor:'', nowDay:todayISO() }", sandbox);
 const detailHtml = vm.runInContext("renderDetail('c1')", sandbox);
