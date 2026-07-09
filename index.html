@@ -1943,7 +1943,8 @@ async function syncNow(opts){
     SYNC.lastSyncAt = nowISO();
     saveSync();
     setSyncStatus("ok");
-    await syncSendOutboxIfNeeded("boot");
+    // Seeds are sent only on review completion and at boot (SPEC-C section 2);
+    // sending from every sync made the review-screen fallback meaningless.
   } catch (e) {
     saveSync();
     var msg = String((e && e.message) || e);
@@ -3577,7 +3578,9 @@ function renderChartItemSheet(){
   var cat = chartCatById(d.catId);
   var kind = d.kind === "band" || d.kind === "event" ? d.kind : "value";
   var chips = chartNameSuggestions(d.catId, kind).map(function(name){
-    return '<button class="chipbtn' + (d.name === name ? ' on' : '') + '" onclick="sheetDraftValue(\'name\',\'' + esc(name) + '\');renderSheet()">' + esc(name) + '</button>';
+    // User text must never be inlined into the onclick JS string: attribute
+    // entities decode before JS parsing, so esc() alone cannot stop injection.
+    return '<button class="chipbtn' + (d.name === name ? ' on' : '') + '" data-name="' + esc(name) + '" onclick="sheetDraftValue(\'name\',this.dataset.name);renderSheet()">' + esc(name) + '</button>';
   }).join('');
   return '<div class="sheetcard"><div class="sheettitle">' + esc((cat ? cat.name : STR.chartPanel) + '（' + chartKindLabel(kind) + '）') + '</div><div class="stack">' +
     '<div class="field"><input id="chartItemName" class="input" value="' + esc(d.name || "") + '" oninput="sheetDraftValue(\'name\',this.value)" placeholder="' + esc(STR.chartNamePh) + '"></div>' +
@@ -3727,20 +3730,8 @@ function renderReviewCard(c){
   '</section>';
 }
 
-function renderReviewDone(){
-  var count = countSeedsOn(DB.cases, todayISO());
-  var pendingSeeds = unsentSeeds(DB.cases);
-  var exportText = formatSeedExport(pendingSeeds, todayISO());
-  return '<section class="screen"><div class="stack">' +
-    '<section class="panelcard"><div class="one">' + esc(STR.reviewDone) + '</div>' +
-    (REVIEW.empty ? '<div class="phase">' + esc(STR.reviewEmpty) + '</div>' : '') +
-    '<div class="phase">' + esc(STR.seedsToday) + ' ' + count + '件</div>' +
-    (pendingSeeds.length
-      ? '<div class="stack" style="margin-top:10px"><textarea id="reviewExportText" class="reviewtextarea" readonly rows="8">' + esc(exportText) + '</textarea><div class="bottomrow"><button class="ghostbtn" onclick="copyReviewExport()">' + esc(REVIEW.copied ? STR.copied : STR.copyExport) + '</button>' + ((typeof navigator !== "undefined" && navigator.share) ? '<button class="ghostbtn" onclick="shareReviewExport()">' + esc(STR.shareExport) + '</button>' : '') + '</div></div>'
-      : '<div class="phase">' + esc(STR.noUnsentSeeds) + '</div>') +
-    '</section><button class="primary" onclick="openBoard()">' + esc(STR.backToBoard) + '</button></div></section>';
-}
-
+// renderReviewDone is assigned later (see the render assignments near the end
+// of this script); an older duplicate declaration here was dead code.
 function renderReview(){
   if (REVIEW.mode === "done") return renderReviewDone();
   var c = currentReviewCase();

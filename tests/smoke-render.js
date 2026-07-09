@@ -87,6 +87,18 @@ try {
   fail("runtime load: " + err.message);
 }
 
+// Dead-declaration guard: a `function NAME(` declaration that is also
+// reassigned later via `NAME = function` is unreachable code (the assignment
+// wins at runtime) — the exact bug class of the old renderReviewDone/renderDetail.
+[logicSrc[2], mainSrc[2]].forEach((src) => {
+  const declNames = [...src.matchAll(/^function (\w+)\(/gm)].map((m) => m[1]);
+  const dup = declNames.filter((n, i) => declNames.indexOf(n) !== i);
+  if (dup.length) fail("duplicate function declarations: " + dup.join(","));
+  declNames.forEach((n) => {
+    if (new RegExp("^" + n + " = function", "m").test(src)) fail("function " + n + " declared and later reassigned (dead declaration)");
+  });
+});
+
 vm.runInContext(`
   STATS = loadStats();
   SETTINGS = loadSettings();
@@ -299,6 +311,28 @@ vm.runInContext("REVIEW = { ids:['c1'], index:0, mode:'done', empty:false, noteD
 const reviewDone = vm.runInContext("renderReviewDone()", sandbox);
 if (!reviewDone.includes("data-outbox-status")) fail("review missing outbox status");
 if (!reviewDone.includes(vm.runInContext("STR.streakLine", sandbox))) fail("review missing streak line");
+
+// Review flow end-to-end (QA P1-7): stale cases -> queue -> advance each -> done.
+vm.runInContext(`
+  DB.cases = DB.cases.map(function(c){
+    if (c.status !== "active") return c;
+    return Object.assign({}, c, { lastTouchedAt:"2026-07-01T00:00:00.000Z" });
+  });
+  openReview();
+`, sandbox);
+if (vm.runInContext("REVIEW.mode", sandbox) !== "actions") fail("review queue empty despite stale cases");
+const reviewQueueLen = vm.runInContext("REVIEW.ids.length", sandbox);
+if (reviewQueueLen < 2) fail("review queue missing stale cases");
+const midReviewHtml = vm.runInContext("render(); renderReview()", sandbox);
+if (!midReviewHtml.includes("reviewNoChange(")) fail("review screen missing no-change action");
+for (let i = 0; i < reviewQueueLen; i += 1) {
+  vm.runInContext("reviewNoChange(REVIEW.ids[REVIEW.index])", sandbox);
+}
+if (vm.runInContext("REVIEW.mode", sandbox) !== "done") fail("review flow did not reach done");
+const reviewFlowDone = vm.runInContext("renderReview()", sandbox);
+if (!reviewFlowDone.includes(vm.runInContext("STR.reviewDone", sandbox))) fail("review flow missing done title");
+vm.runInContext("copyReviewExport()", sandbox);
+vm.runInContext("openBoard()", sandbox);
 
 if (documentElement["data-theme"] !== "dark") fail("dark theme attribute not applied");
 if (vm.runInContext("SYNC_RT.importCount", sandbox) !== 0) fail("sync import happened without config");

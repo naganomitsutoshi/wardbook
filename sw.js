@@ -1,4 +1,4 @@
-const CACHE = "wardbook-v5";
+const CACHE = "wardbook-v6";
 const ASSETS = [
   "./",
   "./index.html",
@@ -29,8 +29,10 @@ self.addEventListener("fetch", (event) => {
   if (req.mode === "navigate") {
     event.respondWith(
       fetch(req).then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((cache) => cache.put("./", copy)).catch(() => {});
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((cache) => cache.put("./", copy)).catch(() => {});
+        }
         return res;
       }).catch(() => caches.match("./"))
     );
@@ -38,8 +40,10 @@ self.addEventListener("fetch", (event) => {
   }
   event.respondWith(
     caches.match(req).then((hit) => hit || fetch(req).then((res) => {
-      const copy = res.clone();
-      caches.open(CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
+      if (res && res.ok) {
+        const copy = res.clone();
+        caches.open(CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
+      }
       return res;
     }))
   );
