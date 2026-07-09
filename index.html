@@ -35,6 +35,11 @@
     --shadow:0 1px 2px rgba(0,0,0,.06);
     --weekend-sun:#b44a4a;
     --weekend-sat:#4f6fb8;
+    --sec-phase:#6d28d9;
+    --sec-next:#1d4ed8;
+    --sec-today:#15803d;
+    --sec-pending:#b45309;
+    --sec-seeds:#be185d;
   }
   :root[data-theme="dark"]{
     color-scheme:dark;
@@ -57,6 +62,11 @@
     --shadow:0 1px 2px rgba(0,0,0,.28);
     --weekend-sun:#f09a9a;
     --weekend-sat:#9db8ff;
+    --sec-phase:#c4b5fd;
+    --sec-next:#93c5fd;
+    --sec-today:#86efac;
+    --sec-pending:#fbbf6e;
+    --sec-seeds:#f9a8d4;
   }
   *{box-sizing:border-box}
   html{-webkit-text-size-adjust:100%}
@@ -132,7 +142,15 @@
   .dot{width:9px;height:9px;border-radius:50%}
   .phase{margin-top:6px;color:var(--muted)}
   .section{margin-top:8px}
-  .sectiontitle{font-size:11px;font-weight:700;color:var(--soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+  .sec-phase{--sec:var(--sec-phase)}
+  .sec-next{--sec:var(--sec-next)}
+  .sec-today{--sec:var(--sec-today)}
+  .sec-pending{--sec:var(--sec-pending)}
+  .sec-seeds{--sec:var(--sec-seeds)}
+  .sectiontitle{font-size:11px;font-weight:700;color:var(--sec,var(--soft));text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+  .phase.sec-phase{border-left:3px solid var(--sec-phase);padding-left:8px}
+  .panelcard>.one{color:var(--sec,inherit)}
+  .compactcounts span{color:var(--sec,inherit)}
   .plain{display:flex;flex-direction:column;gap:4px}
   .lineitem{
     display:flex;gap:8px;align-items:flex-start;
@@ -140,7 +158,6 @@
   }
   .lineitem.sent{opacity:.6}
   .linegrow{flex:1;min-width:0}
-  .linegrow label{display:block}
   .text{word-break:break-word}
   .faint{color:var(--soft);font-size:12px}
   .badge{
@@ -148,7 +165,7 @@
     min-height:22px;padding:0 8px;border:1px solid var(--badge-line);
     background:var(--badge);border-radius:999px;font-size:11px;font-weight:700;
   }
-  .seedcount{color:var(--muted);font-size:12px}
+  .seedcount{color:var(--sec,var(--muted));font-size:12px}
   .list.compact{gap:6px}
   .card.compact{padding:6px 8px}
   .card.compact .caseid{font-size:14px}
@@ -801,6 +818,7 @@ function normalizeCase(raw, nowIso, todayIso){
   out.label = typeof src.label === "string" ? src.label : "";
   out.ageBand = typeof src.ageBand === "string" ? src.ageBand : "";
   out.sex = src.sex === "M" || src.sex === "F" ? src.sex : "";
+  out.room = typeof src.room === "string" ? src.room : "";
   out.dxTags = cloneArr(src.dxTags).filter(function(x){ return typeof x === "string" && x; });
   out.status = src.status === "discharged" ? "discharged" : "active";
   out.admittedAt = safeDate(src.admittedAt, todayIso);
@@ -1178,14 +1196,14 @@ function searchCases(cases, query, filters){
     if (month && String(c.admittedAt || "").slice(0, 7) !== month) return false;
     if (stageId && c.stageId !== stageId) return false;
     if (!q) return true;
-    var fields = [c.label, (c.dxTags || []).join(" "), c.phaseNote]
+    var fields = [c.label, c.room, (c.dxTags || []).join(" "), c.phaseNote]
       .concat(cloneArr(c.next).map(function(x){ return x.text; }))
       .concat(cloneArr(c.todos).map(function(x){ return x.text; }))
       .concat(cloneArr(c.pendings).map(function(x){ return x.text; }))
       .concat(cloneArr(c.seeds).map(function(x){ return x.text; }));
     return fields.some(function(text){ return String(text || "").toLowerCase().indexOf(q) >= 0; });
   }).map(function(c){
-    var fields = [c.label, (c.dxTags || []).join(" "), c.phaseNote]
+    var fields = [c.label, c.room, (c.dxTags || []).join(" "), c.phaseNote]
       .concat(cloneArr(c.next).map(function(x){ return x.text; }))
       .concat(cloneArr(c.todos).map(function(x){ return x.text; }))
       .concat(cloneArr(c.pendings).map(function(x){ return x.text; }))
@@ -1775,7 +1793,9 @@ Object.assign(STR, {
   dayNextPrefix:"\u6b21",
   dayPendingPrefix:"\u5f85",
   dayDischargeLabel:"\u9000\u9662\u4e88\u5b9a",
-  weekCaseCol:"\u60a3\u8005"
+  weekCaseCol:"\u60a3\u8005",
+  wardRoom:"\u75c5\u68df\u30fb\u75c5\u5ba4",
+  wardRoomPh:"\u4f8b\uff1a3\u6771 305"
 });
 
 let DB = normalizeState(null);
@@ -1849,7 +1869,8 @@ function compactSex(sex){
 }
 
 function compactMeta(c){
-  return (c.ageBand || "") + compactSex(c.sex);
+  var demo = (c.ageBand || "") + compactSex(c.sex);
+  return [c.room, demo].filter(Boolean).join(" ");
 }
 
 function isoWeekday(date){
@@ -2841,7 +2862,7 @@ function openSettingsSheet(){
 function openAdmissionSheet(){
   navNoteSheetOpen();
   SHEET.name = "admission";
-  SHEET.draft = { label:"", phaseNote:"", ageBand:"", sex:"", admittedAt:todayISO() };
+  SHEET.draft = { label:"", phaseNote:"", ageBand:"", sex:"", room:"", admittedAt:todayISO() };
   renderSheet();
   var el = document.getElementById("admLabelInput");
   if (el && el.focus) el.focus();
@@ -2962,6 +2983,7 @@ function registerAdmission(){
     phaseNote:String(draft.phaseNote || "").trim(),
     ageBand:draft.ageBand || "",
     sex:draft.sex || "",
+    room:String(draft.room || "").trim(),
     status:"active",
     admittedAt:admittedAt,
     dischargedAt:null,
@@ -3033,6 +3055,12 @@ function updateCaseAge(caseId, value){
 function updateCaseSex(caseId, value){
   if (caseFieldUnchanged(caseId, function(c){ return c.sex === value; })) return;
   mutateCase(caseId, function(c){ c.sex = value; });
+}
+
+function updateCaseRoom(caseId, value){
+  var next = String(value || "").trim();
+  if (caseFieldUnchanged(caseId, function(c){ return c.room === next; })) return;
+  mutateCase(caseId, function(c){ c.room = next; });
 }
 
 function addDxTag(caseId, value){
@@ -3914,18 +3942,18 @@ function renderBoardCard(c){
   var staleClass = stale === 2 ? ' stale2' : stale === 1 ? ' stale1' : '';
   if (boardDensityCompact()) return renderBoardCardCompact(c, stage, undone, stageStyle, staleClass);
   var sectionHtml = {
-    phase:c.phaseNote ? '<div class="phase">' + esc(c.phaseNote) + '</div>' : '',
-    next:dueNext.length ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.next) + '</div><div class="plain">' + dueNext.map(function(item){
+    phase:c.phaseNote ? '<div class="phase sec-phase">' + esc(c.phaseNote) + '</div>' : '',
+    next:dueNext.length ? '<div class="section sec-next"><div class="sectiontitle">' + esc(DB.config.labels.next) + '</div><div class="plain">' + dueNext.map(function(item){
       return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + (item.due ? '<div class="faint">' + esc(item.due) + '</div>' : '') + '</div></div>';
     }).join('') + '</div></div>' : '',
-    today:undone.length ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.today) + ' ' + undone.length + '</div><div class="plain">' + undone.map(function(item){
+    today:undone.length ? '<div class="section sec-today"><div class="sectiontitle">' + esc(DB.config.labels.today) + ' ' + undone.length + '</div><div class="plain">' + undone.map(function(item){
       return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div></label>';
     }).join('') + '</div></div>' : '',
-    pending:showPendings ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.pending) + '</div><div class="plain">' + c.pendings.map(function(item){
+    pending:showPendings ? '<div class="section sec-pending"><div class="sectiontitle">' + esc(DB.config.labels.pending) + '</div><div class="plain">' + c.pendings.map(function(item){
       var urgent = item.backOn && item.backOn <= todayISO();
       return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + (item.backOn ? '<div class="faint">' + esc(item.backOn) + '</div>' : '') + '</div>' + (urgent ? '<span class="badge">' + esc(STR.backTodayBadge) + '</span>' : '') + '</div>';
     }).join('') + '</div></div>' : '',
-    seeds:c.seeds.length ? '<div class="section seedcount">' + esc(DB.config.labels.seeds) + ' ' + c.seeds.length + '</div>' : ''
+    seeds:c.seeds.length ? '<div class="section seedcount sec-seeds">' + esc(DB.config.labels.seeds) + ' ' + c.seeds.length + '</div>' : ''
   };
   var orderedSections = cardSectionsVisible().map(function(name){ return sectionHtml[name] || ""; }).join('');
   return '<article class="card' + staleClass + (DND.activeId === c.id ? ' dragging' : '') + '" style="' + stageStyle + '" onclick="openDetail(\'' + esc(c.id) + '\')">' +
@@ -3945,13 +3973,13 @@ function renderBoardCard(c){
 function renderBoardCardCompact(c, stage, undone, stageStyle, staleClass){
   var hasBack = c.pendings.some(function(item){ return item.backOn && item.backOn <= todayISO(); });
   var counts = [];
-  if (undone.length) counts.push(STR.countToday + undone.length);
-  if (c.pendings.length) counts.push(STR.countPending + c.pendings.length);
-  if (c.seeds.length) counts.push(STR.countSeeds + c.seeds.length);
+  if (undone.length) counts.push('<span class="sec-today">' + esc(STR.countToday + undone.length) + '</span>');
+  if (c.pendings.length) counts.push('<span class="sec-pending">' + esc(STR.countPending + c.pendings.length) + '</span>');
+  if (c.seeds.length) counts.push('<span class="sec-seeds">' + esc(STR.countSeeds + c.seeds.length) + '</span>');
   var firstNext = c.next.length ? String(c.next[0].text || "") : "";
   var summary = (firstNext || counts.length) ? '<div class="compactline">' +
     (firstNext ? '<div class="text">' + esc(firstNext) + '</div>' : '') +
-    (counts.length ? '<span class="compactcounts">' + esc(counts.join(' ')) + '</span>' : '') +
+    (counts.length ? '<span class="compactcounts">' + counts.join(' ') + '</span>' : '') +
   '</div>' : '';
   return '<article class="card compact' + staleClass + (DND.activeId === c.id ? ' dragging' : '') + '" style="' + stageStyle + '" onclick="openDetail(\'' + esc(c.id) + '\')">' +
     '<div class="cardhead">' +
@@ -3961,7 +3989,7 @@ function renderBoardCardCompact(c, stage, undone, stageStyle, staleClass){
         (compactMeta(c) ? '<div class="meta">' + esc(compactMeta(c)) + '</div>' : '') +
         '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div>' +
         (hasBack ? '<span class="badge">' + esc(STR.backTodayBadge) + '</span>' : '') + '</div>' +
-        (c.phaseNote ? '<div class="phase oneline">' + esc(c.phaseNote) + '</div>' : '') +
+        (c.phaseNote ? '<div class="phase oneline sec-phase">' + esc(c.phaseNote) + '</div>' : '') +
         summary +
       '</div>' +
     '</div>' +
@@ -4266,6 +4294,7 @@ function renderSettingsSheet(){
 
 function renderMetaEditor(c){
   return '<div class="field" style="margin-top:8px"><div class="fieldlabel">' + esc(STR.admissionDate) + '</div><div class="row wrap"><input class="date" type="date" value="' + esc(c.admittedAt || "") + '" onchange="updateCaseAdmittedAt(\'' + esc(c.id) + '\',this.value)"></div></div>' +
+    '<div class="field" style="margin-top:8px"><div class="fieldlabel">' + esc(STR.wardRoom) + '</div><input class="input" value="' + esc(c.room || "") + '" placeholder="' + esc(STR.wardRoomPh) + '" onblur="updateCaseRoom(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div>' +
     '<div class="field" style="margin-top:8px"><div class="fieldlabel">' + esc(STR.editMeta) + '</div>' +
     '<div class="chips">' +
       '<button class="chipbtn' + (!c.ageBand ? ' on' : '') + '" onclick="updateCaseAge(\'' + esc(c.id) + '\',\'\')">' + esc(STR.unset) + '</button>' +
@@ -4321,8 +4350,8 @@ function renderSeedList(c){
   }).join('');
 }
 
-function renderSectionCard(title, body, addId, placeholder, addFn, caseId){
-  return '<section class="panelcard"><div class="one">' + esc(title) + '</div><div class="stack" style="margin-top:10px">' +
+function renderSectionCard(title, body, addId, placeholder, addFn, caseId, secClass){
+  return '<section class="panelcard' + (secClass ? ' ' + secClass : '') + '"><div class="one">' + esc(title) + '</div><div class="stack" style="margin-top:10px">' +
     (body || '<div class="faint">-</div>') +
     (addId ? '<div class="row"><input id="' + esc(addId) + '" class="input" placeholder="' + esc(placeholder) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){' + addFn + '(\'' + esc(caseId) + '\',this.value);this.value=\'\';}"><button class="ghostbtn" onclick="' + addFn + '(\'' + esc(caseId) + '\',document.getElementById(\'' + esc(addId) + '\').value);document.getElementById(\'' + esc(addId) + '\').value=\'\'">＋</button></div>' : '') +
   '</div></section>';
@@ -4334,8 +4363,8 @@ function renderReviewCard(c){
   return '<section class="panelcard"><div class="labelrow"><div class="caseid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, todayISO()) + '</div>' +
     (compactMeta(c) ? '<div class="meta">' + esc(compactMeta(c)) + '</div>' : '') +
     '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div></div>' +
-    (c.phaseNote ? '<div class="phase">' + esc(c.phaseNote) + '</div>' : '') +
-    (firstNext ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.next) + '</div><div class="lineitem"><div class="linegrow"><div class="text">' + esc(firstNext.text) + '</div>' + (firstNext.due ? '<div class="faint">' + esc(firstNext.due) + '</div>' : '') + '</div></div></div>' : '') +
+    (c.phaseNote ? '<div class="phase sec-phase">' + esc(c.phaseNote) + '</div>' : '') +
+    (firstNext ? '<div class="section sec-next"><div class="sectiontitle">' + esc(DB.config.labels.next) + '</div><div class="lineitem"><div class="linegrow"><div class="text">' + esc(firstNext.text) + '</div>' + (firstNext.due ? '<div class="faint">' + esc(firstNext.due) + '</div>' : '') + '</div></div></div>' : '') +
   '</section>';
 }
 
@@ -4364,6 +4393,7 @@ function renderAdmissionSheet(){
       '<div class="field"><input id="admLabelInput" class="input" value="' + esc(d.label || "") + '" placeholder="' + esc(STR.labelPh) + '" oninput="sheetTextInput(\'label\',this.value)" autofocus><div class="note">' + esc(STR.piiWarning) + '</div></div>' +
       '<div class="field"><input class="input" value="' + esc(d.phaseNote || "") + '" placeholder="' + esc(STR.firstNotePh) + '" oninput="sheetTextInput(\'phaseNote\',this.value)"></div>' +
       '<div class="field"><div class="fieldlabel">' + esc(STR.admissionDate) + '</div><input class="date" type="date" value="' + esc(d.admittedAt || todayISO()) + '" oninput="sheetTextInput(\'admittedAt\',this.value)"></div>' +
+      '<div class="field"><div class="fieldlabel">' + esc(STR.wardRoom) + '</div><input class="input" value="' + esc(d.room || "") + '" placeholder="' + esc(STR.wardRoomPh) + '" oninput="sheetTextInput(\'room\',this.value)"></div>' +
       '<div class="field"><div class="fieldlabel">' + esc(STR.editMeta) + '</div><div class="chips"><button class="chipbtn' + (!d.ageBand ? ' on' : '') + '" onclick="pickAdmissionAge(\'\')">' + esc(STR.unset) + '</button>' +
         STR.ageBands.map(function(age){ return '<button class="chipbtn' + (d.ageBand === age ? ' on' : '') + '" onclick="pickAdmissionAge(\'' + esc(age) + '\')">' + esc(age) + '</button>'; }).join('') +
       '</div></div>' +
@@ -4468,12 +4498,12 @@ renderDetail = function(caseId){
       (VIEW.editingMeta ? renderMetaEditor(c) : '') +
     '</div><button class="pickbtn" onclick="openStagePicker(\'' + esc(c.id) + '\')">' + stageDot(stage) + esc(stage.name) + '</button></div>' +
     '<div class="field" style="margin-top:10px"><div class="fieldlabel">' + esc(STR.addDxTag) + '</div>' + renderTagList(c) + '<div class="row" style="margin-top:8px"><input id="dxTagInput" class="input" placeholder="' + esc(STR.dxTagPh) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addDxTag(\'' + esc(c.id) + '\',this.value);this.value=\'\'}"><button class="ghostbtn" onclick="addDxTag(\'' + esc(c.id) + '\',document.getElementById(\'dxTagInput\').value);document.getElementById(\'dxTagInput\').value=\'\'">+</button></div></div></section>' +
-    '<section class="panelcard"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
+    '<section class="panelcard sec-phase"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
     (dischargeInline ? dischargePanel : '') +
-    renderSectionCard(DB.config.labels.next, renderNextList(c), "nextInput", STR.nextPh, "addNext", c.id) +
-    renderSectionCard(DB.config.labels.today, renderTodoList(c), "todoInput", STR.todayPh, "addTodo", c.id) +
-    renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id) +
-    renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id) +
+    renderSectionCard(DB.config.labels.next, renderNextList(c), "nextInput", STR.nextPh, "addNext", c.id, "sec-next") +
+    renderSectionCard(DB.config.labels.today, renderTodoList(c), "todoInput", STR.todayPh, "addTodo", c.id, "sec-today") +
+    renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id, "sec-pending") +
+    renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id, "sec-seeds") +
     renderChartPanel(c) +
     (!dischargeInline ? dischargePanel : '') +
     '<section class="panelcard"><textarea id="dayExportText" class="reviewtextarea hidden" readonly>' + esc(dayExportText(c.id)) + '</textarea><button class="ghostbtn" onclick="copyDayExport(\'' + esc(c.id) + '\')">' + esc(STR.dayExport) + '</button></section>' +

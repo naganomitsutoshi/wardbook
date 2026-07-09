@@ -106,7 +106,7 @@ vm.runInContext(`
     v:1,
     cases:[
       {
-        id:"c1", label:"haien", ageBand:"80s", sex:"M", status:"active", admittedAt:"2026-07-05",
+        id:"c1", label:"haien", ageBand:"80s", sex:"M", room:"3E-305", status:"active", admittedAt:"2026-07-05",
         stageId:"dc", stageLog:[{ date:"2026-07-05", stageId:"acute" }, { date:"2026-07-07", stageId:"dc" }],
         phaseNote:"CAP", next:[{ id:"n1", text:"ABX", due:"2026-07-10" }],
         todos:[{ id:"t1", text:"lab", done:false, createdOn:"2026-07-07" }],
@@ -200,6 +200,11 @@ if (!boardHtml.includes("stale1") && !boardHtml.includes("stale2")) fail("board 
 if (!boardHtml.includes('data-drop-index="0"')) fail("board missing dropzone index");
 if (boardHtml.includes("onpointerenter")) fail("board dropzone still uses inline pointer handlers");
 if (!boardHtml.includes("toggleDensity()")) fail("board missing density toggle");
+// Ward/room shows in the card meta; the five sections carry their color classes.
+if (!boardHtml.includes("3E-305")) fail("board missing ward/room in meta");
+["sec-phase", "sec-next", "sec-today", "sec-pending", "sec-seeds"].forEach((cls) => {
+  if (!boardHtml.includes(cls)) fail("board missing section color class " + cls);
+});
 
 // Normal mode shows ALL next/today items (no 2-item cap).
 vm.runInContext(`
@@ -266,6 +271,20 @@ vm.runInContext("setBoardMode('board')", sandbox);
 vm.runInContext("VIEW={ name:'detail', caseId:'c1', editingMeta:false, editingLabel:false, stagePickerFor:'', nowDay:todayISO() }", sandbox);
 const detailHtml = vm.runInContext("renderDetail('c1')", sandbox);
 if (!detailHtml.includes("seed-one")) fail("detail missing seed");
+if (!detailHtml.includes("3E-305")) fail("detail missing ward/room in meta");
+["sec-phase", "sec-next", "sec-today", "sec-pending", "sec-seeds"].forEach((cls) => {
+  if (!detailHtml.includes(cls)) fail("detail missing section color class " + cls);
+});
+// Meta editor carries the ward/room input.
+vm.runInContext("VIEW.editingMeta = true;", sandbox);
+const metaEditHtml = vm.runInContext("renderDetail('c1')", sandbox);
+if (!metaEditHtml.includes("updateCaseRoom('c1'")) fail("meta editor missing ward/room input");
+vm.runInContext("VIEW.editingMeta = false;", sandbox);
+// Admission sheet carries the ward/room input.
+vm.runInContext("SHEET={name:'admission',draft:{label:'',phaseNote:'',ageBand:'',sex:'',room:'',admittedAt:todayISO()},syncBusy:false};", sandbox);
+const admissionHtml = vm.runInContext("renderAdmissionSheet()", sandbox);
+if (!admissionHtml.includes("sheetTextInput('room'")) fail("admission sheet missing ward/room input");
+vm.runInContext("SHEET={name:'',draft:{},syncBusy:false};", sandbox);
 if (!detailHtml.includes(vm.runInContext("STR.chartPanel", sandbox))) fail("detail missing chart panel header");
 if (detailHtml.includes("chartgrid")) fail("chart panel must be collapsed by default");
 if (detailHtml.includes("detailAppt")) fail("detail still renders appt section");
