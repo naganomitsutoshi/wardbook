@@ -291,6 +291,13 @@
   .weekgrid .suncol{color:var(--weekend-sun)}
   .weekgrid .satcol{color:var(--weekend-sat)}
   .weekgrid .todaycol,.chartgrid .todaycol{background:var(--panel)}
+  .mark.evplan{font-weight:600}
+  .mark.evdone{opacity:.5}
+  .mark.overdue{color:#dc2626;font-weight:700}
+  .bandrow{display:flex;gap:2px;height:3px;margin-top:2px}
+  .bandbit{flex:1;border-radius:2px;opacity:.45}
+  .overdueblock{border:1px solid #dc2626;border-radius:8px;padding:8px;margin-bottom:8px}
+  .overdueblock .fieldlabel{color:#dc2626}
   .daynav{display:flex;gap:8px;align-items:center;margin-bottom:10px}
   .daynavdate{flex:1;text-align:center;font-weight:700}
   .daygroup{margin-top:12px}
@@ -1088,16 +1095,40 @@ function buildWeekGrid(cases, todayIso, pastDays, futureDays){
   var rows = boardOrder(cases, todayIso).filter(function(c){ return c.status !== "discharged"; }).map(function(c){
     var cells = {};
     var firstStageId = c && c.stageLog && c.stageLog[0] && c.stageLog[0].stageId ? c.stageLog[0].stageId : "";
+    var chartItems = cloneArr(c.chart && c.chart.items);
+    var overdue = overdueEntries(c, todayIso);
     dates.forEach(function(date){
       var markers = [];
       cloneArr(c.next).forEach(function(item){ if (item && item.due === date && date > todayIso) markers.push({ kind:"next", text:"\u6b21" }); });
       cloneArr(c.pendings).forEach(function(item){ if (item && item.backOn === date && date > todayIso) markers.push({ kind:"pending", text:"\u5f85" }); });
       if (c.discharge && c.discharge.plannedOn === date && date > todayIso) markers.push({ kind:"planned", text:"\u2605" });
+      cloneArr(c.todos).forEach(function(item){
+        if (!item || item.done) return;
+        // Undone todos live on today (auto-rollover); future-scheduled ones on their day.
+        if ((date === todayIso && item.createdOn <= todayIso) || (date > todayIso && item.createdOn === date)) {
+          markers.push({ kind:"todo", text:"\u4eca" });
+        }
+      });
+      var events = [];
+      var bands = [];
+      var plans = [];
+      chartItems.forEach(function(item){
+        if (!item) return;
+        if (item.kind === "event" && item.date === date) events.push({ id:item.id, catId:item.catId, name:item.name, status:item.status });
+        if (item.kind === "band" && bandOnDate(item, date)) bands.push({ id:item.id, catId:item.catId, name:item.name });
+        if (item.kind === "value" && isObj(item.planned) && item.planned[date]) {
+          plans.push({ id:item.id, catId:item.catId, name:item.name, entered:!!(isObj(item.values) && item.values[date]) });
+        }
+      });
       var stageId = "";
       if (date >= c.admittedAt && date <= todayIso) stageId = stageOn(c.stageLog, date) || firstStageId;
       cells[date] = {
         stageId:stageId,
-        markers:markers
+        markers:markers,
+        events:events,
+        bands:bands,
+        plans:plans,
+        overdue:date === todayIso ? overdue : []
       };
     });
     return { case:c, dates:cells };
@@ -1110,8 +1141,18 @@ function buildDayPlan(cases, date, todayIso){
   boardOrder(cases, todayIso).filter(function(c){ return c.status !== "discharged"; }).forEach(function(c){
     var items = [];
     if (date === todayIso) {
+      // Unresolved past plans surface on today until explicitly resolved (MAR).
+      overdueEntries(c, todayIso).forEach(function(o){
+        items.push({ type:"overdue", id:o.id, text:o.name, kind:o.kind, date:o.date, catId:o.catId });
+      });
+    }
+    if (date === todayIso) {
       cloneArr(c.todos).forEach(function(item){
-        if (item && !item.done) items.push({ type:"todo", id:String(item.id || ""), text:String(item.text || "") });
+        if (item && !item.done && item.createdOn <= todayIso) items.push({ type:"todo", id:String(item.id || ""), text:String(item.text || "") });
+      });
+    } else if (date > todayIso) {
+      cloneArr(c.todos).forEach(function(item){
+        if (item && !item.done && item.createdOn === date) items.push({ type:"todo", id:String(item.id || ""), text:String(item.text || "") });
       });
     }
     cloneArr(c.next).forEach(function(item){
@@ -1119,6 +1160,15 @@ function buildDayPlan(cases, date, todayIso){
     });
     cloneArr(c.pendings).forEach(function(item){
       if (item && item.backOn === date) items.push({ type:"pending", id:String(item.id || ""), text:String(item.text || "") });
+    });
+    cloneArr(c.chart && c.chart.items).forEach(function(item){
+      if (!item) return;
+      if (item.kind === "event" && item.date === date) {
+        items.push({ type:"event", id:item.id, text:item.name, catId:item.catId, status:item.status });
+      }
+      if (item.kind === "value" && isObj(item.planned) && item.planned[date]) {
+        items.push({ type:"valuePlan", id:item.id, text:item.name, catId:item.catId, entered:!!(isObj(item.values) && item.values[date]) });
+      }
     });
     if (c.discharge && c.discharge.plannedOn === date) items.push({ type:"discharge", id:"", text:"" });
     if (items.length) groups.push({ caseId:c.id, label:c.label, admittedAt:c.admittedAt, stageId:c.stageId, items:items });
@@ -1665,6 +1715,13 @@ Object.assign(STR, {
   dayExport:"\u65e5\u6b21\u66f8\u304d\u51fa\u3057",
   cellItemNext:"\u6b21\u306e\u4e00\u624b",
   cellItemPending:"\u4fdd\u7559",
+  cellItemToday:"\u4eca\u65e5\u3084\u308b",
+  markDone:"\u6e08",
+  markUndo:"\u672a\u5b9f\u65bd\u306b\u623b\u3059",
+  moveDate:"\u65e5\u3092\u5909\u66f4",
+  overdueTitle:"\u671f\u9650\u8d85\u904e",
+  planBadge:"\u4e88\u5b9a",
+  valueEnterPh:"\u5024\u3092\u5165\u529b\u3067\u6d88\u3057\u8fbc\u307f",
   streakLine:"\u9023\u7d9a\u68da\u5378\u3057",
   seedsTotal:"種 通算",
   stageEditor:"\u30b9\u30c6\u30fc\u30b8\u7de8\u96c6",
@@ -3152,22 +3209,54 @@ function openWeekCell(caseId, date){
 }
 
 function setCellDraftType(type){
-  SHEET.draft.itemType = type === "pending" ? "pending" : "next";
+  SHEET.draft.itemType = String(type || "next");
   renderSheet();
 }
 
+// Cell-tap add: fixed kinds (next / pending / todo) plus the user's chart
+// categories listed dynamically (SPEC-F decision 4 - adding a category in
+// settings extends this menu automatically, nothing is hardcoded).
 function addCellItem(caseId, date){
   var itemType = SHEET.draft && SHEET.draft.itemType || "next";
   var text = String(SHEET.draft && SHEET.draft.text || "").trim();
   if (!text) return;
   mutateCase(caseId, function(c){
     if (itemType === "pending") c.pendings.push({ id:uid(), text:text, backOn:date });
+    else if (itemType === "todo") c.todos.push({ id:uid(), text:text, done:false, createdOn:date });
+    else if (itemType.indexOf("cat:") === 0) {
+      var cat = chartCatById(itemType.slice(4));
+      if (!cat) return;
+      c.chart = normalizeChart(c.chart);
+      if (cat.kind === "event") {
+        c.chart.items.push({ id:uid(), catId:cat.id, kind:"event", name:text, date:date, status:"planned" });
+      } else if (cat.kind === "value") {
+        // Same-named row is reused so "echo planned twice" stays one chart row.
+        var item = c.chart.items.find(function(row){ return row.catId === cat.id && row.kind === "value" && row.name === text; });
+        if (!item) {
+          item = { id:uid(), catId:cat.id, kind:"value", name:text, values:{}, planned:{} };
+          c.chart.items.push(item);
+        }
+        item.planned = isObj(item.planned) ? item.planned : {};
+        item.planned[date] = true;
+      }
+    }
     else c.next.push({ id:uid(), text:text, due:date });
   });
   SHEET.draft.text = "";
   renderSheet();
   queueFocusTarget("weekCellInput", false);
   flushQueuedFocus();
+}
+
+// Band categories need start/end dates, so the cell menu routes them to the
+// chart-item sheet with the tapped date prefilled as the start.
+function openChartItemForDate(caseId, catId, date){
+  var cat = chartCatById(catId);
+  if (!cat) return;
+  openSheetWithDraft("chartItem", {
+    caseId:caseId, catId:catId, itemId:"", kind:cat.kind, name:"",
+    startDate:date, endDate:"", date:date
+  }, "chartItemName", false);
 }
 
 function updateStageName(index, value){
@@ -3322,11 +3411,6 @@ function toggleChartPanel(){
   render();
 }
 
-function toggleChartDateMode(){
-  VIEW.chartDateMode = VIEW.chartDateMode === "date" ? "day" : "date";
-  render();
-}
-
 function chartCollapseKey(caseId, catId){
   return caseId + ":" + catId;
 }
@@ -3397,9 +3481,10 @@ function saveChartItem(){
       if (kind === "event") item.date = date;
     } else {
       var row = { id:uid(), catId:d.catId, kind:kind, name:name };
-      if (kind === "value") row.values = {};
+      if (kind === "value") { row.values = {}; row.planned = {}; }
       if (kind === "band") { row.startDate = startDate; row.endDate = endDate; }
-      if (kind === "event") row.date = date;
+      // Future-dated events start as plans, today/past ones as records.
+      if (kind === "event") { row.date = date; row.status = date > todayISO() ? "planned" : "done"; }
       c.chart.items.push(row);
     }
   });
@@ -3460,7 +3545,8 @@ function addChartEventItem(){
   if (!text) return;
   mutateCase(d.caseId, function(c){
     c.chart = normalizeChart(c.chart);
-    c.chart.items.push({ id:uid(), catId:d.catId, kind:"event", name:text, date:safeDate(d.date, todayISO()) });
+    var date = safeDate(d.date, todayISO());
+    c.chart.items.push({ id:uid(), catId:d.catId, kind:"event", name:text, date:date, status:date > todayISO() ? "planned" : "done" });
   });
   SHEET.draft.text = "";
   renderSheet();
@@ -3500,7 +3586,6 @@ function rescheduleChartEntry(caseId, itemId, fromDate, newDate){
       item.planned[next] = true;
     }
   });
-  closeSheet();
 }
 
 // Cancel for a planned EVENT is the normal delete flow (trash + tombstone);
@@ -3747,7 +3832,9 @@ function renderTopbar(){
 function renderBoardCard(c){
   var stage = stageById(c.stageId);
   var dueNext = c.next;
-  var undone = c.todos.filter(function(x){ return !x.done; });
+  // Future-scheduled todos (added from a future week cell) stay off the board
+  // card until their day arrives; they live on the week grid / day view.
+  var undone = c.todos.filter(function(x){ return !x.done && x.createdOn <= todayISO(); });
   var showPendings = c.pendings.length > 0;
   var stageStyle = 'border-left-color:' + esc(stage.color);
   var stale = stalenessLevel(c.lastTouchedAt, nowISO());
@@ -3815,9 +3902,29 @@ function renderDayPlanView(){
   var nav = '<div class="daynav"><button class="iconbtn" onclick="shiftDayDate(-1)">◀</button><div class="daynavdate">' + esc(weekHeaderLabel(date)) + (date === today ? ' <span class="badge">' + esc(STR.dayView) + '</span>' : '') + '</div><button class="iconbtn" onclick="shiftDayDate(1)">▶</button>' + (date !== today ? '<button class="smallbtn" onclick="openDayView(\'' + esc(today) + '\')">' + esc(STR.dayToToday) + '</button>' : '') + '</div>';
   var bodyHtml = groups.length ? groups.map(function(g){
     var stage = stageById(g.stageId);
-    return '<div class="daygroup"><div class="labelrow dayhead" onclick="openDetail(\'' + esc(g.caseId) + '\')"><div class="caseid">' + esc(g.label || '—') + ' D' + computeDay(g.admittedAt, today) + '</div><div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div><div class="grow"></div><button class="smallbtn" onclick="event.stopPropagation();openWeekCell(\'' + esc(g.caseId) + '\',\'' + esc(date) + '\')">＋</button></div><div class="plain">' + g.items.map(function(item){
+    var overdueItems = g.items.filter(function(item){ return item.type === "overdue"; });
+    var normalItems = g.items.filter(function(item){ return item.type !== "overdue"; });
+    // MAR block: unresolved past plans stay pinned in red until an explicit
+    // done / move-date / cancel — never auto-carried, never auto-dropped.
+    var overdueHtml = overdueItems.length ? '<div class="overdueblock"><div class="fieldlabel">⚠ ' + esc(STR.overdueTitle) + '</div>' + overdueItems.map(function(item){
+      var resolve = item.kind === "valuePlan"
+        ? '<button class="smallbtn" onclick="event.stopPropagation();openChartValue(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\',\'' + esc(item.date) + '\')">' + esc(STR.markDone) + '</button>' +
+          '<input class="date" type="date" value="' + esc(item.date) + '" onclick="event.stopPropagation()" onchange="rescheduleChartEntry(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\',\'' + esc(item.date) + '\',this.value)">' +
+          '<button class="iconbtn" onclick="event.stopPropagation();cancelValuePlan(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\',\'' + esc(item.date) + '\')">×</button>'
+        : '<button class="smallbtn" onclick="event.stopPropagation();toggleEventDone(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\',todayISO())">' + esc(STR.markDone) + '</button>' +
+          '<input class="date" type="date" value="' + esc(item.date) + '" onclick="event.stopPropagation()" onchange="rescheduleChartEntry(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\',\'\',this.value)">' +
+          '<button class="iconbtn" onclick="event.stopPropagation();removeChartItem(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\')">×</button>';
+      return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(item.text) + '</div><div class="faint">' + esc(item.date) + '</div></div>' + resolve + '</div>';
+    }).join('') + '</div>' : '';
+    return '<div class="daygroup"><div class="labelrow dayhead" onclick="openDetail(\'' + esc(g.caseId) + '\')"><div class="caseid">' + esc(g.label || '—') + ' D' + computeDay(g.admittedAt, today) + '</div><div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div><div class="grow"></div><button class="smallbtn" onclick="event.stopPropagation();openWeekCell(\'' + esc(g.caseId) + '\',\'' + esc(date) + '\')">＋</button></div>' + overdueHtml + '<div class="plain">' + normalItems.map(function(item){
       if (item.type === "todo") {
         return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" onclick="toggleTodo(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div></label>';
+      }
+      if (item.type === "event") {
+        return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.status === "done" ? 'checked ' : '') + 'onclick="toggleEventDone(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div></label>';
+      }
+      if (item.type === "valuePlan") {
+        return '<div class="lineitem" onclick="event.stopPropagation();openChartValue(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\',\'' + esc(date) + '\')"><div class="linegrow"><div class="text">◇ ' + esc(item.text) + '</div><div class="faint">' + esc(item.entered ? STR.markDone : STR.valueEnterPh) + '</div></div></div>';
       }
       if (item.type === "discharge") {
         return '<div class="lineitem" onclick="openDetail(\'' + esc(g.caseId) + '\')"><div class="linegrow"><div class="text">★ ' + esc(STR.dayDischargeLabel) + '</div></div></div>';
@@ -3875,23 +3982,67 @@ function renderWeekCellSheet(){
   var rows = [];
   if (c) {
     cloneArr(c.next).filter(function(item){ return item.due === d.date; }).forEach(function(item){
-      rows.push('<div class="lineitem"><span class="badge">' + esc(STR.cellItemNext) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deleteNext(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
+      rows.push('<div class="lineitem"><span class="badge">' + esc(DB.config.labels.next) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deleteNext(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
     });
     cloneArr(c.pendings).filter(function(item){ return item.backOn === d.date; }).forEach(function(item){
-      rows.push('<div class="lineitem"><span class="badge">' + esc(STR.cellItemPending) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deletePending(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
+      rows.push('<div class="lineitem"><span class="badge">' + esc(DB.config.labels.pending) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deletePending(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
+    });
+    cloneArr(c.todos).filter(function(item){ return !item.done && item.createdOn === d.date; }).forEach(function(item){
+      rows.push('<div class="lineitem"><span class="badge">' + esc(DB.config.labels.today) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deleteTodo(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
+    });
+    cloneArr(c.chart && c.chart.items).forEach(function(item){
+      if (!item) return;
+      var cat = chartCatById(item.catId);
+      var catName = cat ? cat.name : "";
+      if (item.kind === "event" && item.date === d.date) {
+        rows.push('<div class="lineitem"><span class="badge">' + esc(catName) + '</span><div class="linegrow"><div class="text">' + esc(item.name) + '</div></div>' +
+          '<button class="iconbtn" onclick="toggleEventDone(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">' + (item.status === "done" ? '\u2713' : '\u25a1') + '</button>' +
+          '<input class="date" type="date" value="' + esc(item.date) + '" onchange="rescheduleChartEntry(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\',\'\',this.value);renderSheet()">' +
+          '<button class="iconbtn" onclick="removeChartItem(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
+      }
+      if (item.kind === "value" && isObj(item.planned) && item.planned[d.date]) {
+        var entered = !!(isObj(item.values) && item.values[d.date]);
+        rows.push('<div class="lineitem"><span class="badge">' + esc(catName) + '</span><div class="linegrow"><div class="text">\u25c7' + esc(item.name) + '</div><div class="faint">' + esc(entered ? STR.markDone : STR.planBadge) + '</div></div>' +
+          '<input class="date" type="date" value="' + esc(d.date) + '" onchange="rescheduleChartEntry(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\',\'' + esc(d.date) + '\',this.value);renderSheet()">' +
+          '<button class="iconbtn" onclick="cancelValuePlan(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\',\'' + esc(d.date) + '\');renderSheet()">\u00d7</button></div>');
+      }
     });
   }
+  var chips = [
+    { key:"next", label:DB.config.labels.next },
+    { key:"pending", label:DB.config.labels.pending },
+    { key:"todo", label:DB.config.labels.today }
+  ];
+  cloneArr(DB.config.chartCats).forEach(function(cat){
+    if (cat.kind === "event" || cat.kind === "value") chips.push({ key:"cat:" + cat.id, label:cat.name });
+  });
+  var bandChips = cloneArr(DB.config.chartCats).filter(function(cat){ return cat.kind === "band"; }).map(function(cat){
+    return '<button class="chipbtn" onclick="openChartItemForDate(\'' + esc(d.caseId) + '\',\'' + esc(cat.id) + '\',\'' + esc(d.date) + '\')">' + esc(cat.name) + '\u2026</button>';
+  }).join('');
+  var active = d.itemType || "next";
   return '<div class="sheetcard"><div class="sheettitle">' + esc((c ? c.label + " " : "") + (d.date || "")) + '</div><div class="stack">' +
-    '<div class="chips"><button class="chipbtn' + ((d.itemType || "next") === "next" ? ' on' : '') + '" onclick="setCellDraftType(\'next\')">' + esc(STR.cellItemNext) + '</button><button class="chipbtn' + ((d.itemType || "next") === "pending" ? ' on' : '') + '" onclick="setCellDraftType(\'pending\')">' + esc(STR.cellItemPending) + '</button></div>' +
+    '<div class="chips">' + chips.map(function(chip){
+      return '<button class="chipbtn' + (active === chip.key ? ' on' : '') + '" onclick="setCellDraftType(\'' + esc(chip.key) + '\')">' + esc(chip.label) + '</button>';
+    }).join('') + bandChips + '</div>' +
     '<div class="row"><input id="weekCellInput" class="input" value="' + esc(d.text || "") + '" oninput="sheetDraftValue(\'text\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addCellItem(\'' + esc(d.caseId) + '\',\'' + esc(d.date) + '\')}"><button class="ghostbtn" onclick="addCellItem(\'' + esc(d.caseId) + '\',\'' + esc(d.date) + '\')">+</button></div>' +
     '<div class="plain">' + (rows.length ? rows.join('') : '<div class="faint">-</div>') + '</div><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
-function renderChartEventDots(items, date){
+function chartEventMarkClass(item, today){
+  if (item.status !== "planned") return "evdone";
+  return item.date < today ? "overdue" : "evplan";
+}
+
+function chartEventMarkText(item){
+  var head = item.status === "done" ? "✓" : (item.date < todayISO() ? "⚠" : "□");
+  return head + (String(item.name || '').slice(0, 2) || '●');
+}
+
+function renderChartEventDots(items, date, today){
   var hits = cloneArr(items).filter(function(item){ return item && item.date === date; });
   if (!hits.length) return '';
   return hits.slice(0, 2).map(function(item){
-    return '<span class="mark">' + esc(String(item.name || '').slice(0, 2) || '●') + '</span>';
+    return '<span class="mark ' + esc(chartEventMarkClass(item, today)) + '">' + esc(chartEventMarkText(item)) + '</span>';
   }).join('') + (hits.length > 2 ? '<span class="mark">+' + (hits.length - 2) + '</span>' : '');
 }
 
@@ -3901,14 +4052,16 @@ function renderChartPanel(c){
   if (!open) return '<section class="panelcard">' + head + '</section>';
   var today = todayISO();
   var dates = chartDates(c, today);
-  var dateMode = VIEW.chartDateMode === "date" ? "date" : "day";
   var marks = chartColMarks(c);
   var groups = chartRowsForCase(c, DB.config.chartCats).filter(function(group){
     return group.orphan || !chartCatHidden(group.cat.id);
   });
-  var headRow = '<tr onclick="toggleChartDateMode()"><th class="sticky"></th>' + dates.map(function(date){
-    var label = dateMode === "date" ? (Number(date.slice(5, 7)) + '/' + Number(date.slice(8, 10))) : ('D' + computeDay(c.admittedAt, date));
-    return '<th class="' + (date === today ? 'todaycol' : '') + '">' + esc(label) + '<span class="colmark">' + (marks[date] ? esc(marks[date]) : '&nbsp;') + '</span></th>';
+  // Two fixed header rows (D-number + M/D) - the paper 温度板's 病日+暦日 pair.
+  // The old tap-toggle (chartDateMode) is gone by design decision.
+  var headRow = '<tr><th class="sticky"></th>' + dates.map(function(date){
+    return '<th class="' + (date === today ? 'todaycol' : '') + '">D' + computeDay(c.admittedAt, date) + '</th>';
+  }).join('') + '</tr><tr><th class="sticky"></th>' + dates.map(function(date){
+    return '<th class="' + (date === today ? 'todaycol' : '') + '">' + esc(Number(date.slice(5, 7)) + '/' + Number(date.slice(8, 10))) + '<span class="colmark">' + (marks[date] ? esc(marks[date]) : '&nbsp;') + '</span></th>';
   }).join('') + '</tr>';
   var body = groups.map(function(group){
     var cat = group.cat;
@@ -3922,7 +4075,7 @@ function renderChartPanel(c){
     var rows = '';
     if (!group.orphan && cat.kind === "event") {
       rows = group.items.length ? '<tr><th class="sticky chartlabel"></th>' + dates.map(function(date){
-        return '<td class="' + (date === today ? 'todaycol' : '') + '" onclick="openChartEventCell(\'' + esc(c.id) + '\',\'' + esc(cat.id) + '\',\'' + esc(date) + '\')">' + renderChartEventDots(group.items, date) + '</td>';
+        return '<td class="' + (date === today ? 'todaycol' : '') + '" onclick="openChartEventCell(\'' + esc(c.id) + '\',\'' + esc(cat.id) + '\',\'' + esc(date) + '\')">' + renderChartEventDots(group.items, date, today) + '</td>';
       }).join('') + '</tr>' : '';
     } else {
       rows = group.items.map(function(item){
@@ -3934,11 +4087,14 @@ function renderChartPanel(c){
         }
         if (item.kind === "event") {
           return '<tr>' + labelTh + dates.map(function(date){
-            return '<td class="' + (date === today ? 'todaycol' : '') + '">' + (item.date === date ? '<span class="mark">' + esc(String(item.name || '').slice(0, 2) || '●') + '</span>' : '') + '</td>';
+            return '<td class="' + (date === today ? 'todaycol' : '') + '">' + (item.date === date ? '<span class="mark ' + esc(chartEventMarkClass(item, today)) + '">' + esc(chartEventMarkText(item)) + '</span>' : '') + '</td>';
           }).join('') + '</tr>';
         }
         return '<tr>' + labelTh + dates.map(function(date){
-          return '<td class="' + (date === today ? 'todaycol' : '') + '" onclick="openChartValue(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',\'' + esc(date) + '\')">' + esc((item.values && item.values[date]) || '') + '</td>';
+          var val = (item.values && item.values[date]) || '';
+          var plannedHere = !val && isObj(item.planned) && item.planned[date];
+          var planMark = plannedHere ? '<span class="mark ' + (date < today ? 'overdue' : 'evplan') + '">' + (date < today ? '⚠' : '◇') + '</span>' : '';
+          return '<td class="' + (date === today ? 'todaycol' : '') + '" onclick="openChartValue(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',\'' + esc(date) + '\')">' + (val ? esc(val) : planMark) + '</td>';
         }).join('') + '</tr>';
       }).join('');
     }
@@ -4185,9 +4341,20 @@ renderBoard = function(){
       return '<tr><th class="sticky casecell" onclick="openDetail(\'' + esc(row.case.id) + '\')">' + esc(row.case.label) + ' D' + computeDay(row.case.admittedAt, todayISO()) + '</th>' + week.dates.map(function(date){
         var cell = row.dates[date];
         var bandColor = cell.stageId ? stageById(cell.stageId).color : "transparent";
-        return '<td class="' + (date === week.today ? 'todaycol' : '') + '" onclick="openWeekCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="markerstack">' + cell.markers.slice(0, 2).map(function(marker){
-          return '<span class="mark">' + esc(marker.text) + '</span>';
-        }).join('') + (cell.markers.length > 2 ? '<span class="mark">+' + (cell.markers.length - 2) + '</span>' : '') + '</div></td>';
+        // Chart projections share the marker stack: overdue first (today only),
+        // then planned/done events, value plans, then the classic markers.
+        var marks = [];
+        cloneArr(cell.overdue).forEach(function(o){ marks.push({ cls:"overdue", text:"⚠" + String(o.name || "").slice(0, 2) }); });
+        cloneArr(cell.events).forEach(function(ev){ marks.push({ cls:ev.status === "done" ? "evdone" : "evplan", text:(ev.status === "done" ? "✓" : "□") + String(ev.name || "").slice(0, 2) }); });
+        cloneArr(cell.plans).forEach(function(p){ marks.push({ cls:p.entered ? "evdone" : "evplan", text:"◇" + String(p.name || "").slice(0, 2) }); });
+        cell.markers.forEach(function(marker){ marks.push({ cls:"", text:marker.text }); });
+        var bandBits = cloneArr(cell.bands).slice(0, 3).map(function(b){
+          var cat = chartCatById(b.catId);
+          return '<span class="bandbit" style="background:' + esc((cat && cat.color) || "#64748b") + '"></span>';
+        }).join('');
+        return '<td class="' + (date === week.today ? 'todaycol' : '') + '" onclick="openWeekCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="markerstack">' + marks.slice(0, 3).map(function(marker){
+          return '<span class="mark' + (marker.cls ? ' ' + marker.cls : '') + '">' + esc(marker.text) + '</span>';
+        }).join('') + (marks.length > 3 ? '<span class="mark">+' + (marks.length - 3) + '</span>' : '') + '</div>' + (bandBits ? '<div class="bandrow">' + bandBits + '</div>' : '') + '</td>';
       }).join('') + '</tr>';
     }).join('') + '</tbody></table></div>';
   } else if (VIEW.boardMode === "day") {

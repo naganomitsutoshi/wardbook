@@ -149,7 +149,8 @@ vm.runInContext(`
   "addChartMed", "addChartEvent", "addChartRow", "setChartValue",
   "renderChartMedSheet", "renderChartEventSheet", "renderChartRowSheet",
   "toggleAppt", "deleteAppt", "addAppt", "addDetailAppt", "openApptCell",
-  "renderApptCellSheet", "renderApptSection", "chartGroupHidden", "toggleChartGroupPref"
+  "renderApptCellSheet", "renderApptSection", "chartGroupHidden", "toggleChartGroupPref",
+  "toggleChartDateMode"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "undefined") fail("removed fn still defined: " + name);
 });
@@ -158,8 +159,9 @@ vm.runInContext(`
 [
   "openChartItem", "saveChartItem", "removeChartItem", "openChartValue", "saveChartValue",
   "openChartEventCell", "addChartEventItem", "renderChartPanel", "renderChartItemSheet",
-  "renderChartValueSheet", "renderChartEventCellSheet", "toggleChartPanel", "toggleChartDateMode",
-  "toggleChartGroup", "chartCatHidden", "toggleChartCatPref", "addChartCat", "deleteChartCat"
+  "renderChartValueSheet", "renderChartEventCellSheet", "toggleChartPanel",
+  "toggleChartGroup", "chartCatHidden", "toggleChartCatPref", "addChartCat", "deleteChartCat",
+  "toggleEventDone", "rescheduleChartEntry", "cancelValuePlan", "addValuePlan", "openChartItemForDate"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "function") fail("missing chart fn " + name);
 });
@@ -168,12 +170,23 @@ vm.runInContext(`
 vm.runInContext(`
   (function(){
     var t = todayISO();
+    var base = Date.parse(t + "T00:00:00");
+    var yest = new Date(base - 86400000).toISOString().slice(0, 10);
+    var tomo = new Date(base + 86400000).toISOString().slice(0, 10);
     var values = {};
     values[t] = "37.8";
+    var planned = {};
+    planned[tomo] = true;
+    var plannedOver = {};
+    plannedOver[yest] = true;
     DB.cases[0].chart = normalizeChart({ items:[
       { id:"cv1", catId:"cat-vital", kind:"value", name:"BT", values:values },
       { id:"cb1", catId:"cat-med", kind:"band", name:"CTRX", startDate:DB.cases[0].admittedAt, endDate:null },
       { id:"ce1", catId:"cat-ic", kind:"event", name:"IC", date:t },
+      { id:"ce2", catId:"cat-ic", kind:"event", name:"ICP", date:tomo, status:"planned" },
+      { id:"ce3", catId:"cat-ic", kind:"event", name:"OLD", date:yest, status:"planned" },
+      { id:"cv2", catId:"cat-lab", kind:"value", name:"echo", values:{}, planned:planned },
+      { id:"cv3", catId:"cat-lab", kind:"value", name:"cbc", values:{}, planned:plannedOver },
       { id:"co1", catId:"cat-gone", kind:"band", name:"lost", startDate:DB.cases[0].admittedAt, endDate:null }
     ] });
   })();
@@ -224,6 +237,12 @@ if (!weekHtml.includes("openDetail('c1')")) fail("week case header missing detai
 if (!weekHtml.includes("onclick=\"openWeekCell(")) fail("week cell missing onclick");
 if (!weekHtml.includes("openDayView('")) fail("week date header missing day-view tap");
 if (weekHtml.includes("todayrow")) fail("week view still transposed");
+// SPEC-F projections: done/planned event marks, overdue on the today column,
+// value-plan diamonds and faint chart-band bits.
+if (!weekHtml.includes("evdone")) fail("week cell missing done event mark");
+if (!weekHtml.includes("evplan")) fail("week cell missing planned mark");
+if (!weekHtml.includes("overdue")) fail("week today column missing overdue mark");
+if (!weekHtml.includes("bandbit")) fail("week cell missing chart band bit");
 
 // Day overview: today's todos/pendings grouped per case, no density toggle.
 vm.runInContext("setBoardMode('day')", sandbox);
@@ -235,6 +254,9 @@ if (!dayHtml.includes("toggleTodo('c1'")) fail("day view missing todo checkbox")
 if (!dayHtml.includes("cx-back")) fail("day view missing pending due today");
 if (!dayHtml.includes("openWeekCell('c1'")) fail("day view missing add button");
 if (dayHtml.includes("toggleDensity()")) fail("density toggle leaked into day view");
+if (!dayHtml.includes("overdueblock")) fail("day view missing overdue block");
+if (!dayHtml.includes("toggleEventDone('c1'")) fail("day view missing event resolve");
+if (!dayHtml.includes("cancelValuePlan('c1'")) fail("day view missing value-plan cancel");
 vm.runInContext("openDayView('2026-07-10')", sandbox);
 const dayFutureHtml = vm.runInContext("renderBoard()", sandbox);
 if (!dayFutureHtml.includes("ABX")) fail("day view missing next item on its due date");
@@ -261,6 +283,14 @@ if (!chartHtml.includes(vm.runInContext("'\\u5165'", sandbox))) fail("chart miss
 if (!chartHtml.includes(vm.runInContext("'\\u2605'", sandbox))) fail("chart missing planned-discharge column mark");
 if (!chartHtml.includes(vm.runInContext("'\\u305d\\u306e\\u4ed6'", sandbox))) fail("chart missing orphan group");
 if (!chartHtml.includes("openChartItem('c1','cat-med','')")) fail("chart missing per-category add button");
+// Two fixed header rows (D + M/D), tap-toggle removed.
+const theadPart = chartHtml.slice(chartHtml.indexOf("<thead>"), chartHtml.indexOf("</thead>"));
+if ((theadPart.match(/<tr>/g) || []).length !== 2) fail("chart header is not two fixed rows");
+if (chartHtml.includes("toggleChartDateMode")) fail("chart still has date-mode toggle");
+// MAR marks: planned diamond, overdue warning, done check.
+if (!chartHtml.includes("◇")) fail("chart missing planned value mark");
+if (!chartHtml.includes("⚠")) fail("chart missing overdue mark");
+if (!chartHtml.includes("✓")) fail("chart missing done event mark");
 vm.runInContext("VIEW.chartOpen = false;", sandbox);
 
 // Chart sheets render.
@@ -286,6 +316,23 @@ const cellSheet = vm.runInContext("renderWeekCellSheet()", sandbox);
 if (!cellSheet.includes("setCellDraftType('pending')")) fail("week cell sheet missing type chips");
 if (cellSheet.includes("setApptDraftKind")) fail("week cell sheet still has appt kind chips");
 if (!cellSheet.includes("deleteNext('c1','n1')")) fail("week cell sheet missing existing next row");
+// Dynamic add menu: fixed Today chip + chart categories from config + band route.
+if (!cellSheet.includes("setCellDraftType('todo')")) fail("week cell sheet missing today chip");
+if (!cellSheet.includes("setCellDraftType('cat:cat-ic')")) fail("week cell sheet missing event category chip");
+if (!cellSheet.includes("setCellDraftType('cat:cat-lab')")) fail("week cell sheet missing value category chip");
+if (!cellSheet.includes("openChartItemForDate('c1','cat-med'")) fail("week cell sheet missing band category route");
+// Adding via a category chip lands in the chart (planned event) and mirrors to entries.
+vm.runInContext("SHEET.draft.itemType='cat:cat-ic'; SHEET.draft.text='face-talk'; addCellItem('c1','2026-07-10');", sandbox);
+const addedEv = vm.runInContext("JSON.stringify(DB.cases.find(function(c){return c.id==='c1'}).chart.items.find(function(x){return x.name==='face-talk'})||null)", sandbox);
+if (addedEv === "null") fail("cell add did not create chart event");
+if (!addedEv.includes('"status":"planned"')) fail("cell-added event is not planned");
+const addedEntry = vm.runInContext("JSON.stringify(DB.cases.find(function(c){return c.id==='c1'}).entries.some(function(e){return e.kind==='chartEvent'&&e.name==='face-talk'}))", sandbox);
+if (addedEntry !== "true") fail("cell-added event missing from entries store");
+// A settings-added category appears in the menu automatically.
+vm.runInContext("DB.config.chartCats.push({ id:'cat-reha', name:'REHA', kind:'event', color:'#123456' });", sandbox);
+const cellSheet2 = vm.runInContext("renderWeekCellSheet()", sandbox);
+if (!cellSheet2.includes("setCellDraftType('cat:cat-reha')")) fail("new category did not extend cell menu");
+vm.runInContext("DB.config.chartCats = DB.config.chartCats.filter(function(c){return c.id!=='cat-reha'});", sandbox);
 
 vm.runInContext("VIEW.searchQuery='uti'; VIEW.searchMonth=''; VIEW.searchStageId='';", sandbox);
 const searchHits = vm.runInContext("renderSearch()", sandbox);

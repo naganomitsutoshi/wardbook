@@ -276,7 +276,7 @@ const dayCases = [
     id:"c1", label:"haien", admittedAt:"2026-07-05", status:"active", order:0, stageId:"acute",
     stageLog:[{ date:"2026-07-05", stageId:"acute" }],
     next:[{ id:"n1", text:"culture-check", due:"2026-07-08" }, { id:"n2", text:"far", due:"2026-07-20" }],
-    todos:[{ id:"t1", text:"today-task", done:false }, { id:"t2", text:"done-task", done:true }],
+    todos:[{ id:"t1", text:"today-task", done:false, createdOn:"2026-07-07" }, { id:"t2", text:"done-task", done:true, createdOn:"2026-07-08" }],
     pendings:[{ id:"p1", text:"blood-cx", backOn:"2026-07-09" }],
     seeds:[], discharge:{ plannedOn:"2026-07-08" }
   },
@@ -660,6 +660,48 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(marNorm.chart.items.find((x) => x.id === "e1").status, "planned");
   assert.strictEqual(JSON.stringify(marNorm.chart.items.find((x) => x.id === "v1").planned), JSON.stringify({ "2026-07-06":true }));
   assert.strictEqual(marNorm.entries.find((x) => x.id === "e1").status, "planned");
+
+  // ---- SPEC-F projections (week grid / day plan) --------------------------
+
+  const projCase = {
+    id:"pc", label:"proj", admittedAt:"2026-07-05", status:"active", order:0, stageId:"acute",
+    stageLog:[{ date:"2026-07-05", stageId:"acute" }],
+    next:[], pendings:[], seeds:[], discharge:{ plannedOn:null },
+    todos:[
+      { id:"tt", text:"today-todo", done:false, createdOn:"2026-07-07" },
+      { id:"tf", text:"future-todo", done:false, createdOn:"2026-07-10" }
+    ],
+    chart:{ items:[
+      { id:"ev1", catId:"cat-ic", kind:"event", name:"IC", date:"2026-07-10", status:"planned" },
+      { id:"ev2", catId:"cat-ic", kind:"event", name:"old", date:"2026-07-06", status:"planned" },
+      { id:"bd1", catId:"cat-med", kind:"band", name:"CTRX", startDate:"2026-07-05", endDate:null },
+      { id:"vp1", catId:"cat-lab", kind:"value", name:"echo", values:{}, planned:{ "2026-07-10":true } }
+    ] }
+  };
+  const projWeek = L.buildWeekGrid([projCase], "2026-07-08", 0, 7);
+  const projRow = projWeek.rows[0];
+  assert.strictEqual(projRow.dates["2026-07-10"].events.map((x) => x.id).join(","), "ev1");
+  assert.strictEqual(projRow.dates["2026-07-10"].plans.map((x) => x.id).join(","), "vp1");
+  assert.strictEqual(projRow.dates["2026-07-10"].bands.length, 1);
+  // Overdue rides ONLY the today column; the planned event stays on its own date too.
+  assert.strictEqual(projRow.dates["2026-07-08"].overdue.map((x) => x.id).join(","), "ev2");
+  assert.strictEqual(projRow.dates["2026-07-10"].overdue.length, 0);
+  // Todos: undone rides today, future-scheduled rides its date.
+  assert.strictEqual(projRow.dates["2026-07-08"].markers.some((m) => m.kind === "todo"), true);
+  assert.strictEqual(projRow.dates["2026-07-10"].markers.some((m) => m.kind === "todo"), true);
+  assert.strictEqual(projRow.dates["2026-07-09"].markers.some((m) => m.kind === "todo"), false);
+
+  const projToday = L.buildDayPlan([projCase], "2026-07-08", "2026-07-08");
+  const projTodayTypes = projToday[0].items.map((x) => x.type);
+  assert.strictEqual(projTodayTypes.includes("overdue"), true);
+  assert.strictEqual(projToday[0].items.find((x) => x.type === "overdue").id, "ev2");
+  assert.strictEqual(projToday[0].items.filter((x) => x.type === "todo").map((x) => x.id).join(","), "tt");
+  const projFutureDay = L.buildDayPlan([projCase], "2026-07-10", "2026-07-08");
+  const projFutureTypes = projFutureDay[0].items.map((x) => x.type + ":" + (x.id || ""));
+  assert.strictEqual(projFutureTypes.includes("todo:tf"), true);
+  assert.strictEqual(projFutureTypes.includes("event:ev1"), true);
+  assert.strictEqual(projFutureTypes.includes("valuePlan:vp1"), true);
+  assert.strictEqual(projFutureDay[0].items.some((x) => x.type === "overdue"), false);
 
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));
