@@ -548,5 +548,91 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   const reordered = L.normalizeCase(shuffled, "2026-07-08T16:00:00.000Z", "2026-07-08");
   assert.strictEqual(JSON.stringify(reordered.entries.map((e) => e.id)), JSON.stringify(migrated.entries.map((e) => e.id)));
 
+  // ---- SPEC-F element-wise merge ------------------------------------------
+
+  // Unit: newer updatedAt wins; equal stamps prefer the tombstone; the tiebreak
+  // is symmetric; output order is canonical.
+  const eA = { kind:"next", id:"x", text:"a", due:null, createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-02T00:00:00.000Z" };
+  const eB = { kind:"next", id:"x", text:"b", due:null, createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-03T00:00:00.000Z" };
+  assert.strictEqual(L.mergeEntries([eA], [eB])[0].text, "b");
+  assert.strictEqual(L.mergeEntries([eB], [eA])[0].text, "b");
+  const eDead = { kind:"tombstone", id:"x", deletedAt:"2026-07-02T00:00:00.000Z", createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-02T00:00:00.000Z" };
+  assert.strictEqual(L.mergeEntries([eA], [eDead])[0].kind, "tombstone");
+  assert.strictEqual(L.mergeEntries([eDead], [eA])[0].kind, "tombstone");
+  const eTieA = Object.assign({}, eA, { text:"aaa" });
+  const eTieB = Object.assign({}, eA, { text:"zzz" });
+  assert.strictEqual(JSON.stringify(L.mergeEntries([eTieA], [eTieB])), JSON.stringify(L.mergeEntries([eTieB], [eTieA])));
+  const eEarly = { kind:"next", id:"zz", text:"first", due:null, createdAt:"2026-06-30T00:00:00.000Z", updatedAt:"2026-06-30T00:00:00.000Z" };
+  assert.strictEqual(L.mergeEntries([eA], [eEarly]).map((e) => e.id).join(","), "zz,x");
+
+  // Two-device convergence: concurrent element additions on the same case both
+  // survive; after convergence a re-reconcile pushes ZERO docs (ping-pong gate).
+  const convBase = L.normalizeCase({
+    id:"cc", label:"conv", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-05T00:00:00.000Z",
+    next:[{ id:"base", text:"base", due:null }]
+  }, "2026-07-05T00:00:00.000Z", "2026-07-05");
+  const cfg = { stages:[{ id:"adm", name:"a", color:"#000" }], labels:{ phase:"P", next:"N", today:"T", pending:"Pd", seeds:"S" }, chartCats:[] };
+  const devA = { data:{ cases:[JSON.parse(JSON.stringify(convBase))], config:JSON.parse(JSON.stringify(cfg)) }, state:L.syncEmptyState() };
+  const devB = { data:{ cases:[], config:JSON.parse(JSON.stringify(cfg)) }, state:L.syncEmptyState() };
+  // A baselines to the server.
+  const pushA1 = L.syncReconcile(devA.data, devA.state, [], "2026-07-06T09:00:00.000Z");
+  assert.strictEqual(pushA1.pushes.length, 1);
+  const rowBase = { id:"cc", deleted:false, case:JSON.parse(JSON.stringify(pushA1.pushes[0].case)), mt:JSON.parse(JSON.stringify(pushA1.pushes[0].mt)) };
+  L.syncClearDirty(devA.state, ["cc"]);
+  // B pulls the baseline.
+  L.syncReconcile(devB.data, devB.state, [rowBase], "2026-07-06T09:05:00.000Z");
+  assert.strictEqual(devB.data.cases.length, 1);
+  // Concurrent adds: A adds a1, B adds b1 (B later).
+  const caseA = devA.data.cases[0];
+  caseA.next.push({ id:"a1", text:"from-A", due:null });
+  caseA.lastTouchedAt = "2026-07-06T10:00:00.000Z";
+  L.entriesReconcileLocal(caseA, "2026-07-06T10:00:00.000Z", "2026-07-06");
+  const caseB = devB.data.cases[0];
+  caseB.next.push({ id:"b1", text:"from-B", due:null });
+  caseB.lastTouchedAt = "2026-07-06T10:05:00.000Z";
+  L.entriesReconcileLocal(caseB, "2026-07-06T10:05:00.000Z", "2026-07-06");
+  // A pushes its version.
+  const pushA2 = L.syncReconcile(devA.data, devA.state, [rowBase], "2026-07-06T10:10:00.000Z");
+  assert.strictEqual(pushA2.pushes.length, 1);
+  const rowA = { id:"cc", deleted:false, case:JSON.parse(JSON.stringify(pushA2.pushes[0].case)), mt:JSON.parse(JSON.stringify(pushA2.pushes[0].mt)) };
+  L.syncClearDirty(devA.state, ["cc"]);
+  // B merges A's push: both additions must survive; B pushes the union.
+  const pushB1 = L.syncReconcile(devB.data, devB.state, [rowA], "2026-07-06T10:15:00.000Z");
+  const idsAfterB = devB.data.cases[0].next.map((x) => x.id).sort().join(",");
+  assert.strictEqual(idsAfterB, "a1,b1,base");
+  assert.strictEqual(pushB1.pushes.length, 1);
+  const rowB = { id:"cc", deleted:false, case:JSON.parse(JSON.stringify(pushB1.pushes[0].case)), mt:JSON.parse(JSON.stringify(pushB1.pushes[0].mt)) };
+  L.syncClearDirty(devB.state, ["cc"]);
+  // A merges B's union: converged, and pushes NOTHING back.
+  const pushA3 = L.syncReconcile(devA.data, devA.state, [rowB], "2026-07-06T10:20:00.000Z");
+  assert.strictEqual(devA.data.cases[0].next.map((x) => x.id).sort().join(","), "a1,b1,base");
+  assert.strictEqual(pushA3.pushes.length, 0);
+  // B re-reconciles against its own push: still zero (no ping-pong).
+  const pushB2 = L.syncReconcile(devB.data, devB.state, [rowB], "2026-07-06T10:25:00.000Z");
+  assert.strictEqual(pushB2.pushes.length, 0);
+  assert.strictEqual(JSON.stringify(devA.data.cases[0].entries), JSON.stringify(devB.data.cases[0].entries));
+  // normalizeState is an identity on converged data (no dirty resurrection).
+  const normA = L.normalizeState(devA.data, "2026-07-06T10:30:00.000Z", "2026-07-06");
+  const pushA4 = L.syncReconcile(normA, devA.state, [rowB], "2026-07-06T10:35:00.000Z");
+  assert.strictEqual(pushA4.pushes.length, 0);
+
+  // Concurrent element delete (A) vs later edit (B): the newer edit resurrects.
+  const caseA2 = devA.data.cases[0];
+  caseA2.next = caseA2.next.filter((x) => x.id !== "base");
+  L.entriesReconcileLocal(caseA2, "2026-07-06T11:00:00.000Z", "2026-07-06");
+  const caseB2 = devB.data.cases[0];
+  caseB2.next.find((x) => x.id === "base").text = "edited-later";
+  L.entriesReconcileLocal(caseB2, "2026-07-06T11:05:00.000Z", "2026-07-06");
+  const mergedNE = L.mergeEntries(caseA2.entries, caseB2.entries);
+  const baseAfter = mergedNE.find((e) => e.id === "base");
+  assert.strictEqual(baseAfter.kind, "next");
+  assert.strictEqual(baseAfter.text, "edited-later");
+  // And the reverse order (delete newer than edit): tombstone wins.
+  const caseB3 = JSON.parse(JSON.stringify(devB.data.cases[0]));
+  caseB3.next = caseB3.next.filter((x) => x.id !== "a1");
+  L.entriesReconcileLocal(caseB3, "2026-07-06T12:00:00.000Z", "2026-07-06");
+  const mergedND = L.mergeEntries(caseA2.entries, caseB3.entries);
+  assert.strictEqual(mergedND.find((e) => e.id === "a1").kind, "tombstone");
+
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));

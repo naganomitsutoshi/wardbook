@@ -721,6 +721,27 @@ function entriesReconcileLocal(c, nowIso, todayIso){
   }
   return changed;
 }
+// Element-level LWW merge. Per-entry updatedAt is the truth; ties prefer the
+// tombstone, then a deterministic symmetric content tiebreak. Output is in
+// canonical order so both devices serialize identically (no dirty ping-pong).
+function mergeEntries(localList, remoteList){
+  var byId = {};
+  cloneArr(localList).forEach(function(e){ if (isObj(e) && e.id) byId[e.id] = e; });
+  cloneArr(remoteList).forEach(function(e){
+    if (!isObj(e) || !e.id) return;
+    var cur = byId[e.id];
+    if (!cur) { byId[e.id] = e; return; }
+    var a = cur.updatedAt || "";
+    var b = e.updatedAt || "";
+    if (b > a) { byId[e.id] = e; return; }
+    if (b < a) return;
+    var curDead = cur.kind === "tombstone";
+    var incDead = e.kind === "tombstone";
+    if (curDead !== incDead) { if (incDead) byId[e.id] = e; return; }
+    if (JSON.stringify(e) > JSON.stringify(cur)) byId[e.id] = e;
+  });
+  return entrySortCanonical(Object.keys(byId).map(function(k){ return byId[k]; }));
+}
 // ---- end unified entry store ---------------------------------------------
 
 function normalizeCase(raw, nowIso, todayIso){
@@ -1166,6 +1187,17 @@ function syncMergeCase(localCase, localMt, remoteCase, remoteMt){
   var tookRemote = false;
   Object.keys(keys).forEach(function(k){
     if(k === "id"){ return; }
+    if(k === "entries"){
+      // SPEC-F: entries merge element-wise on per-entry updatedAt, never by the
+      // field clock (both devices may edit different elements of this one field).
+      merged.entries = mergeEntries(localCase && localCase.entries, remoteCase && remoteCase.entries);
+      var elt = localMt[k] || "";
+      var ert = remoteMt[k] || "";
+      var emax = ert > elt ? ert : elt;
+      if(emax){ mt[k] = emax; }
+      if(JSON.stringify(localCase && localCase.entries) !== JSON.stringify(merged.entries)){ tookRemote = true; }
+      return;
+    }
     var lt = localMt[k] || "";
     var rt = remoteMt[k] || "";
     if(rt > lt && (k in (remoteCase || {}))){
@@ -1176,6 +1208,15 @@ function syncMergeCase(localCase, localMt, remoteCase, remoteMt){
       mt[k] = lt;
     }
   });
+  if(merged.entries !== undefined){
+    // Keep the merged case self-consistent BEFORE it is snapshotted: adopt
+    // mirror-only additions (old-device pushes), then re-derive the mirrors
+    // from entries. Without this every cross-device merge would echo one
+    // extra push when normalizeState later rewrites the mirrors.
+    var ctx = entryCtx(merged, merged.lastTouchedAt || "", String(merged.lastTouchedAt || "").slice(0, 10));
+    entryFoldMirrors(merged, ctx);
+    entryRebuildMirrors(merged);
+  }
   return { merged:merged, mt:mt, tookRemote:tookRemote };
 }
 
@@ -1510,6 +1551,7 @@ if (typeof module !== "undefined") {
     entryRebuildMirrors:entryRebuildMirrors,
     entryFoldMirrors:entryFoldMirrors,
     entriesReconcileLocal:entriesReconcileLocal,
+    mergeEntries:mergeEntries,
     entrySortCanonical:entrySortCanonical,
     entryContentKey:entryContentKey,
     entryCtx:entryCtx
