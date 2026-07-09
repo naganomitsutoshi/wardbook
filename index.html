@@ -153,6 +153,15 @@
     background:var(--badge);border-radius:999px;font-size:11px;font-weight:700;
   }
   .seedcount{color:var(--muted);font-size:12px}
+  .list.compact{gap:6px}
+  .card.compact{padding:6px 8px}
+  .card.compact .caseid{font-size:14px}
+  .card.compact .handle{min-height:28px;width:28px;min-width:28px}
+  .card.compact .phase{margin-top:2px;font-size:12px}
+  .oneline{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .compactline{display:flex;gap:6px;align-items:baseline;min-width:0;margin-top:2px;font-size:12px}
+  .compactline .text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+  .compactcounts{color:var(--muted);white-space:nowrap;font-size:11px}
   .empty{
     border:1px dashed var(--line);
     border-radius:14px;
@@ -274,10 +283,17 @@
     background:var(--card);
   }
   .chartgrid .sticky{min-width:72px;max-width:110px;overflow:hidden}
-  .weekgrid .casecell{cursor:pointer}
-  .weekgrid .suncol{color:var(--weekend-sun)}
-  .weekgrid .satcol{color:var(--weekend-sat)}
-  .weekgrid .todaycol,.chartgrid .todaycol{background:var(--panel)}
+  .weekwrap.weekvert{max-height:calc(100vh - 230px);max-height:calc(100dvh - 230px)}
+  .weekgrid th,.weekgrid td{min-width:40px}
+  .weekgrid .sticky{min-width:64px;max-width:72px}
+  .weekgrid .stickytop{position:sticky;top:0;z-index:3;background:var(--card);cursor:pointer}
+  .weekgrid .corner{z-index:4;cursor:default}
+  .weekgrid .caseheadcell{max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}
+  .weekgrid .datecell{font-size:10px;white-space:nowrap;font-weight:400}
+  .weekgrid tr.todayrow>th,.weekgrid tr.todayrow>td{background:var(--panel)}
+  .weekgrid tr.sunrow .datecell{color:var(--weekend-sun)}
+  .weekgrid tr.satrow .datecell{color:var(--weekend-sat)}
+  .chartgrid .todaycol{background:var(--panel)}
   .chartlabel{white-space:nowrap;font-weight:400;cursor:pointer}
   .catrow{cursor:pointer;white-space:nowrap}
   .colmark{display:block;font-size:9px;color:var(--muted);font-weight:700;min-height:11px}
@@ -1339,7 +1355,11 @@ Object.assign(STR, {
   startLabel:"\u958b\u59cb",
   endLabel:"\u7d42\u4e86",
   dateLabel:"\u65e5\u4ed8",
-  deleteRow:"\u524a\u9664"
+  deleteRow:"\u524a\u9664",
+  densityCompact:"\u30b3\u30f3\u30d1\u30af\u30c8",
+  countToday:"\u4eca\u65e5",
+  countPending:"\u5f85",
+  countSeeds:"\u7a2e"
 });
 
 let DB = normalizeState(null);
@@ -1350,7 +1370,7 @@ let NAV = { stack:[], ignore:0 };
 let REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
 let MISS = null;
 let PENDING_FOCUS = null;
-let WEEK_SCROLL_RT = { busy:false, pendingLeftAdjust:0, initPending:false };
+let WEEK_SCROLL_RT = { busy:false, pendingTopAdjust:0, initPending:false };
 const SYNC_KEY = "wardbook:sync";
 const STATS_KEY = "wardbook:stats";
 let STATS = null;
@@ -1426,12 +1446,12 @@ function weekHeaderLabel(date){
   return Number(date.slice(5, 7)) + "/" + Number(date.slice(8, 10)) + "(" + STR.weekdays[day] + ")";
 }
 
-function weekHeaderClass(date, today){
+function weekRowClass(date, today){
   var cls = [];
   var day = isoWeekday(date);
-  if (date === today) cls.push("todaycol");
-  if (day === 0) cls.push("suncol");
-  if (day === 6) cls.push("satcol");
+  if (date === today) cls.push("todayrow");
+  if (day === 0) cls.push("sunrow");
+  if (day === 6) cls.push("satrow");
   return cls.join(" ");
 }
 
@@ -1439,7 +1459,8 @@ function defaultSettings(){
   return {
     cardSections:["phase", "next", "today", "pending", "seeds"],
     cardHidden:[],
-    chartHidden:[]
+    chartHidden:[],
+    density:"normal"
   };
 }
 
@@ -1467,6 +1488,7 @@ function loadSettings(){
   base.cardSections = normalizeCardSections(cloneArr(src.cardSections).filter(Boolean));
   base.cardHidden = cloneArr(src.cardHidden).filter(Boolean);
   base.chartHidden = cloneArr(src.chartHidden).filter(Boolean);
+  base.density = src.density === "compact" ? "compact" : "normal";
   return base;
 }
 
@@ -2032,7 +2054,7 @@ function resetWeekRange(){
   VIEW.weekPast = 7;
   VIEW.weekFuture = 7;
   WEEK_SCROLL_RT.busy = false;
-  WEEK_SCROLL_RT.pendingLeftAdjust = 0;
+  WEEK_SCROLL_RT.pendingTopAdjust = 0;
   WEEK_SCROLL_RT.initPending = false;
 }
 
@@ -2055,35 +2077,36 @@ function ensureWeekWrapBehavior(){
   if (!wrap) return;
   wrap.onscroll = function(){
     if (WEEK_SCROLL_RT.busy) return;
-    var left = Number(wrap.scrollLeft) || 0;
-    var width = Number(wrap.scrollWidth) || 0;
-    var view = Number(wrap.clientWidth) || 0;
-    if (left <= 80) {
+    var top = Number(wrap.scrollTop) || 0;
+    var height = Number(wrap.scrollHeight) || 0;
+    var view = Number(wrap.clientHeight) || 0;
+    if (height <= view) return;
+    if (top <= 80) {
       WEEK_SCROLL_RT.busy = true;
-      WEEK_SCROLL_RT.pendingLeftAdjust = width;
+      WEEK_SCROLL_RT.pendingTopAdjust = height;
       VIEW.weekPast = (Number(VIEW.weekPast) || 7) + 7;
       render();
       return;
     }
-    if (width - (left + view) <= 80) {
+    if (height - (top + view) <= 80) {
       WEEK_SCROLL_RT.busy = true;
       VIEW.weekFuture = (Number(VIEW.weekFuture) || 7) + 7;
       render();
     }
   };
-  if (WEEK_SCROLL_RT.pendingLeftAdjust) {
-    var prevWidth = WEEK_SCROLL_RT.pendingLeftAdjust;
-    var nextWidth = Number(wrap.scrollWidth) || 0;
-    wrap.scrollLeft = (Number(wrap.scrollLeft) || 0) + Math.max(0, nextWidth - prevWidth);
-    WEEK_SCROLL_RT.pendingLeftAdjust = 0;
+  if (WEEK_SCROLL_RT.pendingTopAdjust) {
+    var prevHeight = WEEK_SCROLL_RT.pendingTopAdjust;
+    var nextHeight = Number(wrap.scrollHeight) || 0;
+    wrap.scrollTop = (Number(wrap.scrollTop) || 0) + Math.max(0, nextHeight - prevHeight);
+    WEEK_SCROLL_RT.pendingTopAdjust = 0;
     WEEK_SCROLL_RT.busy = false;
   } else if (WEEK_SCROLL_RT.initPending) {
-    var totalCols = (Number(VIEW.weekPast) || 7) + (Number(VIEW.weekFuture) || 7) + 1;
-    var totalWidth = Number(wrap.scrollWidth) || 0;
-    var viewport = Number(wrap.clientWidth) || 0;
-    if (totalCols > 0 && totalWidth > 0) {
-      var colWidth = totalWidth / totalCols;
-      wrap.scrollLeft = Math.max(0, Math.round(colWidth * (Number(VIEW.weekPast) || 7) - viewport / 3));
+    var totalRows = (Number(VIEW.weekPast) || 7) + (Number(VIEW.weekFuture) || 7) + 1;
+    var totalHeight = Number(wrap.scrollHeight) || 0;
+    var viewport = Number(wrap.clientHeight) || 0;
+    if (totalRows > 0 && totalHeight > 0) {
+      var rowHeight = totalHeight / totalRows;
+      wrap.scrollTop = Math.max(0, Math.round(rowHeight * (Number(VIEW.weekPast) || 7) - viewport / 3));
     }
     WEEK_SCROLL_RT.initPending = false;
   } else {
@@ -2824,6 +2847,16 @@ function updateLabelName(key, value){
   configChanged();
 }
 
+function boardDensityCompact(){
+  return (SETTINGS || defaultSettings()).density === "compact";
+}
+
+function toggleDensity(){
+  SETTINGS = SETTINGS || defaultSettings();
+  SETTINGS.density = SETTINGS.density === "compact" ? "normal" : "compact";
+  saveLocalPrefs();
+}
+
 function toggleCardSection(name, checked){
   SETTINGS = SETTINGS || defaultSettings();
   SETTINGS.cardHidden = cloneArr(SETTINGS.cardHidden).filter(function(item){ return item !== name; });
@@ -3287,18 +3320,19 @@ function renderTopbar(){
 
 function renderBoardCard(c){
   var stage = stageById(c.stageId);
-  var dueNext = c.next.slice(0, 2);
+  var dueNext = c.next;
   var undone = c.todos.filter(function(x){ return !x.done; });
   var showPendings = c.pendings.length > 0;
   var stageStyle = 'border-left-color:' + esc(stage.color);
   var stale = stalenessLevel(c.lastTouchedAt, nowISO());
   var staleClass = stale === 2 ? ' stale2' : stale === 1 ? ' stale1' : '';
+  if (boardDensityCompact()) return renderBoardCardCompact(c, stage, undone, stageStyle, staleClass);
   var sectionHtml = {
     phase:c.phaseNote ? '<div class="phase">' + esc(c.phaseNote) + '</div>' : '',
     next:dueNext.length ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.next) + '</div><div class="plain">' + dueNext.map(function(item){
       return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + (item.due ? '<div class="faint">' + esc(item.due) + '</div>' : '') + '</div></div>';
     }).join('') + '</div></div>' : '',
-    today:undone.length ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.today) + ' ' + undone.length + '</div><div class="plain">' + undone.slice(0, 2).map(function(item){
+    today:undone.length ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.today) + ' ' + undone.length + '</div><div class="plain">' + undone.map(function(item){
       return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div></label>';
     }).join('') + '</div></div>' : '',
     pending:showPendings ? '<div class="section"><div class="sectiontitle">' + esc(DB.config.labels.pending) + '</div><div class="plain">' + c.pendings.map(function(item){
@@ -3319,6 +3353,32 @@ function renderBoardCard(c){
       '</div>' +
     '</div>' +
     '<div class="inline" style="margin-top:8px" onclick="event.stopPropagation()"><button class="smallbtn" onclick="moveCaseDirection(\'' + esc(c.id) + '\',\'up\')">↑</button><button class="smallbtn" onclick="moveCaseDirection(\'' + esc(c.id) + '\',\'down\')">↓</button></div>' +
+  '</article>';
+}
+
+function renderBoardCardCompact(c, stage, undone, stageStyle, staleClass){
+  var hasBack = c.pendings.some(function(item){ return item.backOn && item.backOn <= todayISO(); });
+  var counts = [];
+  if (undone.length) counts.push(STR.countToday + undone.length);
+  if (c.pendings.length) counts.push(STR.countPending + c.pendings.length);
+  if (c.seeds.length) counts.push(STR.countSeeds + c.seeds.length);
+  var firstNext = c.next.length ? String(c.next[0].text || "") : "";
+  var summary = (firstNext || counts.length) ? '<div class="compactline">' +
+    (firstNext ? '<div class="text">' + esc(firstNext) + '</div>' : '') +
+    (counts.length ? '<span class="compactcounts">' + esc(counts.join(' ')) + '</span>' : '') +
+  '</div>' : '';
+  return '<article class="card compact' + staleClass + (DND.activeId === c.id ? ' dragging' : '') + '" style="' + stageStyle + '" onclick="openDetail(\'' + esc(c.id) + '\')">' +
+    '<div class="cardhead">' +
+      '<button class="handle" onpointerdown="startDragCase(event,\'' + esc(c.id) + '\')" onclick="event.stopPropagation()">≡</button>' +
+      '<div class="linegrow">' +
+        '<div class="labelrow"><div class="caseid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, todayISO()) + '</div>' +
+        (compactMeta(c) ? '<div class="meta">' + esc(compactMeta(c)) + '</div>' : '') +
+        '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div>' +
+        (hasBack ? '<span class="badge">' + esc(STR.backTodayBadge) + '</span>' : '') + '</div>' +
+        (c.phaseNote ? '<div class="phase oneline">' + esc(c.phaseNote) + '</div>' : '') +
+        summary +
+      '</div>' +
+    '</div>' +
   '</article>';
 }
 
@@ -3681,24 +3741,24 @@ renderBoard = function(){
   var cases = boardCases();
   var week = buildWeekGrid(DB.cases, todayISO(), VIEW.weekPast, VIEW.weekFuture);
   var body = VIEW.boardMode === "week"
-    ? '<div id="weekWrap" class="weekwrap"><table class="weekgrid"><thead><tr><th class="sticky">Case</th>' + week.dates.map(function(date){
-      return '<th class="' + esc(weekHeaderClass(date, week.today)) + '">' + esc(weekHeaderLabel(date)) + '</th>';
-    }).join('') + '</tr></thead><tbody>' + week.rows.map(function(row){
-      return '<tr><th class="sticky casecell" onclick="openDetail(\'' + esc(row.case.id) + '\')">' + esc(row.case.label) + ' D' + computeDay(row.case.admittedAt, todayISO()) + '</th>' + week.dates.map(function(date){
+    ? '<div id="weekWrap" class="weekwrap weekvert"><table class="weekgrid"><thead><tr><th class="sticky stickytop corner"></th>' + week.rows.map(function(row){
+      return '<th class="stickytop caseheadcell" onclick="openDetail(\'' + esc(row.case.id) + '\')">' + esc(row.case.label) + '<span class="faint"> D' + computeDay(row.case.admittedAt, todayISO()) + '</span></th>';
+    }).join('') + '</tr></thead><tbody>' + week.dates.map(function(date){
+      return '<tr class="' + esc(weekRowClass(date, week.today)) + '"><th class="sticky datecell">' + esc(weekHeaderLabel(date)) + '</th>' + week.rows.map(function(row){
         var cell = row.dates[date];
         var bandColor = cell.stageId ? stageById(cell.stageId).color : "transparent";
-        return '<td class="' + (date === week.today ? 'todaycol' : '') + '" onclick="openWeekCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="markerstack">' + cell.markers.slice(0, 2).map(function(marker){
+        return '<td onclick="openWeekCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="markerstack">' + cell.markers.slice(0, 2).map(function(marker){
           return '<span class="mark">' + esc(marker.text) + '</span>';
         }).join('') + (cell.markers.length > 2 ? '<span class="mark">+' + (cell.markers.length - 2) + '</span>' : '') + '</div></td>';
       }).join('') + '</tr>';
     }).join('') + '</tbody></table></div>'
-    : (cases.length ? '<div class="list">' +
+    : (cases.length ? '<div class="list' + (boardDensityCompact() ? ' compact' : '') + '">' +
       cases.map(function(c, idx){
         return '<div class="dropzone" data-drop-index="' + idx + '"></div>' + renderBoardCard(c);
       }).join('') +
       '<div class="dropzone" data-drop-index="' + cases.length + '"></div>' +
     '</div>' : '<div class="empty">' + esc(STR.emptyBoard) + '</div>');
-  return '<section class="screen"><div class="seg"><button class="chipbtn' + (VIEW.boardMode !== "week" ? ' on' : '') + '" onclick="setBoardMode(\'board\')">' + esc(STR.boardView) + '</button><button class="chipbtn' + (VIEW.boardMode === "week" ? ' on' : '') + '" onclick="setBoardMode(\'week\')">' + esc(STR.weekView) + '</button></div>' + body +
+  return '<section class="screen"><div class="seg"><button class="chipbtn' + (VIEW.boardMode !== "week" ? ' on' : '') + '" onclick="setBoardMode(\'board\')">' + esc(STR.boardView) + '</button><button class="chipbtn' + (VIEW.boardMode === "week" ? ' on' : '') + '" onclick="setBoardMode(\'week\')">' + esc(STR.weekView) + '</button>' + (VIEW.boardMode !== "week" ? '<div class="grow"></div><button class="chipbtn' + (boardDensityCompact() ? ' on' : '') + '" onclick="toggleDensity()">' + esc(STR.densityCompact) + '</button>' : '') + '</div>' + body +
   '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openReview()">' + esc(STR.review) + '</button></div><div class="row wrap" style="margin-top:8px"><button class="ghostbtn smallbtn" onclick="openSyncSheet()"><span data-sync-status>' + esc(syncStatusLabel()) + '</span></button><button class="ghostbtn smallbtn" onclick="openDataSheet()">' + esc(STR.dataRow) + '</button><button class="ghostbtn smallbtn" onclick="openSearch()">' + esc(STR.searchRow) + '</button><button class="ghostbtn smallbtn" onclick="openSettingsSheet()">' + esc(STR.settingsRow) + '</button></div></div></div>';
 };
 

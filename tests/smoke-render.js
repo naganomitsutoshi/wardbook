@@ -124,7 +124,7 @@ vm.runInContext(`
 [
   "copyDischargeExport", "copyDayExport", "openWeekCell",
   "startDragCase", "dragMove", "dragEnd", "nearestDropIndex",
-  "handlePopState", "navPush", "navUnwindAll"
+  "handlePopState", "navPush", "navUnwindAll", "toggleDensity"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "function") fail("missing runtime fn " + name);
 });
@@ -173,12 +173,43 @@ if (!boardHtml.includes("haien")) fail("board missing case");
 if (!boardHtml.includes("stale1") && !boardHtml.includes("stale2")) fail("board missing staleness class");
 if (!boardHtml.includes('data-drop-index="0"')) fail("board missing dropzone index");
 if (boardHtml.includes("onpointerenter")) fail("board dropzone still uses inline pointer handlers");
+if (!boardHtml.includes("toggleDensity()")) fail("board missing density toggle");
+
+// Normal mode shows ALL next/today items (no 2-item cap).
+vm.runInContext(`
+  (function(){
+    var t = todayISO();
+    DB.cases[0].next.push({ id:"n3", text:"next-three", due:null });
+    DB.cases[0].next.push({ id:"n4", text:"next-four", due:null });
+    DB.cases[0].todos.push({ id:"t2", text:"todo-two", done:false, createdOn:t });
+    DB.cases[0].todos.push({ id:"t3", text:"todo-three", done:false, createdOn:t });
+    DB.cases[0].pendings.push({ id:"p2", text:"cx-back", backOn:t });
+  })();
+`, sandbox);
+const fullBoardHtml = vm.runInContext("renderBoard()", sandbox);
+if (!fullBoardHtml.includes("next-three") || !fullBoardHtml.includes("next-four")) fail("normal board caps next items");
+if (!fullBoardHtml.includes("todo-three")) fail("normal board caps today items");
+
+// Compact mode: summary line, no checkboxes/reorder buttons, urgency badge survives.
+vm.runInContext("SETTINGS.density='compact'", sandbox);
+const compactHtml = vm.runInContext("renderBoard()", sandbox);
+if (!compactHtml.includes("list compact")) fail("compact board missing list class");
+if (compactHtml.includes("toggleTodo(")) fail("compact card still renders checkboxes");
+if (compactHtml.includes("moveCaseDirection(")) fail("compact card still renders reorder buttons");
+if (!compactHtml.includes("startDragCase(")) fail("compact card missing drag handle");
+if (!compactHtml.includes(vm.runInContext("STR.backTodayBadge", sandbox))) fail("compact card missing back-today badge");
+if (!compactHtml.includes(vm.runInContext("STR.countToday", sandbox) + "3")) fail("compact card missing today count");
+if (!compactHtml.includes("compactline")) fail("compact card missing summary line");
+vm.runInContext("SETTINGS.density='normal'", sandbox);
 
 vm.runInContext("VIEW.boardMode='week'", sandbox);
 const weekHtml = vm.runInContext("renderBoard()", sandbox);
 if (!weekHtml.includes("weekgrid")) fail("week view missing grid");
-if (!weekHtml.includes("todaycol")) fail("week view missing today column");
+if (!weekHtml.includes("todayrow")) fail("week view missing today row");
+if (!weekHtml.includes("caseheadcell")) fail("week view missing case column headers");
+if (!weekHtml.includes("openDetail('c1')")) fail("week case header missing detail tap");
 if (!weekHtml.includes("onclick=\"openWeekCell(")) fail("week cell missing onclick");
+if (weekHtml.includes("todaycol")) fail("week view still column-oriented");
 
 vm.runInContext("VIEW={ name:'detail', caseId:'c1', editingMeta:false, editingLabel:false, stagePickerFor:'', nowDay:todayISO() }", sandbox);
 const detailHtml = vm.runInContext("renderDetail('c1')", sandbox);
