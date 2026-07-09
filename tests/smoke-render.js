@@ -381,8 +381,17 @@ if (!reviewFlowDone.includes(vm.runInContext("STR.reviewDone", sandbox))) fail("
 vm.runInContext("copyReviewExport()", sandbox);
 vm.runInContext("openBoard()", sandbox);
 
+// Blur without an actual edit must not touch the case (it would silently drop
+// the patient from the evening review queue and reset staleness).
+if (vm.runInContext("DB.cases.length", sandbox) > 0) {
+  const beforeTouch = vm.runInContext("DB.cases[0].lastTouchedAt", sandbox);
+  vm.runInContext("updateCasePhase(DB.cases[0].id, DB.cases[0].phaseNote)", sandbox);
+  vm.runInContext("updateCaseLabel(DB.cases[0].id, DB.cases[0].label)", sandbox);
+  if (vm.runInContext("DB.cases[0].lastTouchedAt", sandbox) !== beforeTouch) fail("no-op blur touched the case");
+}
+
 if (documentElement["data-theme"] !== "dark") fail("dark theme attribute not applied");
-if (vm.runInContext("SYNC_RT.importCount", sandbox) !== 0) fail("sync import happened without config");
+if (vm.runInContext("SYNC_RT.fb", sandbox) !== null) fail("sync import happened without config");
 
 const appHtml = vm.runInContext("render()", sandbox);
 if (!appHtml || !els.app.innerHTML) fail("render failed");

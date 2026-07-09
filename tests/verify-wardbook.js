@@ -41,7 +41,7 @@ const L = sandbox.module.exports;
   "defaultStages", "defaultChartCats", "normalizeState", "normalizeCase", "computeDay", "rolloverTodos",
   "hasBackToday", "boardOrder", "stalenessLevel", "needsReview", "reviewQueue",
   "unsentSeeds", "countSeedsOn", "formatSeedExport", "missSeedText", "makeSeed",
-  "moveCase", "dcChecklistItems", "stageOn",
+  "moveIdInList", "dcChecklistItems", "stageOn",
   "normalizeChart", "chartDates", "bandOnDate", "chartColMarks", "chartRowsForCase",
   "buildWeekGrid", "buildDayPlan", "searchCases", "reviewStreak", "syncDiffFields",
   "syncMergeCase", "syncEmptyState", "syncMarkRestored", "syncNoteLocalChanges", "syncReconcile",
@@ -113,7 +113,28 @@ assert.strictEqual(
 );
 assert.ok(L.formatSeedExport([], "2026-07-07").startsWith("## 2026-07-07"));
 assert.ok(L.missSeedText("old", "why").includes("old"));
-assert.strictEqual(L.moveCase([{ id:"a", order:0 }, { id:"b", order:1 }], "b", "up").map((x) => x.id).join(","), "b,a");
+assert.strictEqual(L.moveIdInList(["a", "b"], "b", "up").join(","), "b,a");
+assert.strictEqual(L.moveIdInList(["a", "b"], "a", "up").join(","), "a,b");
+assert.strictEqual(L.moveIdInList(["a", "b"], "b", "down").join(","), "a,b");
+assert.strictEqual(L.moveIdInList(["a", "b"], "zzz", "up").join(","), "a,b");
+
+// safeId hardening: hostile ids from imports/sync must never reach the inline
+// onclick handlers - cases with non-conforming ids are dropped entirely.
+const hostileState = L.normalizeState({
+  cases:[{ id:"x'),alert(1);//", label:"evil", admittedAt:"2026-07-01" }]
+}, "2026-07-08T00:00:00.000Z", "2026-07-08");
+assert.strictEqual(hostileState.cases.length, 0);
+// Hostile sub-item ids fall back to index-based ids instead of surviving.
+const hostileItems = L.normalizeCase({
+  id:"ok1", label:"l", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-08T00:00:00.000Z",
+  next:[{ id:"y'),alert(1);//", text:"t", due:null }]
+}, "2026-07-08T00:00:00.000Z", "2026-07-08");
+assert.strictEqual(hostileItems.next[0].id, "next-0");
+// Colors are hex-only: a css-injection payload falls back to the default.
+const hostileColor = L.normalizeState({
+  config:{ stages:[{ id:"s1", name:"n", color:"red;background:url(https://evil/x)" }] }
+}, "2026-07-08T00:00:00.000Z", "2026-07-08");
+assert.strictEqual(hostileColor.config.stages[0].color, L.defaultStages()[0].color);
 
 assert.strictEqual(L.dcChecklistItems().some((x) => x.k === "dxtags"), true);
 
@@ -719,6 +740,52 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   const delPush = stayRes.pushes.find((p) => p.id === "cd");
   assert.strictEqual(delPush.deleted, true);
   assert.strictEqual(delPush.deletedAt, "2026-07-08T14:00:00.000Z");
+
+  // ---- restored-flag hygiene (2026-07-09 review fix) -----------------------
+  // A stale restored flag must be cleared once the case reconciles against a
+  // live remote copy with nothing to push - otherwise it would override a
+  // legitimate FUTURE deletion (deleted case resurrecting weeks later).
+  const rfState = L.syncEmptyState();
+  const rfCase = L.normalizeCase({ id:"rf", label:"r", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-08T00:00:00.000Z" }, "2026-07-08T00:00:00.000Z", "2026-07-08");
+  const rfData = { cases:[JSON.parse(JSON.stringify(rfCase))], config:JSON.parse(JSON.stringify(cfg)) };
+  const rfBase = L.syncReconcile(rfData, rfState, [], "2026-07-08T00:05:00.000Z");
+  const rfRow = { id:"rf", deleted:false, case:JSON.parse(JSON.stringify(rfBase.pushes[0].case)), mt:JSON.parse(JSON.stringify(rfBase.pushes[0].mt)) };
+  L.syncClearDirty(rfState, ["rf"]);
+  L.syncMarkRestored(rfState, "rf"); // e.g. backup restore marked everything
+  const rfRes = L.syncReconcile(rfData, rfState, [rfRow], "2026-07-08T00:10:00.000Z");
+  assert.strictEqual(rfRes.pushes.length, 0);
+  assert.strictEqual(!!rfState.restored.rf, false);
+  // ...while the flag still protects the restore against an EXISTING tombstone.
+  L.syncMarkRestored(rfState, "rf");
+  const rfAlive = L.syncReconcile(rfData, rfState, [{ id:"rf", deleted:true, case:null, mt:null, deletedAt:"2026-07-08T00:20:00.000Z" }], "2026-07-08T00:21:00.000Z");
+  assert.strictEqual(rfAlive.data.cases.length, 1);
+  assert.strictEqual(rfAlive.pushes.some((p) => p.id === "rf" && !p.deleted), true);
+
+  // ---- expired entry-tombstone purge converges (2026-07-09 review fix) -----
+  // The reconcile snapshot is NORMALIZED, so a >60d-old element tombstone that
+  // only lives on the server is pushed away once instead of flapping forever.
+  const ptState = L.syncEmptyState();
+  const ptCase = L.normalizeCase({
+    id:"pt", label:"p", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-08T00:00:00.000Z",
+    next:[{ id:"n1", text:"keep", due:null }]
+  }, "2026-07-08T00:00:00.000Z", "2026-07-08");
+  const ptData = { cases:[JSON.parse(JSON.stringify(ptCase))], config:JSON.parse(JSON.stringify(cfg)) };
+  const ptBase = L.syncReconcile(ptData, ptState, [], "2026-07-08T00:05:00.000Z");
+  L.syncClearDirty(ptState, ["pt"]);
+  const ptRemote = JSON.parse(JSON.stringify(ptBase.pushes[0].case));
+  ptRemote.entries = ptRemote.entries.concat([{ kind:"tombstone", id:"dead1", deletedAt:"2026-01-01T00:00:00.000Z", createdAt:"2026-01-01T00:00:00.000Z", updatedAt:"2026-01-01T00:00:00.000Z" }]);
+  const ptRes = L.syncReconcile(ptData, ptState, [
+    { id:"pt", deleted:false, case:ptRemote, mt:JSON.parse(JSON.stringify(ptBase.pushes[0].mt)) }
+  ], "2026-07-08T00:10:00.000Z");
+  const ptPush = ptRes.pushes.find((p) => p.id === "pt");
+  assert.ok(ptPush, "expired tombstone must trigger one canonicalizing push");
+  assert.strictEqual(ptPush.case.entries.some((e) => e.id === "dead1"), false);
+  L.syncClearDirty(ptState, ["pt"]);
+  // Server now holds the purged doc: the next reconcile is silent.
+  const ptRes2 = L.syncReconcile(ptData, ptState, [
+    { id:"pt", deleted:false, case:JSON.parse(JSON.stringify(ptPush.case)), mt:JSON.parse(JSON.stringify(ptPush.mt)) }
+  ], "2026-07-08T00:15:00.000Z");
+  assert.strictEqual(ptRes2.pushes.length, 0);
 
   // ---- SPEC-F projections (week grid / day plan) --------------------------
 

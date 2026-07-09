@@ -22,11 +22,6 @@
     --muted:#5f6b78;
     --soft:#8a95a3;
     --accent:#111827;
-    --stage-adm:#8b5cf6;
-    --stage-acute:#ef4444;
-    --stage-stall:#f97316;
-    --stage-improv:#eab308;
-    --stage-dc:#3b82f6;
     --danger:#b91c1c;
     --danger-soft:#fee2e2;
     --ok:#166534;
@@ -145,7 +140,6 @@
   .linegrow{flex:1;min-width:0}
   .linegrow label{display:block}
   .text{word-break:break-word}
-  .muted{color:var(--muted)}
   .faint{color:var(--soft);font-size:12px}
   .badge{
     display:inline-flex;align-items:center;justify-content:center;
@@ -361,6 +355,21 @@ function safeDate(v, fallback){
   return typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : fallback;
 }
 
+// IDs are interpolated into inline onclick='fn("<id>")' handlers, where esc()
+// alone cannot prevent quote-breakout (attribute entities decode before the JS
+// parses). Restricting the charset at normalize time - imported backups and
+// synced payloads included - is what makes that interpolation injection-proof.
+// Every app-generated id (uid / stage- / cat- / next-N ...) already conforms.
+function safeId(v){
+  return typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v) ? v : "";
+}
+
+// Colors land in style="background:<color>" - a free-form string could smuggle
+// url(...) exfiltration. Hex only; anything else falls back to the default.
+function safeColor(v){
+  return typeof v === "string" && /^#[0-9a-fA-F]{3,8}$/.test(v) ? v : "";
+}
+
 function toNum(v, fallback){
   return Number.isFinite(Number(v)) ? Number(v) : fallback;
 }
@@ -369,9 +378,9 @@ function normalizeStage(raw, index){
   var d = defaultStages()[index] || defaultStages()[0];
   var src = isObj(raw) ? raw : {};
   return {
-    id: typeof src.id === "string" && src.id ? src.id : d.id,
+    id: safeId(src.id) || d.id,
     name: typeof src.name === "string" && src.name ? src.name : d.name,
-    color: typeof src.color === "string" && src.color ? src.color : d.color
+    color: safeColor(src.color) || d.color
   };
 }
 
@@ -400,10 +409,10 @@ function normalizeChartCat(raw, index){
   var d = defaultChartCats()[index] || defaultChartCats()[0];
   var src = isObj(raw) ? raw : {};
   return {
-    id: typeof src.id === "string" && src.id ? src.id : d.id,
+    id: safeId(src.id) || d.id,
     name: typeof src.name === "string" && src.name ? src.name : d.name,
     kind: src.kind === "value" || src.kind === "band" || src.kind === "event" ? src.kind : d.kind,
-    color: typeof src.color === "string" && src.color ? src.color : d.color
+    color: safeColor(src.color) || d.color
   };
 }
 
@@ -414,10 +423,10 @@ function normalizeChart(raw){
   var src = isObj(raw) ? raw : {};
   var items = cloneArr(src.items).map(function(entry, idx){
     var row = isObj(entry) ? entry : {};
-    if (typeof row.catId !== "string" || !row.catId) return null;
+    if (!safeId(row.catId)) return null;
     var kind = row.kind === "band" || row.kind === "event" ? row.kind : "value";
     var out = {
-      id: typeof row.id === "string" && row.id ? row.id : "chart-" + idx,
+      id: safeId(row.id) || "chart-" + idx,
       catId: row.catId,
       kind: kind,
       name: typeof row.name === "string" ? row.name : ""
@@ -543,7 +552,7 @@ function entryCtx(c, nowIso, todayIso){
 // same validation rules as the mirror normalizers above.
 function normalizeEntryContent(raw, ctx){
   var row = isObj(raw) ? raw : {};
-  var id = typeof row.id === "string" && row.id ? row.id : "";
+  var id = safeId(row.id);
   if (!id) return null;
   var text = typeof row.text === "string" ? row.text : "";
   if (row.kind === "next") {
@@ -576,7 +585,7 @@ function normalizeEntryContent(raw, ctx){
     };
   }
   if (row.kind === "chartValue" || row.kind === "chartBand" || row.kind === "chartEvent") {
-    var catId = typeof row.catId === "string" && row.catId ? row.catId : "";
+    var catId = safeId(row.catId);
     var name = typeof row.name === "string" ? row.name : "";
     if (!catId || !name) return null;
     if (row.kind === "chartValue") {
@@ -625,7 +634,7 @@ function normalizeEntries(raw, ctx){
   var seen = {};
   var list = cloneArr(raw).map(function(e){
     var row = isObj(e) ? e : {};
-    var id = typeof row.id === "string" && row.id ? row.id : "";
+    var id = safeId(row.id);
     if (!id || seen[id]) return null;
     seen[id] = true;
     var out;
@@ -782,7 +791,7 @@ function normalizeCase(raw, nowIso, todayIso){
   var src = isObj(raw) ? raw : {};
   var out = {};
   Object.keys(src).forEach(function(k){ out[k] = src[k]; });
-  out.id = typeof src.id === "string" && src.id ? src.id : "";
+  out.id = safeId(src.id);
   out.label = typeof src.label === "string" ? src.label : "";
   out.ageBand = typeof src.ageBand === "string" ? src.ageBand : "";
   out.sex = src.sex === "M" || src.sex === "F" ? src.sex : "";
@@ -792,49 +801,26 @@ function normalizeCase(raw, nowIso, todayIso){
   out.dischargedAt = src.dischargedAt === null ? null : safeDate(src.dischargedAt, null);
   out.stageId = typeof src.stageId === "string" && src.stageId ? src.stageId : defaultStages()[0].id;
   out.phaseNote = typeof src.phaseNote === "string" ? src.phaseNote : "";
-  out.next = cloneArr(src.next).map(function(item, idx){
-    var row = isObj(item) ? item : {};
-    return {
-      id: typeof row.id === "string" && row.id ? row.id : "next-" + idx,
-      text: typeof row.text === "string" ? row.text : "",
-      due: row.due === null ? null : safeDate(row.due, null)
-    };
-  }).filter(function(item){ return item.text || item.due; });
-  out.todos = cloneArr(src.todos).map(function(item, idx){
-    var row = isObj(item) ? item : {};
-    return {
-      id: typeof row.id === "string" && row.id ? row.id : "todo-" + idx,
-      text: typeof row.text === "string" ? row.text : "",
-      done: row.done === true,
-      createdOn: safeDate(row.createdOn, todayIso)
-    };
-  }).filter(function(item){ return item.text; });
-  out.pendings = cloneArr(src.pendings).map(function(item, idx){
-    var row = isObj(item) ? item : {};
-    return {
-      id: typeof row.id === "string" && row.id ? row.id : "pending-" + idx,
-      text: typeof row.text === "string" ? row.text : "",
-      backOn: row.backOn === null ? null : safeDate(row.backOn, null)
-    };
-  }).filter(function(item){ return item.text; });
+  // Mirror lists share normalizeEntryContent with the entry store - one
+  // validator, one set of coercion rules. The kind tag is stripped afterwards
+  // (mirrors are plain rows) and a missing/hostile id falls back per index.
+  var mirrorCtx = { nowIso:nowIso, todayIso:todayIso, label:out.label, admittedAt:out.admittedAt, phaseNote:out.phaseNote };
+  function mirrorRows(list, kind){
+    return cloneArr(list).map(function(item, idx){
+      var row = isObj(item) ? Object.assign({}, item) : {};
+      row.kind = kind === "todos" ? "todo" : kind === "pendings" ? "pending" : kind;
+      if (!safeId(row.id)) row.id = row.kind + "-" + idx;
+      var content = normalizeEntryContent(row, mirrorCtx);
+      if (content) delete content.kind;
+      return content;
+    }).filter(Boolean);
+  }
+  out.next = mirrorRows(src.next, "next");
+  out.todos = mirrorRows(src.todos, "todos");
+  out.pendings = mirrorRows(src.pendings, "pendings");
   out.stageLog = normalizeStageLog(src.stageLog, out.admittedAt, out.stageId);
   out.stageId = out.stageLog[out.stageLog.length - 1].stageId || out.stageId;
-  out.seeds = cloneArr(src.seeds).map(function(item, idx){
-    var row = isObj(item) ? item : {};
-    var snap = isObj(row.snapshot) ? row.snapshot : {};
-    return {
-      id: typeof row.id === "string" && row.id ? row.id : "seed-" + idx,
-      text: typeof row.text === "string" ? row.text : "",
-      createdOn: safeDate(row.createdOn, todayIso),
-      snapshot: {
-        label: typeof snap.label === "string" ? snap.label : out.label,
-        day: Number.isFinite(Number(snap.day)) ? Number(snap.day) : computeDay(out.admittedAt, todayIso),
-        stageName: typeof snap.stageName === "string" ? snap.stageName : "",
-        phaseNote: typeof snap.phaseNote === "string" ? snap.phaseNote : out.phaseNote
-      },
-      sentAt: row.sentAt === null ? null : (typeof row.sentAt === "string" ? row.sentAt : null)
-    };
-  }).filter(function(item){ return item.text; });
+  out.seeds = mirrorRows(src.seeds, "seed");
   out.discharge = {
     checklist:isObj(src.discharge && src.discharge.checklist) ? src.discharge.checklist : {},
     plannedOn:src.discharge && src.discharge.plannedOn ? safeDate(src.discharge.plannedOn, null) : null
@@ -882,7 +868,7 @@ function normalizeTrashEntry(entry, nowIso){
     caseLabel = caseLabel || (payload && typeof payload.label === "string" ? payload.label : "");
   }
   return {
-    id: typeof row.id === "string" && row.id ? row.id : "trash-" + Math.random().toString(36).slice(2, 10),
+    id: safeId(row.id) || "trash-" + Math.random().toString(36).slice(2, 10),
     deletedAt: deletedAt,
     type: type,
     caseId: caseId,
@@ -903,11 +889,13 @@ function normalizeState(raw, nowIso, todayIso){
   var cutoff = trashCutoffIso(nowStamp);
   var state = {
     v: 1,
+    // A case whose id fails safeId (hostile/corrupt import) is dropped: an
+    // empty id can be neither addressed by mutateCase nor synced coherently.
     cases: cloneArr(src.cases).map(function(c, idx){
       var item = normalizeCase(c, nowStamp, todayStamp);
       if (!Number.isFinite(item.order)) item.order = idx;
       return item;
-    }),
+    }).filter(function(c){ return !!c.id; }),
     config: {
       stages: stages,
       labels: normalizeLabels(cfg.labels),
@@ -1221,22 +1209,13 @@ function reviewStreak(reviewDates, todayIso){
   return count;
 }
 
-function moveCase(cases, caseId, direction){
-  var list = cloneArr(cases).slice().sort(function(a, b){ return toNum(a.order, 0) - toNum(b.order, 0); });
-  var idx = list.findIndex(function(c){ return c && c.id === caseId; });
-  if (idx < 0) return list.map(copyWithOrder);
-  var nextIdx = direction === "up" ? idx - 1 : direction === "down" ? idx + 1 : idx;
-  if (nextIdx < 0 || nextIdx >= list.length || nextIdx === idx) return list.map(copyWithOrder);
-  var moved = list.splice(idx, 1)[0];
-  list.splice(nextIdx, 0, moved);
-  return list.map(copyWithOrder);
-}
-
-function copyWithOrder(c, idx){
-  var out = {};
-  Object.keys(c || {}).forEach(function(k){ out[k] = c[k]; });
-  out.order = idx;
-  return out;
+function moveIdInList(ids, id, direction){
+  var from = ids.indexOf(id);
+  var to = direction === "up" ? from - 1 : from + 1;
+  if (from < 0 || to < 0 || to >= ids.length) return cloneArr(ids);
+  var next = cloneArr(ids);
+  next.splice(to, 0, next.splice(from, 1)[0]);
+  return next;
 }
 
 function syncDiffFields(prevCase, currCase){
@@ -1418,27 +1397,41 @@ function syncReconcile(data, state, remoteList, nowIso){
     }
     var local = byId[r.id];
     if(!local){
-      var incoming = JSON.parse(JSON.stringify(r.case));
+      var incoming = normalizeCase(r.case, nowIso, String(nowIso).slice(0, 10));
       incoming.id = r.id;
       data.cases.push(incoming);
       state.snap[r.id] = JSON.stringify(incoming);
       state.mt[r.id] = JSON.parse(JSON.stringify(r.mt || {}));
       delete state.dirty[r.id];
+      if(state.restored) delete state.restored[r.id];
+      // A non-canonical server doc (older app version) is pushed back once in
+      // canonical form so both devices converge on the same serialization.
+      if(syncDiffFields(r.case, incoming).length > 0){ state.dirty[r.id] = true; }
       localChanged = true;
       return;
     }
     var res = syncMergeCase(local, state.mt[r.id], r.case, r.mt);
-    res.merged.id = r.id;
-    var mergedJson = JSON.stringify(res.merged);
+    // Snapshot the NORMALIZED merge result: DB goes through normalizeState right
+    // after reconcile, so a raw snapshot would re-detect the normalize delta as
+    // a fresh local edit on every sync (phantom now-stamped pushes, and expired
+    // entry tombstones re-imported from remote could never finish purging).
+    var merged = normalizeCase(res.merged, nowIso, String(nowIso).slice(0, 10));
+    merged.id = r.id;
+    var mergedJson = JSON.stringify(merged);
     if(mergedJson !== JSON.stringify(local)){
       var idx = data.cases.indexOf(local);
-      data.cases[idx] = res.merged;
-      byId[r.id] = res.merged;
+      data.cases[idx] = merged;
+      byId[r.id] = merged;
       localChanged = true;
     }
     state.mt[r.id] = res.mt;
-    if(syncDiffFields(r.case, res.merged).length > 0){ state.dirty[r.id] = true; }
-    else { delete state.dirty[r.id]; }
+    if(syncDiffFields(r.case, merged).length > 0){ state.dirty[r.id] = true; }
+    else {
+      delete state.dirty[r.id];
+      // Reconciled against a live remote copy: the restore flag has served its
+      // purpose. Left in place it would override legitimate FUTURE deletions.
+      if(state.restored) delete state.restored[r.id];
+    }
     state.snap[r.id] = mergedJson;
   });
   var pushes = [];
@@ -1619,7 +1612,7 @@ if (typeof module !== "undefined") {
     formatSeedExport:formatSeedExport,
     missSeedText:missSeedText,
     makeSeed:makeSeed,
-    moveCase:moveCase,
+    moveIdInList:moveIdInList,
     dcChecklistItems:dcChecklistItems,
     stageOn:stageOn,
     buildWeekGrid:buildWeekGrid,
@@ -1736,12 +1729,7 @@ Object.assign(STR, {
   dischargedAtLine:"\u9000\u9662\u6e08\u307f",
   dcExport:"\u9000\u9662\u66f8\u304d\u51fa\u3057",
   dayExport:"\u65e5\u6b21\u66f8\u304d\u51fa\u3057",
-  cellItemNext:"\u6b21\u306e\u4e00\u624b",
-  cellItemPending:"\u4fdd\u7559",
-  cellItemToday:"\u4eca\u65e5\u3084\u308b",
   markDone:"\u6e08",
-  markUndo:"\u672a\u5b9f\u65bd\u306b\u623b\u3059",
-  moveDate:"\u65e5\u3092\u5909\u66f4",
   overdueTitle:"\u671f\u9650\u8d85\u904e",
   planBadge:"\u4e88\u5b9a",
   valueEnterPh:"\u5024\u3092\u5165\u529b\u3067\u6d88\u3057\u8fbc\u307f",
@@ -1792,18 +1780,19 @@ let NAV = { stack:[], ignore:0 };
 let REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
 let MISS = null;
 let PENDING_FOCUS = null;
-let WEEK_SCROLL_RT = { busy:false, pendingLeftAdjust:0, initPending:false };
+let WEEK_SCROLL_RT = { busy:false, pendingLeftAdjust:0, initPending:false, lastLeft:0 };
 const SYNC_KEY = "wardbook:sync";
 const STATS_KEY = "wardbook:stats";
 let STATS = null;
 let SETTINGS = null;
 let THEME_MODE = "os";
 let SYNC = null;
-const SYNC_RT = { fb:null, appInst:null, appCfg:"", appCount:0, key:null, importCount:0 };
-let SYNC_STATUS = { kind:"off", detail:"" };
+const SYNC_RT = { fb:null, appInst:null, appCfg:"", appCount:0, key:null };
+let SYNC_STATUS = { kind:"off" };
 let SYNC_RUNNING = false;
 let SYNC_PENDING = false;
 let SYNC_PUSH_TIMER = 0;
+let OUTBOX_SENDING = false;
 
 function todayISO(){
   var d = new Date();
@@ -1957,8 +1946,10 @@ function restoreTrash(trashId){
   if (!entry) return;
   var stamp = nowISO();
   if (entry.type === "case") {
+    // Keep the payload's own lastTouchedAt: the baseline stamp after the sync
+    // reset must reflect how old this snapshot really is, or restoring stale
+    // trash would overwrite the other device's newer edits field by field.
     var restored = normalizeCase(entry.payload, stamp, todayISO());
-    restored.lastTouchedAt = stamp;
     DB.cases = cloneArr(DB.cases).filter(function(c){ return c.id !== restored.id; });
     DB.cases.push(restored);
     if (SYNC && SYNC.state) {
@@ -2123,8 +2114,8 @@ function syncStatusLabel(){
   }
 }
 
-function setSyncStatus(kind, detail){
-  SYNC_STATUS = { kind:kind, detail:detail || "" };
+function setSyncStatus(kind){
+  SYNC_STATUS = { kind:kind };
   if (typeof document !== "undefined" && document.querySelectorAll) {
     document.querySelectorAll("[data-sync-status]").forEach(function(el){ el.textContent = syncStatusLabel(); });
   }
@@ -2139,7 +2130,6 @@ function patchOutboxStatus(text){
 
 async function syncSdk(){
   if (SYNC_RT.fb) return SYNC_RT.fb;
-  SYNC_RT.importCount += 1;
   var base = "https://www.gstatic.com/firebasejs/10.14.1/";
   var mods = await Promise.all([
     import(base + "firebase-app.js"),
@@ -2200,8 +2190,15 @@ async function syncPullCases(fb, uid){
     var d = snap.docs[i];
     var v = d.data();
     if (v.deleted) { out.push({ id:d.id, deleted:true, case:null, mt:null, deletedAt:typeof v.deletedAt === "string" ? v.deletedAt : null }); continue; }
-    var payload = await syncDecryptJson(key, v.blob, v.iv);
-    out.push({ id:d.id, deleted:false, case:payload.case, mt:payload.mt || {} });
+    try {
+      var payload = await syncDecryptJson(key, v.blob, v.iv);
+      out.push({ id:d.id, deleted:false, case:payload.case, mt:payload.mt || {} });
+    } catch (e) {
+      // One corrupt/undecryptable doc must not brick sync for everything else.
+      // Skipped docs stay untouched on the server; a local dirty copy repairs
+      // them on the next push.
+      if (typeof console !== "undefined" && console.warn) console.warn("wardbook sync: skip doc " + d.id, e);
+    }
   }
   return out;
 }
@@ -2255,6 +2252,8 @@ async function syncSendOutboxIfNeeded(source){
     if (source === "review") patchOutboxStatus("");
     return false;
   }
+  if (OUTBOX_SENDING) return false;
+  OUTBOX_SENDING = true;
   if (source === "review") patchOutboxStatus("送信中…");
   try {
     var fb = await syncApp();
@@ -2298,6 +2297,8 @@ async function syncSendOutboxIfNeeded(source){
   } catch (e) {
     if (source === "review") patchOutboxStatus(STR.sendFailed);
     return false;
+  } finally {
+    OUTBOX_SENDING = false;
   }
 }
 
@@ -2319,11 +2320,12 @@ async function syncNow(opts){
     }
     var remoteCases = await syncPullCases(fb, user.uid);
     var remoteConfig = await syncPullConfig(fb, user.uid);
-    var res = syncReconcile(DB, SYNC.state, remoteCases, nowISO());
-    DB = normalizeState(res.data);
-    DB._configMt = JSON.parse(JSON.stringify((SYNC.state && SYNC.state.configMt) || {}));
+    // Config merges FIRST: case reconcile ends in normalizeState, whose
+    // stage-exists fallback would clobber assignments to a stage that arrives
+    // in this very sync from the other device.
     var cfgRes = syncReconcileConfig(DB, SYNC.state, remoteConfig, nowISO());
-    DB = normalizeState(cfgRes.data);
+    var res = syncReconcile(cfgRes.data, SYNC.state, remoteCases, nowISO());
+    DB = normalizeState(res.data);
     DB._configMt = JSON.parse(JSON.stringify((SYNC.state && SYNC.state.configMt) || {}));
     if (res.localChanged || cfgRes.localChanged) {
       saveState();
@@ -2346,7 +2348,8 @@ async function syncNow(opts){
     saveSync();
     var msg = String((e && e.message) || e);
     var offline = (typeof navigator !== "undefined" && navigator.onLine === false) || /network|failed to fetch|imported/i.test(msg);
-    setSyncStatus(offline ? "offline" : "error", msg);
+    if (!offline && typeof console !== "undefined" && console.warn) console.warn("wardbook sync error:", e);
+    setSyncStatus(offline ? "offline" : "error");
   } finally {
     SYNC_RUNNING = false;
     if (SYNC_PENDING) {
@@ -2491,6 +2494,7 @@ function resetWeekRange(){
   WEEK_SCROLL_RT.busy = false;
   WEEK_SCROLL_RT.pendingLeftAdjust = 0;
   WEEK_SCROLL_RT.initPending = false;
+  WEEK_SCROLL_RT.lastLeft = 0;
 }
 
 function setBoardMode(mode){
@@ -2530,6 +2534,7 @@ function ensureWeekWrapBehavior(){
     var left = Number(wrap.scrollLeft) || 0;
     var width = Number(wrap.scrollWidth) || 0;
     var view = Number(wrap.clientWidth) || 0;
+    WEEK_SCROLL_RT.lastLeft = left;
     if (width <= view) return;
     if (left <= 80) {
       WEEK_SCROLL_RT.busy = true;
@@ -2548,6 +2553,7 @@ function ensureWeekWrapBehavior(){
     var prevWidth = WEEK_SCROLL_RT.pendingLeftAdjust;
     var nextWidth = Number(wrap.scrollWidth) || 0;
     wrap.scrollLeft = (Number(wrap.scrollLeft) || 0) + Math.max(0, nextWidth - prevWidth);
+    WEEK_SCROLL_RT.lastLeft = Number(wrap.scrollLeft) || 0;
     WEEK_SCROLL_RT.pendingLeftAdjust = 0;
     WEEK_SCROLL_RT.busy = false;
   } else if (WEEK_SCROLL_RT.initPending) {
@@ -2557,8 +2563,13 @@ function ensureWeekWrapBehavior(){
       var colWidth = totalWidth / totalCols;
       wrap.scrollLeft = Math.max(0, Math.round(colWidth * (Number(VIEW.weekPast) || 0)));
     }
+    WEEK_SCROLL_RT.lastLeft = Number(wrap.scrollLeft) || 0;
     WEEK_SCROLL_RT.initPending = false;
   } else {
+    // Plain data re-render (cell edit, sync merge): innerHTML replacement reset
+    // the scroll position - restore where the user was, or the grid snaps back
+    // to the far past and immediately triggers another past-extension.
+    if (WEEK_SCROLL_RT.lastLeft) wrap.scrollLeft = WEEK_SCROLL_RT.lastLeft;
     WEEK_SCROLL_RT.busy = false;
   }
 }
@@ -2567,8 +2578,12 @@ function updateCaseAdmittedAt(caseId, value){
   var date = /^\d{4}-\d{2}-\d{2}$/.test(String(value || "")) ? String(value) : todayISO();
   mutateCase(caseId, function(c){
     c.admittedAt = date;
-    var rows = cloneArr(c.stageLog);
-    if (rows.length && date > rows[0].date) rows[0].date = date;
+    // Clamp EVERY earlier log row, not just the first: a lone clamped head row
+    // would sort behind later stage changes and silently rewrite the current
+    // stage at the next normalize.
+    var rows = cloneArr(c.stageLog).map(function(row){
+      return row && row.date < date ? { date:date, stageId:row.stageId } : row;
+    });
     c.stageLog = normalizeStageLog(rows, c.admittedAt, c.stageId);
   });
 }
@@ -2605,16 +2620,22 @@ function currentReviewCase(){
 function applyDailyRollover(force){
   var today = todayISO();
   var changed = !!force;
-  DB.cases = DB.cases.map(function(c){
+  DB.cases.forEach(function(c){
     var nextTodos = rolloverTodos(c, today);
     if (JSON.stringify(nextTodos) !== JSON.stringify(c.todos)) {
+      // The mirror edit MUST be absorbed into entries: mirrors are rebuilt from
+      // entries on every normalize/merge, so a bare todos write resurrects the
+      // rolled-off items at the next sync (and never propagates the cleanup).
+      c.todos = nextTodos;
+      entriesReconcileLocal(c, nowISO(), today);
       changed = true;
-      return Object.assign({}, c, { todos:nextTodos });
     }
-    return c;
   });
   VIEW.nowDay = today;
-  if (changed) saveState();
+  if (changed) {
+    saveState();
+    syncAfterSave();
+  }
 }
 
 function ensureToday(){
@@ -2740,7 +2761,7 @@ function openReview(){
     empty:ids.length === 0,
     noteDraft:"",
     copied:false,
-    outboxStatus:(!SYNC || !SYNC.enabled) ? "" : ""
+    outboxStatus:""
   };
   VIEW = { name:"review", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", dayDate:VIEW.dayDate || todayISO(), searchQuery:"", searchMonth:"", searchStageId:"", weekPast:0, weekFuture:7 };
   render();
@@ -2772,8 +2793,8 @@ function reviewAdvance(){
       STATS.reviewDates[todayISO()] = true;
       saveStats();
     }
-    if (!SYNC || !SYNC.enabled) patchOutboxStatus("");
-    else setTimeout(function(){ syncSendOutboxIfNeeded("review"); }, 0);
+    // syncSendOutboxIfNeeded itself shows the sync-off hint (STR.sendOff).
+    setTimeout(function(){ syncSendOutboxIfNeeded("review"); }, 0);
   } else {
     REVIEW.index += 1;
     REVIEW.mode = "actions";
@@ -2923,7 +2944,9 @@ function registerAdmission(){
     seeds:[],
     dxTags:[],
     discharge:null,
-    order:boardCases().length,
+    // Max+1, not length: deletions leave gaps in order values, and a length-
+    // based order could tie with (or undercut) an existing card mid-board.
+    order:boardCases().reduce(function(m, row){ return Math.max(m, toNum(row.order, 0) + 1); }, 0),
     lastTouchedAt:nowISO()
   }, nowISO(), admittedAt);
   DB.cases.push(c);
@@ -2952,27 +2975,70 @@ function setViewEditingLabel(on){
   }
 }
 
+// These fire on blur/tap even without an actual edit. A no-op mutateCase would
+// still run touch() - silently marking the case "confirmed today" (dropped from
+// the evening review queue, staleness reset) - and a full re-render that eats
+// the next tap. Bail out when the value is unchanged.
+function caseFieldUnchanged(caseId, fn){
+  var c = DB.cases.find(function(row){ return row.id === caseId; });
+  return !!c && fn(c);
+}
+
 function updateCaseLabel(caseId, value){
-  mutateCase(caseId, function(c){ c.label = String(value || "").trim(); });
+  var next = String(value || "").trim();
+  if (caseFieldUnchanged(caseId, function(c){ return c.label === next; })) return;
+  mutateCase(caseId, function(c){ c.label = next; });
 }
 
 function updateCasePhase(caseId, value){
-  mutateCase(caseId, function(c){ c.phaseNote = String(value || "").trim(); });
+  var next = String(value || "").trim();
+  if (caseFieldUnchanged(caseId, function(c){ return c.phaseNote === next; })) return;
+  mutateCase(caseId, function(c){ c.phaseNote = next; });
 }
 
 function updateCaseAge(caseId, value){
+  if (caseFieldUnchanged(caseId, function(c){ return c.ageBand === value; })) return;
   mutateCase(caseId, function(c){ c.ageBand = value; });
 }
 
 function updateCaseSex(caseId, value){
+  if (caseFieldUnchanged(caseId, function(c){ return c.sex === value; })) return;
   mutateCase(caseId, function(c){ c.sex = value; });
 }
 
 function addDxTag(caseId, value){
   var text = String(value || "").trim();
   if (!text) return;
+  queueFocusTarget("dxTagInput", false);
   mutateCase(caseId, function(c){
     if (!c.dxTags.includes(text)) c.dxTags.push(text);
+  });
+}
+
+// ---- shared per-case list CRUD (next / todos / pendings / seeds) -----------
+// All side effects (touch, rollover, entries absorption, persist) come from
+// mutateCase, so these three cover the whole family identically. Queuing the
+// focus BEFORE the re-render keeps the add-input focused for rapid entry.
+function addListItem(prop, caseId, value, focusId, make){
+  var text = String(value || "").trim();
+  if (!text) return false;
+  if (focusId) queueFocusTarget(focusId, false);
+  mutateCase(caseId, function(c){ c[prop].push(make(text, c)); });
+  return true;
+}
+
+function patchListItem(prop, caseId, itemId, fn){
+  mutateCase(caseId, function(c){
+    var item = c[prop].find(function(x){ return x.id === itemId; });
+    if (item) fn(item);
+  });
+}
+
+function deleteListItem(prop, type, caseId, itemId){
+  mutateCase(caseId, function(c){
+    var item = c[prop].find(function(x){ return x.id === itemId; });
+    if (item) pushTrashEntry(type, c, item);
+    c[prop] = c[prop].filter(function(x){ return x.id !== itemId; });
   });
 }
 
@@ -2983,127 +3049,77 @@ function removeDxTag(caseId, index){
 }
 
 function addNext(caseId, value){
-  var text = String(value || "").trim();
-  if (!text) return;
-  mutateCase(caseId, function(c){
-    c.next.push({ id:uid(), text:text, due:null });
-  });
+  addListItem("next", caseId, value, "nextInput", function(text){ return { id:uid(), text:text, due:null }; });
 }
 
 function updateNextText(caseId, itemId, value){
-  var oldText = "";
   var newText = String(value || "");
-  var oldTrim = "";
   var newTrim = newText.trim();
+  var oldTrim = "";
   var before = DB.cases.find(function(c){ return c.id === caseId; });
   if (before) {
     var existing = before.next.find(function(x){ return x.id === itemId; });
-    oldText = existing ? String(existing.text || "") : "";
-    oldTrim = oldText.trim();
+    oldTrim = existing ? String(existing.text || "").trim() : "";
   }
   MISS = oldTrim && newTrim && oldTrim !== newTrim ? { caseId:caseId, itemId:itemId, oldText:oldTrim, expanded:false, why:"" } : null;
-  mutateCase(caseId, function(c){
-    var item = c.next.find(function(x){ return x.id === itemId; });
-    if (item) item.text = newText;
-  });
+  patchListItem("next", caseId, itemId, function(item){ item.text = newText; });
 }
 
 function updateNextDue(caseId, itemId, value){
-  mutateCase(caseId, function(c){
-    var item = c.next.find(function(x){ return x.id === itemId; });
-    if (item) item.due = value || null;
-  });
+  patchListItem("next", caseId, itemId, function(item){ item.due = value || null; });
 }
 
 function deleteNext(caseId, itemId){
-  mutateCase(caseId, function(c){
-    var item = c.next.find(function(x){ return x.id === itemId; });
-    if (item) pushTrashEntry("next", c, item);
-    c.next = c.next.filter(function(x){ return x.id !== itemId; });
-  });
+  deleteListItem("next", "next", caseId, itemId);
 }
 
 function addTodo(caseId, value){
-  var text = String(value || "").trim();
-  if (!text) return;
-  mutateCase(caseId, function(c){
-    c.todos.push({ id:uid(), text:text, done:false, createdOn:todayISO() });
-  });
+  addListItem("todos", caseId, value, "todoInput", function(text){ return { id:uid(), text:text, done:false, createdOn:todayISO() }; });
 }
 
 function toggleTodo(caseId, itemId){
-  mutateCase(caseId, function(c){
-    var item = c.todos.find(function(x){ return x.id === itemId; });
-    if (item) item.done = !item.done;
-  });
+  patchListItem("todos", caseId, itemId, function(item){ item.done = !item.done; });
 }
 
 function updateTodoText(caseId, itemId, value){
-  mutateCase(caseId, function(c){
-    var item = c.todos.find(function(x){ return x.id === itemId; });
-    if (item) item.text = value;
-  });
+  patchListItem("todos", caseId, itemId, function(item){ item.text = value; });
 }
 
 function deleteTodo(caseId, itemId){
-  mutateCase(caseId, function(c){
-    var item = c.todos.find(function(x){ return x.id === itemId; });
-    if (item) pushTrashEntry("todo", c, item);
-    c.todos = c.todos.filter(function(x){ return x.id !== itemId; });
-  });
+  deleteListItem("todos", "todo", caseId, itemId);
 }
 
 function addPending(caseId, value){
-  var text = String(value || "").trim();
-  if (!text) return;
-  mutateCase(caseId, function(c){
-    c.pendings.push({ id:uid(), text:text, backOn:null });
-  });
+  addListItem("pendings", caseId, value, "pendingInput", function(text){ return { id:uid(), text:text, backOn:null }; });
 }
 
 function updatePendingText(caseId, itemId, value){
-  mutateCase(caseId, function(c){
-    var item = c.pendings.find(function(x){ return x.id === itemId; });
-    if (item) item.text = value;
-  });
+  patchListItem("pendings", caseId, itemId, function(item){ item.text = value; });
 }
 
 function updatePendingBackOn(caseId, itemId, value){
-  mutateCase(caseId, function(c){
-    var item = c.pendings.find(function(x){ return x.id === itemId; });
-    if (item) item.backOn = value || null;
-  });
+  patchListItem("pendings", caseId, itemId, function(item){ item.backOn = value || null; });
 }
 
 function deletePending(caseId, itemId){
-  mutateCase(caseId, function(c){
-    var item = c.pendings.find(function(x){ return x.id === itemId; });
-    if (item) pushTrashEntry("pending", c, item);
-    c.pendings = c.pendings.filter(function(x){ return x.id !== itemId; });
-  });
+  deleteListItem("pendings", "pending", caseId, itemId);
 }
 
 function addSeed(caseId, value){
-  var text = String(value || "").trim();
-  if (!text) return;
-  mutateCase(caseId, function(c){
+  var added = addListItem("seeds", caseId, value, "seedInput", function(text, c){
     var stage = stageById(c.stageId);
-    c.seeds.push(makeSeed(uid(), text, todayISO(), {
+    return makeSeed(uid(), text, todayISO(), {
       label:c.label,
       day:computeDay(c.admittedAt, todayISO()),
       stageName:stage ? stage.name : "",
       phaseNote:c.phaseNote
-    }));
+    });
   });
-  bumpStat("seedsCaptured", 1);
+  if (added) bumpStat("seedsCaptured", 1);
 }
 
 function deleteSeed(caseId, itemId){
-  mutateCase(caseId, function(c){
-    var item = c.seeds.find(function(x){ return x.id === itemId; });
-    if (item) pushTrashEntry("seed", c, item);
-    c.seeds = c.seeds.filter(function(x){ return x.id !== itemId; });
-  });
+  deleteListItem("seeds", "seed", caseId, itemId);
 }
 
 function reviewNoChange(caseId){
@@ -3167,7 +3183,7 @@ function copyReviewExport(){
   fallback();
 }
 
-function copyTextWithFallback(text, boxId, done){
+function copyTextWithFallback(text, boxId){
   var fallback = function(){
     var box = document.getElementById(boxId);
     if (box) {
@@ -3177,10 +3193,7 @@ function copyTextWithFallback(text, boxId, done){
   };
   try {
     if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(function(){
-        bumpStat("exportsDone", 1);
-        if (done) done();
-      }, fallback);
+      navigator.clipboard.writeText(text).then(function(){ bumpStat("exportsDone", 1); }, fallback);
       return;
     }
   } catch (e) {}
@@ -3188,8 +3201,7 @@ function copyTextWithFallback(text, boxId, done){
 }
 
 function stageNameFor(stageId){
-  var stage = stageById(stageId);
-  return stage ? stage.name : stageId;
+  return stageById(stageId).name;
 }
 
 function configChanged(){
@@ -3294,41 +3306,61 @@ function openChartItemForDate(caseId, catId, date){
   }, "chartItemName", false);
 }
 
-function updateStageName(index, value){
-  if (!DB.config.stages[index]) return;
-  DB.config.stages[index].name = String(value || "").trim() || DB.config.stages[index].name;
-  configChanged();
-}
-
-function setStageColor(index, color){
-  if (!DB.config.stages[index]) return;
-  DB.config.stages[index].color = color;
-  configChanged();
-}
-
-function moveStage(index, direction){
-  var next = cloneArr(DB.config.stages);
+// ---- shared config-list editing (stages / chartCats) -----------------------
+function swapAt(list, index, direction){
   var target = direction === "up" ? index - 1 : index + 1;
-  if (target < 0 || target >= next.length) return;
-  var picked = next[index];
-  next[index] = next[target];
-  next[target] = picked;
-  DB.config.stages = next;
+  if (index < 0 || target < 0 || target >= list.length) return false;
+  var picked = list[index];
+  list[index] = list[target];
+  list[target] = picked;
+  return true;
+}
+
+function configRename(key, index, value){
+  var list = DB.config[key];
+  if (!list[index]) return;
+  list[index].name = String(value || "").trim() || list[index].name;
   configChanged();
 }
+
+function configSetColor(key, index, color){
+  var list = DB.config[key];
+  if (!list[index]) return;
+  list[index].color = color;
+  configChanged();
+}
+
+function configMove(key, index, direction){
+  var next = cloneArr(DB.config[key]);
+  if (!swapAt(next, index, direction)) return;
+  DB.config[key] = next;
+  configChanged();
+}
+
+function configDelete(key, index, useCount){
+  var list = DB.config[key];
+  if (!list[index] || list.length <= 1) return;
+  if (useCount) {
+    if (typeof alert === "function") alert(STR.stageInUse + " " + useCount);
+    return;
+  }
+  list.splice(index, 1);
+  configChanged();
+}
+
+function stageUseCount(stageId){
+  return cloneArr(DB.cases).filter(function(c){
+    return c.stageId === stageId || cloneArr(c.stageLog).some(function(item){ return item && item.stageId === stageId; });
+  }).length;
+}
+
+function updateStageName(index, value){ configRename("stages", index, value); }
+function setStageColor(index, color){ configSetColor("stages", index, color); }
+function moveStage(index, direction){ configMove("stages", index, direction); }
 
 function deleteStage(index){
   var stage = DB.config.stages[index];
-  if (!stage || DB.config.stages.length <= 1) return;
-  var count = cloneArr(DB.cases).filter(function(c){
-    return c.stageId === stage.id || cloneArr(c.stageLog).some(function(item){ return item && item.stageId === stage.id; });
-  }).length;
-  if (count) {
-    if (typeof alert === "function") alert(STR.stageInUse + " " + count);
-    return;
-  }
-  DB.config.stages.splice(index, 1);
-  configChanged();
+  configDelete("stages", index, stage ? stageUseCount(stage.id) : 0);
 }
 
 function addStage(){
@@ -3351,22 +3383,19 @@ function toggleDensity(){
   saveLocalPrefs();
 }
 
-function toggleCardSection(name, checked){
+function toggleHiddenPref(field, key, checked){
   SETTINGS = SETTINGS || defaultSettings();
-  SETTINGS.cardHidden = cloneArr(SETTINGS.cardHidden).filter(function(item){ return item !== name; });
-  if (!checked) SETTINGS.cardHidden.push(name);
+  SETTINGS[field] = cloneArr(SETTINGS[field]).filter(function(item){ return item !== key; });
+  if (!checked) SETTINGS[field].push(key);
   saveLocalPrefs();
 }
+
+function toggleCardSection(name, checked){ toggleHiddenPref("cardHidden", name, checked); }
 
 function moveCardSection(name, direction){
   SETTINGS = SETTINGS || defaultSettings();
   var list = cloneArr(SETTINGS.cardSections);
-  var index = list.indexOf(name);
-  var target = direction === "up" ? index - 1 : index + 1;
-  if (index < 0 || target < 0 || target >= list.length) return;
-  var picked = list[index];
-  list[index] = list[target];
-  list[target] = picked;
+  if (!swapAt(list, list.indexOf(name), direction)) return;
   SETTINGS.cardSections = list;
   saveLocalPrefs();
 }
@@ -3391,46 +3420,15 @@ function chartCatHidden(catId){
   return !!(SETTINGS && cloneArr(SETTINGS.chartHidden).includes(catId));
 }
 
-function toggleChartCatPref(catId, checked){
-  SETTINGS = SETTINGS || defaultSettings();
-  SETTINGS.chartHidden = cloneArr(SETTINGS.chartHidden).filter(function(item){ return item !== catId; });
-  if (!checked) SETTINGS.chartHidden.push(catId);
-  saveLocalPrefs();
-}
+function toggleChartCatPref(catId, checked){ toggleHiddenPref("chartHidden", catId, checked); }
 
-function updateChartCatName(index, value){
-  if (!DB.config.chartCats[index]) return;
-  DB.config.chartCats[index].name = String(value || "").trim() || DB.config.chartCats[index].name;
-  configChanged();
-}
-
-function setChartCatColor(index, color){
-  if (!DB.config.chartCats[index]) return;
-  DB.config.chartCats[index].color = color;
-  configChanged();
-}
-
-function moveChartCat(index, direction){
-  var next = cloneArr(DB.config.chartCats);
-  var target = direction === "up" ? index - 1 : index + 1;
-  if (target < 0 || target >= next.length) return;
-  var picked = next[index];
-  next[index] = next[target];
-  next[target] = picked;
-  DB.config.chartCats = next;
-  configChanged();
-}
+function updateChartCatName(index, value){ configRename("chartCats", index, value); }
+function setChartCatColor(index, color){ configSetColor("chartCats", index, color); }
+function moveChartCat(index, direction){ configMove("chartCats", index, direction); }
 
 function deleteChartCat(index){
   var cat = DB.config.chartCats[index];
-  if (!cat || DB.config.chartCats.length <= 1) return;
-  var count = chartCatUseCount(cat.id);
-  if (count) {
-    if (typeof alert === "function") alert(STR.stageInUse + " " + count);
-    return;
-  }
-  DB.config.chartCats.splice(index, 1);
-  configChanged();
+  configDelete("chartCats", index, cat ? chartCatUseCount(cat.id) : 0);
 }
 
 // kind is chosen at creation and immutable afterwards: changing it would leave
@@ -3526,11 +3524,19 @@ function saveChartItem(){
   closeSheet();
 }
 
-function removeChartItem(caseId, itemId){
+// Shared prologue of every chart-item mutation: normalize, locate, kind-guard.
+function patchChartItem(caseId, itemId, kind, fn){
   mutateCase(caseId, function(c){
     c.chart = normalizeChart(c.chart);
     var item = c.chart.items.find(function(row){ return row.id === itemId; });
-    if (item) pushTrashEntry("chartItem", c, item);
+    if (!item || (kind && item.kind !== kind)) return;
+    fn(item, c);
+  });
+}
+
+function removeChartItem(caseId, itemId){
+  patchChartItem(caseId, itemId, "", function(item, c){
+    pushTrashEntry("chartItem", c, item);
     c.chart.items = c.chart.items.filter(function(row){ return row.id !== itemId; });
   });
 }
@@ -3559,10 +3565,7 @@ function openChartValue(caseId, itemId, date){
 function saveChartValue(){
   var d = SHEET.draft || {};
   var value = String(d.value || "").trim();
-  mutateCase(d.caseId, function(c){
-    c.chart = normalizeChart(c.chart);
-    var item = c.chart.items.find(function(row){ return row.id === d.itemId; });
-    if (!item || item.kind !== "value") return;
+  patchChartItem(d.caseId, d.itemId, "value", function(item){
     item.values = isObj(item.values) ? item.values : {};
     if (value) item.values[d.date] = value;
     else delete item.values[d.date];
@@ -3591,10 +3594,7 @@ function addChartEventItem(){
 
 // ---- MAR-style plan resolution (SPEC-F) ----
 function toggleEventDone(caseId, itemId, onDate){
-  mutateCase(caseId, function(c){
-    c.chart = normalizeChart(c.chart);
-    var item = c.chart.items.find(function(row){ return row.id === itemId; });
-    if (!item || item.kind !== "event") return;
+  patchChartItem(caseId, itemId, "event", function(item){
     if (item.status === "planned") {
       item.status = "done";
       // Resolving an overdue plan records the actual done date, not the planned one.
@@ -3608,10 +3608,7 @@ function toggleEventDone(caseId, itemId, onDate){
 function rescheduleChartEntry(caseId, itemId, fromDate, newDate){
   var next = safeDate(newDate, "");
   if (!next) return;
-  mutateCase(caseId, function(c){
-    c.chart = normalizeChart(c.chart);
-    var item = c.chart.items.find(function(row){ return row.id === itemId; });
-    if (!item) return;
+  patchChartItem(caseId, itemId, "", function(item){
     if (item.kind === "event") {
       item.date = next;
       item.status = "planned";
@@ -3626,23 +3623,31 @@ function rescheduleChartEntry(caseId, itemId, fromDate, newDate){
 // Cancel for a planned EVENT is the normal delete flow (trash + tombstone);
 // a value-row plan is just a mark, so cancelling clears that one date.
 function cancelValuePlan(caseId, itemId, date){
-  mutateCase(caseId, function(c){
-    c.chart = normalizeChart(c.chart);
-    var item = c.chart.items.find(function(row){ return row.id === itemId; });
-    if (!item || item.kind !== "value" || !isObj(item.planned)) return;
-    delete item.planned[date];
+  patchChartItem(caseId, itemId, "value", function(item){
+    if (isObj(item.planned)) delete item.planned[date];
   });
 }
 
 function addValuePlan(caseId, itemId, date){
-  mutateCase(caseId, function(c){
-    c.chart = normalizeChart(c.chart);
-    var item = c.chart.items.find(function(row){ return row.id === itemId; });
-    if (!item || item.kind !== "value") return;
+  patchChartItem(caseId, itemId, "value", function(item){
     item.planned = isObj(item.planned) ? item.planned : {};
     item.planned[date] = true;
   });
 }
+
+// Export-text section: "## title", then one line per item (fmt may return an
+// array of lines), "- -" when empty.
+function pushSection(lines, title, list, fmt){
+  lines.push("", "## " + title);
+  if (!list.length) { lines.push("- -"); return; }
+  list.forEach(function(item){
+    var rows = fmt(item);
+    (Array.isArray(rows) ? rows : [rows]).forEach(function(row){ lines.push(row); });
+  });
+}
+
+function fmtNextLine(item){ return "- " + item.text + (item.due ? " (" + item.due + ")" : ""); }
+function fmtPendingLine(item){ return "- " + item.text + (item.backOn ? " (" + item.backOn + ")" : ""); }
 
 function formatSeedSnapshot(seed){
   var snap = isObj(seed && seed.snapshot) ? seed.snapshot : {};
@@ -3669,18 +3674,12 @@ function dischargeExportText(caseId){
   cloneArr(c.stageLog).forEach(function(item){
     lines.push("- " + item.date + " " + stageNameFor(item.stageId));
   });
-  lines.push("", "## Phase", c.phaseNote || "-", "", "## Remaining Next");
-  if (c.next.length) cloneArr(c.next).forEach(function(item){ lines.push("- " + item.text + (item.due ? " (" + item.due + ")" : "")); });
-  else lines.push("- -");
-  lines.push("", "## Pending");
-  if (c.pendings.length) cloneArr(c.pendings).forEach(function(item){ lines.push("- " + item.text + (item.backOn ? " (" + item.backOn + ")" : "")); });
-  else lines.push("- -");
-  lines.push("", "## Seeds");
-  if (c.seeds.length) cloneArr(c.seeds).forEach(function(seed){
-    lines.push("- " + seed.text);
-    lines.push("  - " + formatSeedSnapshot(seed));
+  lines.push("", "## Phase", c.phaseNote || "-");
+  pushSection(lines, "Remaining Next", cloneArr(c.next), fmtNextLine);
+  pushSection(lines, "Pending", cloneArr(c.pendings), fmtPendingLine);
+  pushSection(lines, "Seeds", cloneArr(c.seeds), function(seed){
+    return ["- " + seed.text, "  - " + formatSeedSnapshot(seed)];
   });
-  else lines.push("- -");
   return lines.join("\n");
 }
 
@@ -3695,21 +3694,12 @@ function dayExportText(caseId){
     "# " + c.label,
     "- D" + computeDay(c.admittedAt, todayISO()),
     "- Stage: " + stageNameFor(c.stageId),
-    "- Phase: " + (c.phaseNote || "-"),
-    "",
-    "## Next"
+    "- Phase: " + (c.phaseNote || "-")
   ];
-  if (c.next.length) cloneArr(c.next).forEach(function(item){ lines.push("- " + item.text + (item.due ? " (" + item.due + ")" : "")); });
-  else lines.push("- -");
-  lines.push("", "## Today");
-  if (c.todos.length) cloneArr(c.todos).forEach(function(item){ lines.push("- " + item.text + (item.done ? " [done]" : "")); });
-  else lines.push("- -");
-  lines.push("", "## Pending");
-  if (c.pendings.length) cloneArr(c.pendings).forEach(function(item){ lines.push("- " + item.text + (item.backOn ? " (" + item.backOn + ")" : "")); });
-  else lines.push("- -");
-  lines.push("", "## Seeds");
-  if (c.seeds.length) cloneArr(c.seeds).forEach(function(seed){ lines.push("- " + seed.text); });
-  else lines.push("- -");
+  pushSection(lines, "Next", cloneArr(c.next), fmtNextLine);
+  pushSection(lines, "Today", cloneArr(c.todos), function(item){ return "- " + item.text + (item.done ? " [done]" : ""); });
+  pushSection(lines, "Pending", cloneArr(c.pendings), fmtPendingLine);
+  pushSection(lines, "Seeds", cloneArr(c.seeds), function(seed){ return "- " + seed.text; });
   return lines.join("\n");
 }
 
@@ -3750,6 +3740,25 @@ function commitMissSeed(){
   addSeed(caseId, text);
 }
 
+function dischargeCase(caseId){
+  if (!confirm(STR.dischargeConfirm)) return;
+  mutateCase(caseId, function(c){
+    c.status = "discharged";
+    c.dischargedAt = todayISO();
+    // The default 退院調整 stage can be deleted from config; writing a dangling
+    // stageId would oscillate between the two normalizers on every load.
+    if (hasStageId(DB.config.stages, "dc")) appendStageLog(c, "dc", todayISO());
+  });
+  openBoard();
+}
+
+function undischargeCase(caseId){
+  mutateCase(caseId, function(c){
+    c.status = "active";
+    c.dischargedAt = null;
+  });
+}
+
 function deleteCase(caseId){
   if (!confirm(STR.deleteConfirm)) return;
   var doomed = DB.cases.find(function(c){ return c.id === caseId; });
@@ -3763,16 +3772,13 @@ function deleteCase(caseId){
 }
 
 function moveCaseDirection(caseId, direction){
-  var active = DB.cases.filter(function(c){ return c.status === "active"; });
-  var moved = moveCase(active, caseId, direction);
-  var byId = {};
-  moved.forEach(function(c){ byId[c.id] = c.order; });
-  DB.cases = DB.cases.map(function(c){
-    if (c.status !== "active") return c;
-    var out = Object.assign({}, c);
-    if (Object.prototype.hasOwnProperty.call(byId, out.id)) out.order = byId[out.id];
-    return out;
-  });
+  // Operate on the DISPLAYED order (urgent-first board order, same as drag &
+  // drop) - moving against raw order values jumps unpredictably whenever a
+  // 戻り予定 case is hoisted to the top.
+  var ids = boardCases().map(function(c){ return c.id; });
+  var next = moveIdInList(ids, caseId, direction);
+  if (next.join("\n") === ids.join("\n")) return;
+  reorderActiveByIds(next);
   saveState();
   render();
   syncAfterSave();
@@ -4022,7 +4028,13 @@ function renderWeekCellSheet(){
     cloneArr(c.pendings).filter(function(item){ return item.backOn === d.date; }).forEach(function(item){
       rows.push('<div class="lineitem"><span class="badge">' + esc(DB.config.labels.pending) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deletePending(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
     });
-    cloneArr(c.todos).filter(function(item){ return !item.done && item.createdOn === d.date; }).forEach(function(item){
+    var todayIso = todayISO();
+    cloneArr(c.todos).filter(function(item){
+      // Same visibility rule as the grid marker (buildWeekGrid): today's cell
+      // carries every undone rolled-over todo, future cells their own day only.
+      if (!item || item.done) return false;
+      return d.date === todayIso ? item.createdOn <= todayIso : (d.date > todayIso && item.createdOn === d.date);
+    }).forEach(function(item){
       rows.push('<div class="lineitem"><span class="badge">' + esc(DB.config.labels.today) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deleteTodo(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
     });
     cloneArr(c.chart && c.chart.items).forEach(function(item){
@@ -4188,7 +4200,7 @@ function renderSettingsSheet(){
   });
   return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.settingsRow) + '</div><div class="stack">' +
     '<section class="settingssec"><div class="one">' + esc(STR.stageEditor) + '</div><div class="stack">' + DB.config.stages.map(function(stage, index){
-      var useCount = cloneArr(DB.cases).filter(function(c){ return c.stageId === stage.id || cloneArr(c.stageLog).some(function(item){ return item && item.stageId === stage.id; }); }).length;
+      var useCount = stageUseCount(stage.id);
       return '<div class="panelcard"><div class="row"><input class="input" value="' + esc(stage.name) + '" onchange="updateStageName(' + index + ',this.value)"></div><div class="chips">' + stageColors.map(function(color){
         return '<button class="chipbtn' + (stage.color === color ? ' on' : '') + '" style="background:' + esc(color) + ';color:#fff;border-color:' + esc(color) + '" onclick="setStageColor(' + index + ',\'' + esc(color) + '\')">' + (stage.color === color ? '\u2713' : '&nbsp;') + '</button>';
       }).join('') + '</div><div class="row wrap"><button class="smallbtn" onclick="moveStage(' + index + ',\'up\')">\u2191</button><button class="smallbtn" onclick="moveStage(' + index + ',\'down\')">\u2193</button><button class="smallbtn danger" onclick="deleteStage(' + index + ')">Delete</button><span class="note">' + esc(STR.stageInUse) + ' ' + useCount + '</span></div></div>';
@@ -4367,9 +4379,9 @@ function renderDataSheet(){
 
 renderBoard = function(){
   var cases = boardCases();
-  var week = buildWeekGrid(DB.cases, todayISO(), VIEW.weekPast, VIEW.weekFuture);
   var body;
   if (VIEW.boardMode === "week") {
+    var week = buildWeekGrid(DB.cases, todayISO(), VIEW.weekPast, VIEW.weekFuture);
     body = '<div id="weekWrap" class="weekwrap"><table class="weekgrid"><thead><tr><th class="sticky">' + esc(STR.weekCaseCol) + '</th>' + week.dates.map(function(date){
       return '<th class="' + esc(weekHeaderClass(date, week.today)) + '" onclick="openDayView(\'' + esc(date) + '\')">' + esc(weekHeaderLabel(date)) + '</th>';
     }).join('') + '</tr></thead><tbody>' + week.rows.map(function(row){
@@ -4415,7 +4427,7 @@ renderDetail = function(caseId){
   var dischargePanel = '<section class="panelcard"><div class="collapsehead"' + (dischargeInline ? '' : ' onclick="toggleDischargePanel()"') + '><div class="one">' + esc(STR.dischargePanel) + '</div><div class="meta">' + dischargeProgress(c) + '/' + dcChecklistItems().length + (dischargeInline ? '' : (dischargeOpen ? ' -' : ' +')) + '</div></div>' +
     (dischargeOpen ? '<div class="stack" style="margin-top:10px"><div class="row wrap"><span class="fieldlabel">' + esc(STR.plannedOn) + '</span><input class="date" type="date" value="' + esc(c.discharge.plannedOn || '') + '" onchange="mutateCase(\'' + esc(c.id) + '\',function(row){row.discharge.plannedOn=this.value||null}.bind(this))"></div><div class="checklist">' + dcChecklistItems().map(function(item){
       return '<label class="checkitem"><input class="check" type="checkbox" ' + (c.discharge.checklist[item.k] ? 'checked ' : '') + 'onclick="mutateCase(\'' + esc(c.id) + '\',function(row){row.discharge.checklist[\'' + esc(item.k) + '\']=this.checked}.bind(this))"><div class="linegrow"><div class="text">' + esc(item.t) + '</div><div class="faint">' + esc(item.h) + '</div></div></label>';
-    }).join('') + '</div><textarea id="dcExportText" class="reviewtextarea hidden" readonly>' + esc(dischargeExportText(c.id)) + '</textarea><div class="row wrap"><button class="ghostbtn" onclick="copyDischargeExport(\'' + esc(c.id) + '\')">' + esc(STR.dcExport) + '</button>' + (c.status === "discharged" ? '<button class="ghostbtn" onclick="mutateCase(\'' + esc(c.id) + '\',function(row){row.status=\'active\';row.dischargedAt=null})">' + esc(STR.backToActive) + '</button>' : '<button class="ghostbtn danger" onclick="if(confirm(STR.dischargeConfirm)){mutateCase(\'' + esc(c.id) + '\',function(row){row.status=\'discharged\';row.dischargedAt=todayISO();appendStageLog(row,\'dc\',todayISO())});openBoard()}">' + esc(STR.doDischarge) + '</button>') + '</div></div>' : '') + '</section>';
+    }).join('') + '</div><textarea id="dcExportText" class="reviewtextarea hidden" readonly>' + esc(dischargeExportText(c.id)) + '</textarea><div class="row wrap"><button class="ghostbtn" onclick="copyDischargeExport(\'' + esc(c.id) + '\')">' + esc(STR.dcExport) + '</button>' + (c.status === "discharged" ? '<button class="ghostbtn" onclick="undischargeCase(\'' + esc(c.id) + '\')">' + esc(STR.backToActive) + '</button>' : '<button class="ghostbtn danger" onclick="dischargeCase(\'' + esc(c.id) + '\')">' + esc(STR.doDischarge) + '</button>') + '</div></div>' : '') + '</section>';
   return '<section class="screen detail"><div class="stack">' +
     '<section class="panelcard"><div class="detailhead"><div class="linegrow">' +
       (VIEW.editingLabel ? '<input class="editline" value="' + esc(c.label) + '" onblur="setViewEditingLabel(false);updateCaseLabel(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}">' : '<div class="caseid one" onclick="setViewEditingLabel(true)">' + esc(c.label || '-') + '</div>') +
@@ -4452,16 +4464,12 @@ renderReviewDone = function(){
 renderSheet = function(){
   var el = document.getElementById("sheet");
   if (!el) return;
-  var html = "";
-  if (SHEET.name === "admission") html = renderAdmissionSheet();
-  if (SHEET.name === "stage") html = renderStageSheet();
-  if (SHEET.name === "sync") html = renderSyncSheet();
-  if (SHEET.name === "data") html = renderDataSheet();
-  if (SHEET.name === "settings") html = renderSettingsSheet();
-  if (SHEET.name === "weekCell") html = renderWeekCellSheet();
-  if (SHEET.name === "chartItem") html = renderChartItemSheet();
-  if (SHEET.name === "chartValue") html = renderChartValueSheet();
-  if (SHEET.name === "chartEventCell") html = renderChartEventCellSheet();
+  var renderers = {
+    admission:renderAdmissionSheet, stage:renderStageSheet, sync:renderSyncSheet,
+    data:renderDataSheet, settings:renderSettingsSheet, weekCell:renderWeekCellSheet,
+    chartItem:renderChartItemSheet, chartValue:renderChartValueSheet, chartEventCell:renderChartEventCellSheet
+  };
+  var html = renderers[SHEET.name] ? renderers[SHEET.name]() : "";
   el.className = "sheet" + (html ? " open" : "");
   el.innerHTML = html;
 };
@@ -4516,6 +4524,9 @@ if (typeof document !== "undefined" && document.addEventListener) {
 }
 if (typeof window !== "undefined" && window.addEventListener) {
   window.addEventListener("popstate", handlePopState);
+  // A failed sync schedules no retry of its own; coming back online is the
+  // natural moment to flush whatever is still dirty.
+  window.addEventListener("online", function(){ queueSync(); });
   window.addEventListener("resize", debounce(function(){
     if (VIEW.name === "board" && VIEW.boardMode === "week") {
       VIEW.weekPast = 0;
