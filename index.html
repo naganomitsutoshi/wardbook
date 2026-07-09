@@ -111,8 +111,10 @@
   .smallbtn{min-height:32px;font-size:12px}
   .chipbtn{
     min-height:34px;
-    padding:0 10px;
+    padding:0 12px;
     font-size:12px;
+    white-space:nowrap;
+    flex-shrink:0;
   }
   .chipbtn.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
   .labelrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -255,6 +257,7 @@
   .hidden{display:none!important}
   .seg{display:flex;gap:6px;margin-bottom:10px}
   .seg button{flex:1}
+  .seg .densitytoggle{flex:0 0 auto}
   .searchbar,.filters{display:flex;gap:8px;flex-wrap:wrap}
   .searchbar input,.filters select{flex:1}
   .weekwrap,.chartwrap{overflow:auto}
@@ -268,6 +271,9 @@
     text-align:center;
     vertical-align:middle;
   }
+  /* Taller, wider week rows: more room to stack markers per patient/day. */
+  .weekgrid td{min-height:46px;height:46px;padding:5px 6px;font-size:12px;vertical-align:top}
+  .weekgrid tbody .sticky{font-size:13px;font-weight:600}
   .weekgrid .sticky,.chartgrid .sticky{
     position:sticky;
     left:0;
@@ -277,8 +283,8 @@
     background:var(--card);
   }
   .chartgrid .sticky{min-width:72px;max-width:110px;overflow:hidden}
-  .weekgrid th,.weekgrid td{min-width:36px}
-  .weekgrid .sticky{min-width:64px;max-width:88px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .weekgrid th,.weekgrid td{min-width:44px}
+  .weekgrid .sticky{min-width:76px;max-width:120px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
   .weekgrid thead th{cursor:pointer}
   .weekgrid thead .sticky{cursor:default}
   .weekgrid .casecell{cursor:pointer}
@@ -310,9 +316,9 @@
     border-radius:999px;
     opacity:.72;
   }
-  .weekband{height:10px;border-radius:999px}
-  .markerstack{display:flex;gap:2px;justify-content:center;flex-wrap:wrap}
-  .mark{display:inline-flex;min-width:16px;height:16px;padding:0 3px;border-radius:999px;align-items:center;justify-content:center;background:var(--panel);font-size:10px}
+  .weekband{height:12px;border-radius:999px}
+  .markerstack{display:flex;gap:3px;justify-content:center;flex-wrap:wrap;margin-top:3px}
+  .mark{display:inline-flex;min-width:18px;height:18px;padding:0 4px;border-radius:999px;align-items:center;justify-content:center;background:var(--panel);font-size:11px}
   .collapsehead{display:flex;justify-content:space-between;align-items:center;gap:8px}
   .subtleline{font-size:12px;color:var(--muted);margin-top:6px}
   .checklist{display:flex;flex-direction:column;gap:6px}
@@ -1781,6 +1787,8 @@ let REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copie
 let MISS = null;
 let PENDING_FOCUS = null;
 let WEEK_SCROLL_RT = { busy:false, pendingLeftAdjust:0, initPending:false, lastLeft:0 };
+let LAST_WIN_WIDTH = 0;
+let LAST_ORIENT_WEEK = false;
 const SYNC_KEY = "wardbook:sync";
 const STATS_KEY = "wardbook:stats";
 let STATS = null;
@@ -2495,6 +2503,27 @@ function resetWeekRange(){
   WEEK_SCROLL_RT.pendingLeftAdjust = 0;
   WEEK_SCROLL_RT.initPending = false;
   WEEK_SCROLL_RT.lastLeft = 0;
+}
+
+// The week grid reads best in landscape (wide date span). Lock to landscape
+// while it is on screen and release otherwise, where the platform supports it
+// (installed PWA on Android). Everywhere else this is a harmless no-op — the
+// manifest keeps the app rotatable so portrait board/review/detail are
+// unaffected. Called from render(); only acts when the desired state flips.
+function syncOrientationLock(){
+  var wantLandscape = VIEW.name === "board" && VIEW.boardMode === "week";
+  if (wantLandscape === LAST_ORIENT_WEEK) return;
+  LAST_ORIENT_WEEK = wantLandscape;
+  try {
+    var so = (typeof screen !== "undefined") ? screen.orientation : null;
+    if (!so) return;
+    if (wantLandscape && so.lock) {
+      var p = so.lock("landscape");
+      if (p && p.catch) p.catch(function(){});
+    } else if (so.unlock) {
+      so.unlock();
+    }
+  } catch (e) {}
 }
 
 function setBoardMode(mode){
@@ -3258,6 +3287,9 @@ function openWeekCell(caseId, date){
 function setCellDraftType(type){
   SHEET.draft.itemType = String(type || "next");
   renderSheet();
+  // Keep the text field focused so switching type does not drop the keyboard.
+  queueFocusTarget("weekCellInput", false);
+  flushQueuedFocus();
 }
 
 // Cell-tap add: fixed kinds (next / pending / todo) plus the user's chart
@@ -4399,9 +4431,9 @@ renderBoard = function(){
           var cat = chartCatById(b.catId);
           return '<span class="bandbit" style="background:' + esc((cat && cat.color) || "#64748b") + '"></span>';
         }).join('');
-        return '<td class="' + (date === week.today ? 'todaycol' : '') + '" onclick="openWeekCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="markerstack">' + marks.slice(0, 3).map(function(marker){
+        return '<td class="' + (date === week.today ? 'todaycol' : '') + '" onclick="openWeekCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="markerstack">' + marks.slice(0, 5).map(function(marker){
           return '<span class="mark' + (marker.cls ? ' ' + marker.cls : '') + '">' + esc(marker.text) + '</span>';
-        }).join('') + (marks.length > 3 ? '<span class="mark">+' + (marks.length - 3) + '</span>' : '') + '</div>' + (bandBits ? '<div class="bandrow">' + bandBits + '</div>' : '') + '</td>';
+        }).join('') + (marks.length > 5 ? '<span class="mark">+' + (marks.length - 5) + '</span>' : '') + '</div>' + (bandBits ? '<div class="bandrow">' + bandBits + '</div>' : '') + '</td>';
       }).join('') + '</tr>';
     }).join('') + '</tbody></table></div>';
   } else if (VIEW.boardMode === "day") {
@@ -4414,7 +4446,7 @@ renderBoard = function(){
       '<div class="dropzone" data-drop-index="' + cases.length + '"></div>' +
     '</div>' : '<div class="empty">' + esc(STR.emptyBoard) + '</div>';
   }
-  return '<section class="screen"><div class="seg"><button class="chipbtn' + (VIEW.boardMode !== "week" && VIEW.boardMode !== "day" ? ' on' : '') + '" onclick="setBoardMode(\'board\')">' + esc(STR.boardView) + '</button><button class="chipbtn' + (VIEW.boardMode === "day" ? ' on' : '') + '" onclick="setBoardMode(\'day\')">' + esc(STR.dayView) + '</button><button class="chipbtn' + (VIEW.boardMode === "week" ? ' on' : '') + '" onclick="setBoardMode(\'week\')">' + esc(STR.weekView) + '</button>' + (VIEW.boardMode !== "week" && VIEW.boardMode !== "day" ? '<div class="grow"></div><button class="chipbtn' + (boardDensityCompact() ? ' on' : '') + '" onclick="toggleDensity()">' + esc(STR.densityCompact) + '</button>' : '') + '</div>' + body +
+  return '<section class="screen"><div class="seg"><button class="chipbtn' + (VIEW.boardMode !== "week" && VIEW.boardMode !== "day" ? ' on' : '') + '" onclick="setBoardMode(\'board\')">' + esc(STR.boardView) + '</button><button class="chipbtn' + (VIEW.boardMode === "day" ? ' on' : '') + '" onclick="setBoardMode(\'day\')">' + esc(STR.dayView) + '</button><button class="chipbtn' + (VIEW.boardMode === "week" ? ' on' : '') + '" onclick="setBoardMode(\'week\')">' + esc(STR.weekView) + '</button>' + (VIEW.boardMode !== "week" && VIEW.boardMode !== "day" ? '<div class="grow"></div><button class="chipbtn densitytoggle' + (boardDensityCompact() ? ' on' : '') + '" onclick="toggleDensity()">' + esc(STR.densityCompact) + '</button>' : '') + '</div>' + body +
   '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openReview()">' + esc(STR.review) + '</button></div><div class="row wrap" style="margin-top:8px"><button class="ghostbtn smallbtn" onclick="openSyncSheet()"><span data-sync-status>' + esc(syncStatusLabel()) + '</span></button><button class="ghostbtn smallbtn" onclick="openDataSheet()">' + esc(STR.dataRow) + '</button><button class="ghostbtn smallbtn" onclick="openSearch()">' + esc(STR.searchRow) + '</button><button class="ghostbtn smallbtn" onclick="openSettingsSheet()">' + esc(STR.settingsRow) + '</button></div></div></div>';
 };
 
@@ -4483,6 +4515,7 @@ function render(){
   app.innerHTML = html;
   renderSheet();
   ensureWeekWrapBehavior();
+  syncOrientationLock();
   flushQueuedFocus();
   return html;
 }
@@ -4527,7 +4560,14 @@ if (typeof window !== "undefined" && window.addEventListener) {
   // A failed sync schedules no retry of its own; coming back online is the
   // natural moment to flush whatever is still dirty.
   window.addEventListener("online", function(){ queueSync(); });
+  // Re-render the week window only on a WIDTH change (rotation / real resize).
+  // The soft keyboard fires resize by shrinking HEIGHT only; re-rendering then
+  // would destroy the focused input and dismiss the keyboard mid-typing.
+  LAST_WIN_WIDTH = (typeof window !== "undefined" && window.innerWidth) || 0;
   window.addEventListener("resize", debounce(function(){
+    var w = (typeof window !== "undefined" && window.innerWidth) || 0;
+    if (w === LAST_WIN_WIDTH) return;
+    LAST_WIN_WIDTH = w;
     if (VIEW.name === "board" && VIEW.boardMode === "week") {
       VIEW.weekPast = 0;
       VIEW.weekFuture = weekDefaultFuture();
