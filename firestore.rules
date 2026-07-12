@@ -1,0 +1,26 @@
+rules_version = '2';
+
+// Wardbook / Casebook shared Firestore security rules.
+//
+// SOURCE OF TRUTH: this file. The Firebase console Rules tab MUST match it.
+// This repo has no Firebase CLI setup (the app loads the SDK from the gstatic
+// CDN and takes firebaseConfig at runtime), so apply changes by hand:
+//   Firebase console -> Firestore Database -> Rules -> paste this file -> Publish.
+//
+// Model: every document lives under users/{uid}/... and is readable/writable
+// only by that authenticated owner. All server-stored payloads are already
+// E2E-encrypted client-side (AES-GCM); the server never sees plaintext. These
+// rules add the second guarantee: a *different* signed-in account cannot list,
+// read, delete or overwrite another user's documents. Everything outside
+// users/{uid} is denied by default.
+//
+// Because Wardbook and Casebook share one Firebase project, this single rule
+// covers both apps' subcollections (wb_cases, wb_meta, wb_outbox, cr_*, ...).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}
