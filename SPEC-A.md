@@ -68,7 +68,9 @@ Case = {
   pendings:[ { id, text, backOn } ],         // backOn: "YYYY-MM-DD" | null
   appts:   [],           // later phase
   seeds:   [ { id, text, snapshot, sentAt } ],// sentAt: null in Phase A
+  problems:[ { id, text, status } ],         // "active"|"resolved"; mirror of entries kind:"problem" (added 2026-07-11, 設計書 §14)
   discharge: null,       // later phase
+  adm: { trigger, pmh:[], adl, note },       // admission record: half-structured (short fields + pmh tags) (added 2026-07-11)
   chart: null,           // later phase
   order,                 // number, manual sort position on the board
   lastTouchedAt          // ISO datetime string; basis for staleness display (later phase)
@@ -250,5 +252,9 @@ expected.
 
 - No network requests of any kind. No external fonts, no CDN, no analytics.
 - No PII anywhere in code, comments, tests, or sample data (use fake labels like "haien").
+- Runtime data stays pseudonymous: label + ageBand + sex + room + admittedAt + the 2026-07-11
+  admission record (`adm`) and problem list (`problems`) are half-structured / short-tag to keep
+  re-identifiability low. `room` is a deliberate quasi-identifier; `piiWarning` bars only direct
+  identifiers (name / ID / DOB). Server stores ciphertext only (E2E). See 設計書 §14.
 - Keep total index.html reasonably compact; prefer clarity over cleverness.
 - Comments in code: English is fine.

@@ -47,7 +47,7 @@ single check converts into results (MAR state transition).
 
 `c.entries` — single kind-tagged array — becomes the source of truth for
 persistence and sync. The legacy five collections (`next`, `todos`,
-`pendings`, `seeds`, `chart.items`) are kept as **mirrors** re-derived from
+`pendings`, `seeds`, `problems`, `chart.items`) are kept as **mirrors** re-derived from
 `entries` on every `normalizeCase`, so the ~95 existing read sites (board
 five elements, review flow, miss→seed hook, exports, search) stay untouched.
 
@@ -56,6 +56,7 @@ common: { id, kind, createdAt, updatedAt }
 { kind:"next",       text, due:null|date }
 { kind:"todo",       text, done, createdOn }            // createdOn doubles as the scheduled day
 { kind:"pending",    text, backOn:null|date }
+{ kind:"problem",    text, status:"active"|"resolved" }  // active-problem view; no date -> never projected to week/day (added 2026-07-11)
 { kind:"seed",       text, createdOn, snapshot, sentAt }
 { kind:"chartValue", catId, name, values:{date:str}, planned:{date:true} }
 { kind:"chartBand",  catId, name, startDate, endDate|null }

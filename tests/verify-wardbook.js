@@ -569,6 +569,46 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   const reordered = L.normalizeCase(shuffled, "2026-07-08T16:00:00.000Z", "2026-07-08");
   assert.strictEqual(JSON.stringify(reordered.entries.map((e) => e.id)), JSON.stringify(migrated.entries.map((e) => e.id)));
 
+  // ---- problem entries + admission record (2026-07-11) --------------------
+
+  // Problems fold into entries like pending; mirror rebuilds; status coerces to
+  // active; empty-text problems drop; adm normalizes with empty pmh tags filtered.
+  const admProbCase = L.normalizeCase({
+    id:"cp", label:"chf", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-05T10:00:00.000Z",
+    problems:[
+      { id:"pr1", text:"CHF", status:"active" },
+      { id:"pr2", text:"AKI", status:"bogus" },
+      { id:"pr3", text:"" }
+    ],
+    adm:{ trigger:"dyspnea", pmh:["DM", "CKD", ""], adl:"partial", note:"n" }
+  }, "2026-07-08T10:00:00.000Z", "2026-07-08");
+  assert.strictEqual(admProbCase.entries.filter((e) => e.kind === "problem").length, 2);
+  assert.strictEqual(admProbCase.problems.length, 2);
+  assert.strictEqual(admProbCase.problems.find((p) => p.id === "pr2").status, "active");
+  assert.strictEqual(admProbCase.adm.trigger, "dyspnea");
+  assert.strictEqual(admProbCase.adm.pmh.join(","), "DM,CKD");
+  assert.strictEqual(admProbCase.adm.adl, "partial");
+  assert.strictEqual(admProbCase.adm.note, "n");
+  // Idempotent re-normalize (entry stamps stable, no dirty ping-pong).
+  const admProbTwice = L.normalizeCase(JSON.parse(JSON.stringify(admProbCase)), "2026-07-08T11:00:00.000Z", "2026-07-08");
+  assert.strictEqual(JSON.stringify(admProbTwice), JSON.stringify(admProbCase));
+  // Legacy data without adm/problems fills to empty defaults (backward compat).
+  const bareCase = L.normalizeCase({ id:"cb", label:"x", admittedAt:"2026-07-01" }, "2026-07-08T10:00:00.000Z", "2026-07-08");
+  assert.strictEqual(JSON.stringify(bareCase.adm), JSON.stringify({ trigger:"", pmh:[], adl:"", note:"" }));
+  assert.strictEqual(bareCase.problems.length, 0);
+  // Problem tombstone/merge is kind-agnostic (rides the shared merge).
+  const prA = { kind:"problem", id:"q", text:"a", status:"active", createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-02T00:00:00.000Z" };
+  const prB = { kind:"problem", id:"q", text:"b", status:"resolved", createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-03T00:00:00.000Z" };
+  assert.strictEqual(L.mergeEntries([prA], [prB])[0].status, "resolved");
+  // Problem trash entry survives normalize (whitelist); unknown types still drop.
+  const probTrash = L.normalizeState({
+    trash:[
+      { id:"tp", type:"problem", caseId:"cp", caseLabel:"chf", deletedAt:"2026-07-08T00:00:00.000Z", payload:{ id:"pr1", text:"CHF", status:"active" } },
+      { id:"tx", type:"appt", caseId:"cp", deletedAt:"2026-07-08T00:00:00.000Z", payload:{ id:"a1", text:"x" } }
+    ]
+  }, "2026-07-08T10:00:00.000Z", "2026-07-08");
+  assert.strictEqual(probTrash.trash.map((x) => x.id).join(","), "tp");
+
   // ---- SPEC-F element-wise merge ------------------------------------------
 
   // Unit: newer updatedAt wins; equal stamps prefer the tombstone; the tiebreak

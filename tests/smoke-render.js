@@ -113,6 +113,8 @@ vm.runInContext(`
         pendings:[{ id:"p1", text:"echo", backOn:"2026-07-12" }],
         seeds:[{ id:"s1", text:"seed-one", createdOn:"2026-07-07", snapshot:{ label:"haien", day:3, stageName:"acute", phaseNote:"CAP" }, sentAt:null }],
         dxTags:["cap"], order:1, lastTouchedAt:"2026-07-06T18:00:00.000Z",
+        problems:[{ id:"prob-one", text:"CHF", status:"active" }, { id:"prob-two", text:"AKI", status:"resolved" }],
+        adm:{ trigger:"dyspnea", pmh:["DM"], adl:"indep", note:"adm-note" },
         discharge:{ checklist:{ summary:true }, plannedOn:"2026-07-10" }
       },
       {
@@ -311,6 +313,20 @@ if (!chartHtml.includes("◇")) fail("chart missing planned value mark");
 if (!chartHtml.includes("⚠")) fail("chart missing overdue mark");
 if (!chartHtml.includes("✓")) fail("chart missing done event mark");
 vm.runInContext("VIEW.chartOpen = false;", sandbox);
+
+// Admission record panel + problem section (2026-07-11).
+if (!detailHtml.includes("toggleAdmPanel()")) fail("detail missing admission panel");
+if (!detailHtml.includes("CHF")) fail("detail missing active problem");
+if (!detailHtml.includes("toggleProblemStatus('c1'")) fail("problem missing status toggle");
+if (!detailHtml.includes("addProblem('c1'")) fail("problem section missing add-input");
+// The admission panel opens to reveal half-structured fields + the PII warning.
+vm.runInContext("VIEW.admOpen = true;", sandbox);
+const admOpenHtml = vm.runInContext("renderDetail('c1')", sandbox);
+if (!admOpenHtml.includes("updateCaseAdm('c1','trigger'")) fail("open admission panel missing trigger field");
+if (!admOpenHtml.includes("addAdmPmh('c1'")) fail("open admission panel missing pmh add");
+if (!admOpenHtml.includes("dyspnea")) fail("open admission panel missing trigger value");
+if (!admOpenHtml.includes(vm.runInContext("STR.piiWarning", sandbox))) fail("admission note missing PII warning");
+vm.runInContext("VIEW.admOpen = false;", sandbox);
 
 // Chart sheets render.
 vm.runInContext("SHEET={name:'chartItem',draft:{caseId:'c1',catId:'cat-vital',itemId:'',kind:'value',name:'',startDate:'',endDate:'',date:''},syncBusy:false};", sandbox);

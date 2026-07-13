@@ -2,6 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseapp.com; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'; worker-src 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#f5f6f8">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -592,6 +593,10 @@ function normalizeEntryContent(raw, ctx){
     var backOn = row.backOn === null || row.backOn === undefined ? null : safeDate(row.backOn, null);
     return { kind:"pending", id:id, text:text, backOn:backOn };
   }
+  if (row.kind === "problem") {
+    if (!text) return null;
+    return { kind:"problem", id:id, text:text, status:row.status === "resolved" ? "resolved" : "active" };
+  }
   if (row.kind === "seed") {
     if (!text) return null;
     var snap = isObj(row.snapshot) ? row.snapshot : {};
@@ -683,6 +688,7 @@ function entriesFromMirrors(c, ctx){
   cloneArr(c && c.todos).forEach(function(x){ rows.push({ kind:"todo", id:x.id, text:x.text, done:x.done, createdOn:x.createdOn }); });
   cloneArr(c && c.pendings).forEach(function(x){ rows.push({ kind:"pending", id:x.id, text:x.text, backOn:x.backOn }); });
   cloneArr(c && c.seeds).forEach(function(x){ rows.push({ kind:"seed", id:x.id, text:x.text, createdOn:x.createdOn, snapshot:x.snapshot, sentAt:x.sentAt }); });
+  cloneArr(c && c.problems).forEach(function(x){ rows.push({ kind:"problem", id:x.id, text:x.text, status:x.status }); });
   cloneArr(c && c.chart && c.chart.items).forEach(function(x){
     var kind = x.kind === "band" ? "chartBand" : x.kind === "event" ? "chartEvent" : "chartValue";
     var row = { kind:kind, id:x.id, catId:x.catId, name:x.name };
@@ -704,6 +710,7 @@ function entryRebuildMirrors(c){
   c.seeds = live.filter(function(e){ return e.kind === "seed"; }).map(function(e){
     return { id:e.id, text:e.text, createdOn:e.createdOn, snapshot:JSON.parse(JSON.stringify(e.snapshot)), sentAt:e.sentAt };
   });
+  c.problems = live.filter(function(e){ return e.kind === "problem"; }).map(function(e){ return { id:e.id, text:e.text, status:e.status }; });
   c.chart = { items: live.filter(function(e){ return e.kind === "chartValue" || e.kind === "chartBand" || e.kind === "chartEvent"; }).map(function(e){
     if (e.kind === "chartValue") return { id:e.id, catId:e.catId, kind:"value", name:e.name, values:JSON.parse(JSON.stringify(e.values)), planned:JSON.parse(JSON.stringify(e.planned)) };
     if (e.kind === "chartBand") return { id:e.id, catId:e.catId, kind:"band", name:e.name, startDate:e.startDate, endDate:e.endDate };
@@ -845,9 +852,16 @@ function normalizeCase(raw, nowIso, todayIso){
   out.stageLog = normalizeStageLog(src.stageLog, out.admittedAt, out.stageId);
   out.stageId = out.stageLog[out.stageLog.length - 1].stageId || out.stageId;
   out.seeds = mirrorRows(src.seeds, "seed");
+  out.problems = mirrorRows(src.problems, "problem");
   out.discharge = {
     checklist:isObj(src.discharge && src.discharge.checklist) ? src.discharge.checklist : {},
     plannedOn:src.discharge && src.discharge.plannedOn ? safeDate(src.discharge.plannedOn, null) : null
+  };
+  out.adm = {
+    trigger:typeof (src.adm && src.adm.trigger) === "string" ? src.adm.trigger : "",
+    pmh:cloneArr(src.adm && src.adm.pmh).filter(function(x){ return typeof x === "string" && x; }),
+    adl:typeof (src.adm && src.adm.adl) === "string" ? src.adm.adl : "",
+    note:typeof (src.adm && src.adm.note) === "string" ? src.adm.note : ""
   };
   out.order = toNum(src.order, 0);
   out.lastTouchedAt = typeof src.lastTouchedAt === "string" && src.lastTouchedAt ? src.lastTouchedAt : nowIso;
@@ -875,7 +889,7 @@ function trashCutoffIso(nowIso){
 
 function normalizeTrashEntry(entry, nowIso){
   var row = isObj(entry) ? entry : {};
-  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true, "chartItem":true };
+  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true, "problem":true, "chartItem":true };
   // Entries of removed types (appt / chartMed / chartEvent) are dropped, not
   // coerced to "case": coercion would turn their payload into a garbage case on restore.
   if (!types[row.type]) return null;
@@ -1686,7 +1700,7 @@ const STR = {
   register:"登録",
   cancel:"キャンセル",
   back:"← 一覧",
-  piiWarning:"氏名・ID・部屋番号など個人情報は入力しない（匿名ラベルのみ）",
+  piiWarning:"氏名・ID・生年月日など直接識別する情報は入力しない（部屋番号など運用メモは可・端末内で暗号化）",
   labelPh:"ラベル（例：肺炎）",
   firstNotePh:"見立ての一言（例：CAP、CTRXで3日解熱見込み）",
   ageBands:["10代以下","20代","30代","40代","50代","60代","70代","80代","90代以上"],
@@ -1795,7 +1809,23 @@ Object.assign(STR, {
   dayDischargeLabel:"\u9000\u9662\u4e88\u5b9a",
   weekCaseCol:"\u60a3\u8005",
   wardRoom:"\u75c5\u68df\u30fb\u75c5\u5ba4",
-  wardRoomPh:"\u4f8b\uff1a3\u6771 305"
+  wardRoomPh:"\u4f8b\uff1a3\u6771 305",
+  problemsLabel:"\u30d7\u30ed\u30d6\u30ec\u30e0",
+  problemPh:"\u30d7\u30ed\u30d6\u30ec\u30e0\u3092\u8ffd\u52a0\uff08\u4f8b\uff1a\u5fc3\u4e0d\u5168\u30fbAKI\uff09",
+  problemResolveBtn:"\u89e3\u6c7a",
+  problemReopenBtn:"\u518d\u958b",
+  problemResolvedTag:"\u89e3\u6c7a\u6e08\u307f",
+  problemEmpty:"\u30d7\u30ed\u30d6\u30ec\u30e0\u306f\u672a\u767b\u9332\u3067\u3059",
+  admPanel:"\u5165\u9662\u6642\u8a18\u9332",
+  admTrigger:"\u5165\u9662\u5951\u6a5f",
+  admTriggerPh:"\u4f8b\uff1a\u80ba\u708e\u30fb\u8ee2\u5012\u9aa8\u6298",
+  admPmh:"\u4e3b\u8981\u65e2\u5f80",
+  admPmhPh:"\u65e2\u5f80\u30bf\u30b0\uff08\u4f8b\uff1aDM\u30fbCKD\uff09",
+  admAdl:"ADL",
+  admAdlPh:"\u4f8b\uff1a\u81ea\u7acb\uff0f\u4e00\u90e8\u4ecb\u52a9",
+  admNote:"\u4e00\u8a00",
+  admNotePh:"\u5165\u9662\u6642\u306e\u88dc\u8db3\uff08\u4efb\u610f\uff09",
+  admEmpty:"\u5165\u9662\u6642\u8a18\u9332\u306f\u672a\u5165\u529b\u3067\u3059"
 });
 
 let DB = normalizeState(null);
@@ -1954,6 +1984,7 @@ function trashTypeLabel(type){
   if (type === "todo") return DB.config.labels.today;
   if (type === "pending") return DB.config.labels.pending;
   if (type === "seed") return DB.config.labels.seeds;
+  if (type === "problem") return STR.problemsLabel;
   if (type === "chartItem") return STR.chartPanel;
   return type;
 }
@@ -1997,6 +2028,7 @@ function restoreTrash(trashId){
     else if (entry.type === "todo") c.todos.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "pending") c.pendings.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "seed") c.seeds.push(JSON.parse(JSON.stringify(entry.payload)));
+    else if (entry.type === "problem") c.problems.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "chartItem") {
       c.chart = normalizeChart(c.chart);
       c.chart.items.push(JSON.parse(JSON.stringify(entry.payload)));
@@ -2793,6 +2825,7 @@ function openDetail(caseId){
   VIEW.editingMeta = false;
   VIEW.editingLabel = false;
   VIEW.dischargeOpen = false;
+  VIEW.admOpen = false;
   VIEW.chartOpen = false;
   VIEW.chartCollapsed = {};
   render();
@@ -3063,6 +3096,33 @@ function updateCaseRoom(caseId, value){
   mutateCase(caseId, function(c){ c.room = next; });
 }
 
+// Admission record (adm) is a plain case field like room/discharge - edited via
+// mutateCase directly (no entries reconcile), rides the encrypted sync blob.
+function admOf(c){ return isObj(c && c.adm) ? c.adm : { trigger:"", pmh:[], adl:"", note:"" }; }
+
+function updateCaseAdm(caseId, field, value){
+  var v = String(value || "");
+  if (caseFieldUnchanged(caseId, function(c){ return isObj(c.adm) && c.adm[field] === v; })) return;
+  mutateCase(caseId, function(c){ if (!isObj(c.adm)) c.adm = { trigger:"", pmh:[], adl:"", note:"" }; c.adm[field] = v; });
+}
+
+function addAdmPmh(caseId, value){
+  var text = String(value || "").trim();
+  if (!text) return;
+  queueFocusTarget("admPmhInput", false);
+  mutateCase(caseId, function(c){
+    if (!isObj(c.adm)) c.adm = { trigger:"", pmh:[], adl:"", note:"" };
+    if (!Array.isArray(c.adm.pmh)) c.adm.pmh = [];
+    if (!c.adm.pmh.includes(text)) c.adm.pmh.push(text);
+  });
+}
+
+function removeAdmPmh(caseId, index){
+  mutateCase(caseId, function(c){
+    if (isObj(c.adm) && Array.isArray(c.adm.pmh)) c.adm.pmh = c.adm.pmh.filter(function(x, i){ return i !== index; });
+  });
+}
+
 function addDxTag(caseId, value){
   var text = String(value || "").trim();
   if (!text) return;
@@ -3107,6 +3167,24 @@ function removeDxTag(caseId, index){
 
 function addNext(caseId, value){
   addListItem("next", caseId, value, "nextInput", function(text){ return { id:uid(), text:text, due:null }; });
+}
+
+// Problem list: a projection of the entries store (kind:"problem"), reusing the
+// shared list CRUD so entriesReconcileLocal absorbs it exactly like pending.
+function addProblem(caseId, value){
+  return addListItem("problems", caseId, value, "problemInput", function(text){ return { id:uid(), text:text, status:"active" }; });
+}
+
+function updateProblemText(caseId, itemId, value){
+  patchListItem("problems", caseId, itemId, function(item){ item.text = String(value || ""); });
+}
+
+function toggleProblemStatus(caseId, itemId){
+  patchListItem("problems", caseId, itemId, function(item){ item.status = item.status === "resolved" ? "active" : "resolved"; });
+}
+
+function deleteProblem(caseId, itemId){
+  deleteListItem("problems", "problem", caseId, itemId);
 }
 
 function updateNextText(caseId, itemId, value){
@@ -3285,6 +3363,11 @@ function cardSectionsVisible(){
 
 function toggleDischargePanel(){
   VIEW.dischargeOpen = !VIEW.dischargeOpen;
+  render();
+}
+
+function toggleAdmPanel(){
+  VIEW.admOpen = !VIEW.admOpen;
   render();
 }
 
@@ -4350,6 +4433,37 @@ function renderSeedList(c){
   }).join('');
 }
 
+// Problem list: active problems render normally, resolved ones reuse the "sent"
+// greyed style. Reuses renderSectionCard for the add-input (addProblem).
+function renderProblemList(c){
+  return cloneArr(c.problems).map(function(item){
+    var resolved = item.status === "resolved";
+    return '<div class="lineitem' + (resolved ? ' sent' : '') + '"><div class="linegrow"><input class="input subedit" value="' + esc(item.text) + '" onchange="updateProblemText(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
+      (resolved ? '<div class="faint">' + esc(STR.problemResolvedTag) + '</div>' : '') +
+    '</div><button class="smallbtn" onclick="toggleProblemStatus(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' + esc(resolved ? STR.problemReopenBtn : STR.problemResolveBtn) + '</button><button class="iconbtn" onclick="deleteProblem(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
+  }).join('');
+}
+
+// Admission record: collapsible panel at the top of the detail (day-0 context).
+// Half-structured: trigger/adl/note short fields + pmh tags. piiWarning re-shown
+// on the free-text note. Photos/HPI-carbon-copy intentionally out of scope.
+function renderAdmissionPanel(c){
+  var a = admOf(c);
+  var open = !!VIEW.admOpen;
+  var head = '<div class="collapsehead" onclick="toggleAdmPanel()"><div class="one">' + esc(STR.admPanel) + '</div><div class="meta">' + (open ? '-' : '+') + '</div></div>';
+  if (!open) return '<section class="panelcard">' + head + '</section>';
+  var chips = cloneArr(a.pmh).map(function(t, i){
+    return '<span class="tag">' + esc(t) + '<button onclick="removeAdmPmh(\'' + esc(c.id) + '\',' + i + ')">×</button></span>';
+  }).join('');
+  var body = '<div class="stack" style="margin-top:10px">' +
+    '<div class="field"><div class="fieldlabel">' + esc(STR.admTrigger) + '</div><input class="input" value="' + esc(a.trigger || '') + '" placeholder="' + esc(STR.admTriggerPh) + '" onblur="updateCaseAdm(\'' + esc(c.id) + '\',\'trigger\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div>' +
+    '<div class="field"><div class="fieldlabel">' + esc(STR.admPmh) + '</div><div class="chips">' + chips + '</div><div class="row" style="margin-top:8px"><input id="admPmhInput" class="input" placeholder="' + esc(STR.admPmhPh) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addAdmPmh(\'' + esc(c.id) + '\',this.value);this.value=\'\'}"><button class="ghostbtn" onclick="addAdmPmh(\'' + esc(c.id) + '\',document.getElementById(\'admPmhInput\').value);document.getElementById(\'admPmhInput\').value=\'\'">＋</button></div></div>' +
+    '<div class="field"><div class="fieldlabel">' + esc(STR.admAdl) + '</div><input class="input" value="' + esc(a.adl || '') + '" placeholder="' + esc(STR.admAdlPh) + '" onblur="updateCaseAdm(\'' + esc(c.id) + '\',\'adl\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div>' +
+    '<div class="field"><div class="fieldlabel">' + esc(STR.admNote) + '</div><input class="input" value="' + esc(a.note || '') + '" placeholder="' + esc(STR.admNotePh) + '" onblur="updateCaseAdm(\'' + esc(c.id) + '\',\'note\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"><div class="note">' + esc(STR.piiWarning) + '</div></div>' +
+  '</div>';
+  return '<section class="panelcard">' + head + body + '</section>';
+}
+
 function renderSectionCard(title, body, addId, placeholder, addFn, caseId, secClass){
   return '<section class="panelcard' + (secClass ? ' ' + secClass : '') + '"><div class="one">' + esc(title) + '</div><div class="stack" style="margin-top:10px">' +
     (body || '<div class="faint">-</div>') +
@@ -4498,7 +4612,9 @@ renderDetail = function(caseId){
       (VIEW.editingMeta ? renderMetaEditor(c) : '') +
     '</div><button class="pickbtn" onclick="openStagePicker(\'' + esc(c.id) + '\')">' + stageDot(stage) + esc(stage.name) + '</button></div>' +
     '<div class="field" style="margin-top:10px"><div class="fieldlabel">' + esc(STR.addDxTag) + '</div>' + renderTagList(c) + '<div class="row" style="margin-top:8px"><input id="dxTagInput" class="input" placeholder="' + esc(STR.dxTagPh) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addDxTag(\'' + esc(c.id) + '\',this.value);this.value=\'\'}"><button class="ghostbtn" onclick="addDxTag(\'' + esc(c.id) + '\',document.getElementById(\'dxTagInput\').value);document.getElementById(\'dxTagInput\').value=\'\'">+</button></div></div></section>' +
+    renderAdmissionPanel(c) +
     '<section class="panelcard sec-phase"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
+    renderSectionCard(STR.problemsLabel, renderProblemList(c), "problemInput", STR.problemPh, "addProblem", c.id, "sec-problem") +
     (dischargeInline ? dischargePanel : '') +
     renderSectionCard(DB.config.labels.next, renderNextList(c), "nextInput", STR.nextPh, "addNext", c.id, "sec-next") +
     renderSectionCard(DB.config.labels.today, renderTodoList(c), "todoInput", STR.todayPh, "addTodo", c.id, "sec-today") +
