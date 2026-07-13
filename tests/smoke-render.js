@@ -327,6 +327,11 @@ if (!admOpenHtml.includes("addAdmPmh('c1'")) fail("open admission panel missing 
 if (!admOpenHtml.includes("dyspnea")) fail("open admission panel missing trigger value");
 if (!admOpenHtml.includes(vm.runInContext("STR.piiWarning", sandbox))) fail("admission note missing PII warning");
 vm.runInContext("VIEW.admOpen = false;", sandbox);
+// Design invariant: problems carry no date, so they must never leak into the
+// week schedule projection (rendered above from c1 which has CHF/AKI problems).
+if (weekHtml.includes("CHF") || weekHtml.includes("AKI")) fail("problem leaked into week projection");
+// Resolved problems render with the resolved tag (greyed "sent" style).
+if (!detailHtml.includes(vm.runInContext("STR.problemResolvedTag", sandbox))) fail("resolved problem missing resolved tag");
 
 // Chart sheets render.
 vm.runInContext("SHEET={name:'chartItem',draft:{caseId:'c1',catId:'cat-vital',itemId:'',kind:'value',name:'',startDate:'',endDate:'',date:''},syncBusy:false};", sandbox);
