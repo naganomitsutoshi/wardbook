@@ -37,8 +37,7 @@
     --weekend-sun:#b44a4a;
     --weekend-sat:#4f6fb8;
     --sec-phase:#6d28d9;
-    --sec-next:#1d4ed8;
-    --sec-today:#15803d;
+    --sec-task:#1d4ed8;
     --sec-pending:#b45309;
     --sec-seeds:#be185d;
   }
@@ -64,8 +63,7 @@
     --weekend-sun:#f09a9a;
     --weekend-sat:#9db8ff;
     --sec-phase:#c4b5fd;
-    --sec-next:#93c5fd;
-    --sec-today:#86efac;
+    --sec-task:#93c5fd;
     --sec-pending:#fbbf6e;
     --sec-seeds:#f9a8d4;
   }
@@ -144,8 +142,7 @@
   .phase{margin-top:6px;color:var(--muted)}
   .section{margin-top:8px}
   .sec-phase{--sec:var(--sec-phase)}
-  .sec-next{--sec:var(--sec-next)}
-  .sec-today{--sec:var(--sec-today)}
+  .sec-task{--sec:var(--sec-task)}
   .sec-pending{--sec:var(--sec-pending)}
   .sec-seeds{--sec:var(--sec-seeds)}
   .sectiontitle{font-size:11px;font-weight:700;color:var(--sec,var(--soft));text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
@@ -337,6 +334,8 @@
   .weekband{height:12px;border-radius:999px}
   .markerstack{display:flex;gap:3px;justify-content:center;flex-wrap:wrap;margin-top:3px}
   .mark{display:inline-flex;min-width:18px;height:18px;padding:0 4px;border-radius:999px;align-items:center;justify-content:center;background:var(--panel);font-size:11px}
+  /* Content-bearing marks (task / pending text in week cells): one per line, ellipsized. */
+  .mark.taskmark{display:block;width:100%;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;border-radius:6px;height:auto;line-height:18px}
   .collapsehead{display:flex;justify-content:space-between;align-items:center;gap:8px}
   .subtleline{font-size:12px;color:var(--muted);margin-top:6px}
   .checklist{display:flex;flex-direction:column;gap:6px}
@@ -364,7 +363,7 @@ function defaultStages(){
 }
 
 function defaultLabels(){
-  return { phase:"Phase", next:"Next", today:"Today", pending:"Pending", seeds:"Seeds" };
+  return { phase:"Phase", task:"Task", pending:"Pending", seeds:"Seeds" };
 }
 
 function isObj(v){
@@ -579,14 +578,16 @@ function normalizeEntryContent(raw, ctx){
   var id = safeId(row.id);
   if (!id) return null;
   var text = typeof row.text === "string" ? row.text : "";
-  if (row.kind === "next") {
+  // "next" merged into "todo" (Task) 2026-07-15. Conversion must be a pure
+  // function of the stored row (createdAt fallback, never today) so both
+  // devices rewrite old entries to byte-identical content without an
+  // updatedAt bump (no dirty ping-pong).
+  if (row.kind === "next" || row.kind === "todo") {
     var due = row.due === null || row.due === undefined ? null : safeDate(row.due, null);
-    if (!text && !due) return null;
-    return { kind:"next", id:id, text:text, due:due };
-  }
-  if (row.kind === "todo") {
     if (!text) return null;
-    return { kind:"todo", id:id, text:text, done:row.done === true, createdOn:safeDate(row.createdOn, ctx.todayIso) };
+    var createdOn = safeDate(row.createdOn, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
+    var time = typeof row.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(row.time) ? row.time : null;
+    return { kind:"todo", id:id, text:text, done:row.done === true, createdOn:createdOn, due:due, time:time };
   }
   if (row.kind === "pending") {
     if (!text) return null;
@@ -684,8 +685,10 @@ function normalizeEntries(raw, ctx){
 // Mirror collections -> entry content list (no timestamps).
 function entriesFromMirrors(c, ctx){
   var rows = [];
-  cloneArr(c && c.next).forEach(function(x){ rows.push({ kind:"next", id:x.id, text:x.text, due:x.due }); });
-  cloneArr(c && c.todos).forEach(function(x){ rows.push({ kind:"todo", id:x.id, text:x.text, done:x.done, createdOn:x.createdOn }); });
+  // Legacy absorption path: c.next rows (old trash restores / old backups)
+  // ride the same "next"->"todo" conversion in normalizeEntryContent.
+  cloneArr(c && c.next).forEach(function(x){ rows.push({ kind:"next", id:x.id, text:x.text, due:x.due, done:x.done, createdOn:x.createdOn, time:x.time }); });
+  cloneArr(c && c.todos).forEach(function(x){ rows.push({ kind:"todo", id:x.id, text:x.text, done:x.done, createdOn:x.createdOn, due:x.due, time:x.time }); });
   cloneArr(c && c.pendings).forEach(function(x){ rows.push({ kind:"pending", id:x.id, text:x.text, backOn:x.backOn }); });
   cloneArr(c && c.seeds).forEach(function(x){ rows.push({ kind:"seed", id:x.id, text:x.text, createdOn:x.createdOn, snapshot:x.snapshot, sentAt:x.sentAt }); });
   cloneArr(c && c.problems).forEach(function(x){ rows.push({ kind:"problem", id:x.id, text:x.text, status:x.status }); });
@@ -704,8 +707,10 @@ function entriesFromMirrors(c, ctx){
 // disappears from the mirrors (deletions), entry-only fields ride along.
 function entryRebuildMirrors(c){
   var live = cloneArr(c.entries).filter(function(e){ return e.kind !== "tombstone"; });
-  c.next = live.filter(function(e){ return e.kind === "next"; }).map(function(e){ return { id:e.id, text:e.text, due:e.due }; });
-  c.todos = live.filter(function(e){ return e.kind === "todo"; }).map(function(e){ return { id:e.id, text:e.text, done:e.done, createdOn:e.createdOn }; });
+  // No live "next" entries can exist post-merge; keep the empty mirror so
+  // stray legacy readers see [] instead of undefined.
+  c.next = [];
+  c.todos = live.filter(function(e){ return e.kind === "todo"; }).map(function(e){ return { id:e.id, text:e.text, done:e.done, createdOn:e.createdOn, due:e.due, time:e.time }; });
   c.pendings = live.filter(function(e){ return e.kind === "pending"; }).map(function(e){ return { id:e.id, text:e.text, backOn:e.backOn }; });
   c.seeds = live.filter(function(e){ return e.kind === "seed"; }).map(function(e){
     return { id:e.id, text:e.text, createdOn:e.createdOn, snapshot:JSON.parse(JSON.stringify(e.snapshot)), sentAt:e.sentAt };
@@ -967,15 +972,17 @@ function rolloverTodos(c, todayIso){
       id:item.id,
       text:item.text,
       done:item.done === true,
-      createdOn:item.createdOn
+      createdOn:item.createdOn,
+      due:item.due === undefined ? null : item.due,
+      time:item.time === undefined ? null : item.time
     };
   });
 }
 
-function hasBackToday(c, todayIso){
-  return cloneArr(c && c.pendings).some(function(item){
-    return !!(item && item.backOn && item.backOn <= todayIso);
-  });
+// A case with any open pending floats to the top for as long as the wait
+// lasts (backOn is optional: most waits have no known return date).
+function hasPendingHold(c){
+  return cloneArr(c && c.pendings).length > 0;
 }
 
 function boardOrder(cases, todayIso){
@@ -984,7 +991,7 @@ function boardOrder(cases, todayIso){
   var rest = [];
   active.sort(function(a, b){ return toNum(a.order, 0) - toNum(b.order, 0); });
   active.forEach(function(c){
-    if (hasBackToday(c, todayIso)) urgent.push(c);
+    if (hasPendingHold(c)) urgent.push(c);
     else rest.push(c);
   });
   return urgent.concat(rest);
@@ -1125,15 +1132,16 @@ function buildWeekGrid(cases, todayIso, pastDays, futureDays){
     var overdue = overdueEntries(c, todayIso);
     dates.forEach(function(date){
       var markers = [];
-      cloneArr(c.next).forEach(function(item){ if (item && item.due === date && date > todayIso) markers.push({ kind:"next", text:"\u6b21" }); });
-      cloneArr(c.pendings).forEach(function(item){ if (item && item.backOn === date && date > todayIso) markers.push({ kind:"pending", text:"\u5f85" }); });
+      cloneArr(c.pendings).forEach(function(item){ if (item && item.backOn === date && date > todayIso) markers.push({ kind:"pending", text:"\u5f85 " + String(item.text || "") }); });
       if (c.discharge && c.discharge.plannedOn === date && date > todayIso) markers.push({ kind:"planned", text:"\u2605" });
       cloneArr(c.todos).forEach(function(item){
         if (!item || item.done) return;
-        // Undone todos live on today (auto-rollover); future-scheduled ones on their day.
-        if ((date === todayIso && item.createdOn <= todayIso) || (date > todayIso && item.createdOn === date)) {
-          markers.push({ kind:"todo", text:"\u4eca" });
-        }
+        // Tasks with a scheduled date (due) live on that day and show their
+        // content; once due (or dateless), undone ones roll to today's column.
+        var visible = date === todayIso
+          ? (item.due ? item.due <= todayIso : item.createdOn <= todayIso)
+          : (date > todayIso && (item.due ? item.due === date : item.createdOn === date));
+        if (visible) markers.push({ kind:"todo", text:(item.time ? item.time + " " : "") + String(item.text || "") });
       });
       var events = [];
       var bands = [];
@@ -1172,17 +1180,14 @@ function buildDayPlan(cases, date, todayIso){
         items.push({ type:"overdue", id:o.id, text:o.name, kind:o.kind, date:o.date, catId:o.catId });
       });
     }
-    if (date === todayIso) {
-      cloneArr(c.todos).forEach(function(item){
-        if (item && !item.done && item.createdOn <= todayIso) items.push({ type:"todo", id:String(item.id || ""), text:String(item.text || "") });
-      });
-    } else if (date > todayIso) {
-      cloneArr(c.todos).forEach(function(item){
-        if (item && !item.done && item.createdOn === date) items.push({ type:"todo", id:String(item.id || ""), text:String(item.text || "") });
-      });
-    }
-    cloneArr(c.next).forEach(function(item){
-      if (item && item.due === date) items.push({ type:"next", id:String(item.id || ""), text:String(item.text || "") });
+    // Task visibility mirrors buildWeekGrid: due-dated tasks appear on their
+    // day (rolling to today once due), dateless ones live on today.
+    cloneArr(c.todos).forEach(function(item){
+      if (!item || item.done) return;
+      var visible = date === todayIso
+        ? (item.due ? item.due <= todayIso : item.createdOn <= todayIso)
+        : (date > todayIso && (item.due ? item.due === date : item.createdOn === date));
+      if (visible) items.push({ type:"todo", id:String(item.id || ""), text:String(item.text || ""), time:item.time || null, due:item.due || null });
     });
     cloneArr(c.pendings).forEach(function(item){
       if (item && item.backOn === date) items.push({ type:"pending", id:String(item.id || ""), text:String(item.text || "") });
@@ -1197,6 +1202,10 @@ function buildDayPlan(cases, date, todayIso){
       }
     });
     if (c.discharge && c.discharge.plannedOn === date) items.push({ type:"discharge", id:"", text:"" });
+    // Timed items sort to the top in clock order; untimed keep insertion
+    // order below (the overdue block is split off by type at render time).
+    var timed = items.filter(function(x){ return x.time; }).sort(function(a, b){ return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+    items = timed.concat(items.filter(function(x){ return !x.time; }));
     if (items.length) groups.push({ caseId:c.id, label:c.label, admittedAt:c.admittedAt, stageId:c.stageId, items:items });
   });
   return groups;
@@ -1211,14 +1220,12 @@ function searchCases(cases, query, filters){
     if (stageId && c.stageId !== stageId) return false;
     if (!q) return true;
     var fields = [c.label, c.room, (c.dxTags || []).join(" "), c.phaseNote]
-      .concat(cloneArr(c.next).map(function(x){ return x.text; }))
       .concat(cloneArr(c.todos).map(function(x){ return x.text; }))
       .concat(cloneArr(c.pendings).map(function(x){ return x.text; }))
       .concat(cloneArr(c.seeds).map(function(x){ return x.text; }));
     return fields.some(function(text){ return String(text || "").toLowerCase().indexOf(q) >= 0; });
   }).map(function(c){
     var fields = [c.label, c.room, (c.dxTags || []).join(" "), c.phaseNote]
-      .concat(cloneArr(c.next).map(function(x){ return x.text; }))
       .concat(cloneArr(c.todos).map(function(x){ return x.text; }))
       .concat(cloneArr(c.pendings).map(function(x){ return x.text; }))
       .concat(cloneArr(c.seeds).map(function(x){ return x.text; }));
@@ -1640,7 +1647,7 @@ if (typeof module !== "undefined") {
     chartRowsForCase:chartRowsForCase,
     computeDay:computeDay,
     rolloverTodos:rolloverTodos,
-    hasBackToday:hasBackToday,
+    hasPendingHold:hasPendingHold,
     boardOrder:boardOrder,
     stalenessLevel:stalenessLevel,
     needsReview:needsReview,
@@ -1709,16 +1716,17 @@ const STR = {
   unset:"未設定",
   addDxTag:"＋病名タグ",
   dxTagPh:"病名タグ（確定病名で検索用）",
-  nextPh:"次の展開を追加",
-  todayPh:"今日やることを追加",
+  taskPh:"タスクを追加（指定日・時刻は任意）",
   pendingPh:"待ちを追加（培養・コンサル返事など）",
   seedPh:"種を追加（引っかかり・疑問）",
   backTodayBadge:"戻り予定",
   emptyBoard:"入院患者がいません。「＋ 入院を登録」から始めます。",
   deleteCase:"この症例を削除",
   deleteConfirm:"この症例を完全に削除します。よろしいですか？",
-  dueLabel:"期日",
-  backOnLabel:"戻り日",
+  dueLabel:"指定日",
+  timeLabel:"時刻",
+  toPendingBtn:"済→待ちに",
+  backOnLabel:"戻り日（不明なら空欄）",
   editMeta:"年代・性別",
   review:"夕の棚卸し",
   exitReview:"中断",
@@ -1774,7 +1782,7 @@ Object.assign(STR, {
   streakLine:"\u9023\u7d9a\u68da\u5378\u3057",
   seedsTotal:"種 通算",
   stageEditor:"\u30b9\u30c6\u30fc\u30b8\u7de8\u96c6",
-  labelEditor:"5\u8981\u7d20\u30e9\u30d9\u30eb\u540d",
+  labelEditor:"4\u8981\u7d20\u30e9\u30d9\u30eb\u540d",
   cardPrefs:"\u30ab\u30fc\u30c9\u8868\u793a",
   themePrefs:"\u30c6\u30fc\u30de",
   themeOs:"OS準拠",
@@ -1798,13 +1806,12 @@ Object.assign(STR, {
   dateLabel:"\u65e5\u4ed8",
   deleteRow:"\u524a\u9664",
   densityCompact:"\u30b3\u30f3\u30d1\u30af\u30c8",
-  countToday:"\u4eca\u65e5",
+  countTask:"Task",
   countPending:"\u5f85",
   countSeeds:"\u7a2e",
   dayView:"\u4eca\u65e5",
   dayEmpty:"\u3053\u306e\u65e5\u306e\u4e88\u5b9a\u306f\u3042\u308a\u307e\u305b\u3093",
   dayToToday:"\u4eca\u65e5\u3078",
-  dayNextPrefix:"\u6b21",
   dayPendingPrefix:"\u5f85",
   dayDischargeLabel:"\u9000\u9662\u4e88\u5b9a",
   weekCaseCol:"\u60a3\u8005",
@@ -1927,7 +1934,7 @@ function weekHeaderClass(date, today){
 
 function defaultSettings(){
   return {
-    cardSections:["phase", "next", "today", "pending", "seeds"],
+    cardSections:["phase", "task", "pending", "seeds"],
     cardHidden:[],
     chartHidden:[],
     density:"normal"
@@ -1980,8 +1987,8 @@ function pushTrashEntry(type, caseRow, payload){
 
 function trashTypeLabel(type){
   if (type === "case") return "\u75c7\u4f8b";
-  if (type === "next") return DB.config.labels.next;
-  if (type === "todo") return DB.config.labels.today;
+  if (type === "next") return DB.config.labels.task;
+  if (type === "todo") return DB.config.labels.task;
   if (type === "pending") return DB.config.labels.pending;
   if (type === "seed") return DB.config.labels.seeds;
   if (type === "problem") return STR.problemsLabel;
@@ -3165,8 +3172,8 @@ function removeDxTag(caseId, index){
   });
 }
 
-function addNext(caseId, value){
-  addListItem("next", caseId, value, "nextInput", function(text){ return { id:uid(), text:text, due:null }; });
+function addTask(caseId, value){
+  addListItem("todos", caseId, value, "taskInput", function(text){ return { id:uid(), text:text, done:false, createdOn:todayISO(), due:null, time:null }; });
 }
 
 // Problem list: a projection of the entries store (kind:"problem"), reusing the
@@ -3187,37 +3194,42 @@ function deleteProblem(caseId, itemId){
   deleteListItem("problems", "problem", caseId, itemId);
 }
 
-function updateNextText(caseId, itemId, value){
+function toggleTodo(caseId, itemId){
+  patchListItem("todos", caseId, itemId, function(item){ item.done = !item.done; });
+}
+
+// The miss-prompt hook (rewritten prediction -> seed) moved here when Next
+// merged into Task: any meaningful rewrite of a task text can be a missed call.
+function updateTodoText(caseId, itemId, value){
   var newText = String(value || "");
   var newTrim = newText.trim();
   var oldTrim = "";
   var before = DB.cases.find(function(c){ return c.id === caseId; });
   if (before) {
-    var existing = before.next.find(function(x){ return x.id === itemId; });
+    var existing = before.todos.find(function(x){ return x.id === itemId; });
     oldTrim = existing ? String(existing.text || "").trim() : "";
   }
   MISS = oldTrim && newTrim && oldTrim !== newTrim ? { caseId:caseId, itemId:itemId, oldText:oldTrim, expanded:false, why:"" } : null;
-  patchListItem("next", caseId, itemId, function(item){ item.text = newText; });
+  patchListItem("todos", caseId, itemId, function(item){ item.text = newText; });
 }
 
-function updateNextDue(caseId, itemId, value){
-  patchListItem("next", caseId, itemId, function(item){ item.due = value || null; });
+function updateTodoDue(caseId, itemId, value){
+  patchListItem("todos", caseId, itemId, function(item){ item.due = value || null; });
 }
 
-function deleteNext(caseId, itemId){
-  deleteListItem("next", "next", caseId, itemId);
+function updateTodoTime(caseId, itemId, value){
+  patchListItem("todos", caseId, itemId, function(item){ item.time = value || null; });
 }
 
-function addTodo(caseId, value){
-  addListItem("todos", caseId, value, "todoInput", function(text){ return { id:uid(), text:text, done:false, createdOn:todayISO() }; });
-}
-
-function toggleTodo(caseId, itemId){
-  patchListItem("todos", caseId, itemId, function(item){ item.done = !item.done; });
-}
-
-function updateTodoText(caseId, itemId, value){
-  patchListItem("todos", caseId, itemId, function(item){ item.text = value; });
+// Task done -> wait: checks the task off and spawns a pending with the same
+// text (backOn stays empty; most waits have no known return date).
+function taskToPending(caseId, itemId){
+  mutateCase(caseId, function(c){
+    var item = c.todos.find(function(x){ return x.id === itemId; });
+    if (!item) return;
+    item.done = true;
+    c.pendings.push({ id:uid(), text:item.text, backOn:null });
+  });
 }
 
 function deleteTodo(caseId, itemId){
@@ -3390,29 +3402,29 @@ function openWeekCell(caseId, date){
   openSheetWithDraft("weekCell", {
     caseId:caseId,
     date:date,
-    itemType:"next",
+    itemType:"todo",
     text:""
   }, "weekCellInput", false);
 }
 
 function setCellDraftType(type){
-  SHEET.draft.itemType = String(type || "next");
+  SHEET.draft.itemType = String(type || "todo");
   renderSheet();
   // Keep the text field focused so switching type does not drop the keyboard.
   queueFocusTarget("weekCellInput", false);
   flushQueuedFocus();
 }
 
-// Cell-tap add: fixed kinds (next / pending / todo) plus the user's chart
+// Cell-tap add: fixed kinds (task / pending) plus the user's chart
 // categories listed dynamically (SPEC-F decision 4 - adding a category in
 // settings extends this menu automatically, nothing is hardcoded).
 function addCellItem(caseId, date){
-  var itemType = SHEET.draft && SHEET.draft.itemType || "next";
+  var itemType = SHEET.draft && SHEET.draft.itemType || "todo";
   var text = String(SHEET.draft && SHEET.draft.text || "").trim();
   if (!text) return;
   mutateCase(caseId, function(c){
     if (itemType === "pending") c.pendings.push({ id:uid(), text:text, backOn:date });
-    else if (itemType === "todo") c.todos.push({ id:uid(), text:text, done:false, createdOn:date });
+    else if (itemType === "todo") c.todos.push({ id:uid(), text:text, done:false, createdOn:todayISO(), due:date, time:null });
     else if (itemType.indexOf("cat:") === 0) {
       var cat = chartCatById(itemType.slice(4));
       if (!cat) return;
@@ -3430,7 +3442,7 @@ function addCellItem(caseId, date){
         item.planned[date] = true;
       }
     }
-    else c.next.push({ id:uid(), text:text, due:date });
+    else c.todos.push({ id:uid(), text:text, done:false, createdOn:todayISO(), due:date, time:null });
   });
   SHEET.draft.text = "";
   renderSheet();
@@ -3789,7 +3801,10 @@ function pushSection(lines, title, list, fmt){
   });
 }
 
-function fmtNextLine(item){ return "- " + item.text + (item.due ? " (" + item.due + ")" : ""); }
+function fmtTaskLine(item){
+  var when = [item.due, item.time].filter(Boolean).join(" ");
+  return "- " + item.text + (when ? " (" + when + ")" : "") + (item.done ? " [done]" : "");
+}
 function fmtPendingLine(item){ return "- " + item.text + (item.backOn ? " (" + item.backOn + ")" : ""); }
 
 function formatSeedSnapshot(seed){
@@ -3818,7 +3833,7 @@ function dischargeExportText(caseId){
     lines.push("- " + item.date + " " + stageNameFor(item.stageId));
   });
   lines.push("", "## Phase", c.phaseNote || "-");
-  pushSection(lines, "Remaining Next", cloneArr(c.next), fmtNextLine);
+  pushSection(lines, "Remaining Task", cloneArr(c.todos).filter(function(item){ return item && !item.done; }), fmtTaskLine);
   pushSection(lines, "Pending", cloneArr(c.pendings), fmtPendingLine);
   pushSection(lines, "Seeds", cloneArr(c.seeds), function(seed){
     return ["- " + seed.text, "  - " + formatSeedSnapshot(seed)];
@@ -3839,8 +3854,7 @@ function dayExportText(caseId){
     "- Stage: " + stageNameFor(c.stageId),
     "- Phase: " + (c.phaseNote || "-")
   ];
-  pushSection(lines, "Next", cloneArr(c.next), fmtNextLine);
-  pushSection(lines, "Today", cloneArr(c.todos), function(item){ return "- " + item.text + (item.done ? " [done]" : ""); });
+  pushSection(lines, "Task", cloneArr(c.todos), fmtTaskLine);
   pushSection(lines, "Pending", cloneArr(c.pendings), fmtPendingLine);
   pushSection(lines, "Seeds", cloneArr(c.seeds), function(seed){ return "- " + seed.text; });
   return lines.join("\n");
@@ -4013,12 +4027,29 @@ function renderTopbar(){
     '<div class="title">Wardbook</div><div class="grow"></div></div></div>';
 }
 
+// Card task order: actionable-today first (timed ones in clock order), then
+// future-scheduled ones (faint, sorted by date) so a dated task never
+// silently disappears from the case card.
+function boardCardTasks(c){
+  var today = todayISO();
+  var undone = cloneArr(c.todos).filter(function(x){ return x && !x.done; });
+  var now = undone.filter(function(x){ return x.due ? x.due <= today : x.createdOn <= today; });
+  var timed = now.filter(function(x){ return x.time; }).sort(function(a, b){ return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+  var later = undone.filter(function(x){ return now.indexOf(x) < 0; }).sort(function(a, b){ return String(a.due || "") < String(b.due || "") ? -1 : 1; });
+  return { now:timed.concat(now.filter(function(x){ return !x.time; })), later:later };
+}
+
+function taskMetaLine(item, faintDue){
+  var bits = [];
+  if (faintDue && item.due) bits.push(item.due);
+  if (item.time) bits.push(item.time);
+  return bits.length ? '<div class="faint">' + esc(bits.join(' ')) + '</div>' : '';
+}
+
 function renderBoardCard(c){
   var stage = stageById(c.stageId);
-  var dueNext = c.next;
-  // Future-scheduled todos (added from a future week cell) stay off the board
-  // card until their day arrives; they live on the week grid / day view.
-  var undone = c.todos.filter(function(x){ return !x.done && x.createdOn <= todayISO(); });
+  var tasks = boardCardTasks(c);
+  var undone = tasks.now;
   var showPendings = c.pendings.length > 0;
   var stageStyle = 'border-left-color:' + esc(stage.color);
   var stale = stalenessLevel(c.lastTouchedAt, nowISO());
@@ -4026,11 +4057,10 @@ function renderBoardCard(c){
   if (boardDensityCompact()) return renderBoardCardCompact(c, stage, undone, stageStyle, staleClass);
   var sectionHtml = {
     phase:c.phaseNote ? '<div class="phase sec-phase">' + esc(c.phaseNote) + '</div>' : '',
-    next:dueNext.length ? '<div class="section sec-next"><div class="sectiontitle">' + esc(DB.config.labels.next) + '</div><div class="plain">' + dueNext.map(function(item){
-      return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + (item.due ? '<div class="faint">' + esc(item.due) + '</div>' : '') + '</div></div>';
-    }).join('') + '</div></div>' : '',
-    today:undone.length ? '<div class="section sec-today"><div class="sectiontitle">' + esc(DB.config.labels.today) + ' ' + undone.length + '</div><div class="plain">' + undone.map(function(item){
-      return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div></label>';
+    task:(undone.length || tasks.later.length) ? '<div class="section sec-task"><div class="sectiontitle">' + esc(DB.config.labels.task) + ' ' + undone.length + '</div><div class="plain">' + undone.map(function(item){
+      return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + taskMetaLine(item, false) + '</div></label>';
+    }).join('') + tasks.later.map(function(item){
+      return '<div class="lineitem"><div class="linegrow"><div class="text faint">' + esc(item.text) + '</div>' + taskMetaLine(item, true) + '</div></div>';
     }).join('') + '</div></div>' : '',
     pending:showPendings ? '<div class="section sec-pending"><div class="sectiontitle">' + esc(DB.config.labels.pending) + '</div><div class="plain">' + c.pendings.map(function(item){
       var urgent = item.backOn && item.backOn <= todayISO();
@@ -4056,12 +4086,12 @@ function renderBoardCard(c){
 function renderBoardCardCompact(c, stage, undone, stageStyle, staleClass){
   var hasBack = c.pendings.some(function(item){ return item.backOn && item.backOn <= todayISO(); });
   var counts = [];
-  if (undone.length) counts.push('<span class="sec-today">' + esc(STR.countToday + undone.length) + '</span>');
+  if (undone.length) counts.push('<span class="sec-task">' + esc(STR.countTask + undone.length) + '</span>');
   if (c.pendings.length) counts.push('<span class="sec-pending">' + esc(STR.countPending + c.pendings.length) + '</span>');
   if (c.seeds.length) counts.push('<span class="sec-seeds">' + esc(STR.countSeeds + c.seeds.length) + '</span>');
-  var firstNext = c.next.length ? String(c.next[0].text || "") : "";
-  var summary = (firstNext || counts.length) ? '<div class="compactline">' +
-    (firstNext ? '<div class="text">' + esc(firstNext) + '</div>' : '') +
+  var firstTask = undone.length ? String(undone[0].text || "") : "";
+  var summary = (firstTask || counts.length) ? '<div class="compactline">' +
+    (firstTask ? '<div class="text">' + esc(firstTask) + '</div>' : '') +
     (counts.length ? '<span class="compactcounts">' + counts.join(' ') + '</span>' : '') +
   '</div>' : '';
   return '<article class="card compact' + staleClass + (DND.activeId === c.id ? ' dragging' : '') + '" style="' + stageStyle + '" onclick="openDetail(\'' + esc(c.id) + '\')">' +
@@ -4102,7 +4132,8 @@ function renderDayPlanView(){
     }).join('') + '</div>' : '';
     return '<div class="daygroup"><div class="labelrow dayhead" onclick="openDetail(\'' + esc(g.caseId) + '\')"><div class="caseid">' + esc(g.label || '—') + ' D' + computeDay(g.admittedAt, today) + '</div><div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div><div class="grow"></div><button class="smallbtn" onclick="event.stopPropagation();openWeekCell(\'' + esc(g.caseId) + '\',\'' + esc(date) + '\')">＋</button></div>' + overdueHtml + '<div class="plain">' + normalItems.map(function(item){
       if (item.type === "todo") {
-        return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" onclick="toggleTodo(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div></label>';
+        var rolledDue = item.due && item.due !== date ? item.due : "";
+        return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" onclick="toggleTodo(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc((item.time ? item.time + ' ' : '') + item.text) + '</div>' + (rolledDue ? '<div class="faint">' + esc(rolledDue) + '</div>' : '') + '</div></label>';
       }
       if (item.type === "event") {
         return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.status === "done" ? 'checked ' : '') + 'onclick="toggleEventDone(\'' + esc(g.caseId) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div></label>';
@@ -4113,8 +4144,7 @@ function renderDayPlanView(){
       if (item.type === "discharge") {
         return '<div class="lineitem" onclick="openDetail(\'' + esc(g.caseId) + '\')"><div class="linegrow"><div class="text">★ ' + esc(STR.dayDischargeLabel) + '</div></div></div>';
       }
-      var prefix = item.type === "pending" ? STR.dayPendingPrefix : STR.dayNextPrefix;
-      return '<div class="lineitem" onclick="openDetail(\'' + esc(g.caseId) + '\')"><div class="linegrow"><div class="text"><span class="faint">' + esc(prefix) + ':</span> ' + esc(item.text) + '</div></div></div>';
+      return '<div class="lineitem" onclick="openDetail(\'' + esc(g.caseId) + '\')"><div class="linegrow"><div class="text"><span class="faint">' + esc(STR.dayPendingPrefix) + ':</span> ' + esc(item.text) + '</div></div></div>';
     }).join('') + '</div></div>';
   }).join('') : '<div class="empty">' + esc(STR.dayEmpty) + '</div>';
   return nav + bodyHtml;
@@ -4165,20 +4195,19 @@ function renderWeekCellSheet(){
   var c = DB.cases.find(function(item){ return item.id === d.caseId; });
   var rows = [];
   if (c) {
-    cloneArr(c.next).filter(function(item){ return item.due === d.date; }).forEach(function(item){
-      rows.push('<div class="lineitem"><span class="badge">' + esc(DB.config.labels.next) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deleteNext(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
-    });
     cloneArr(c.pendings).filter(function(item){ return item.backOn === d.date; }).forEach(function(item){
       rows.push('<div class="lineitem"><span class="badge">' + esc(DB.config.labels.pending) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deletePending(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
     });
     var todayIso = todayISO();
     cloneArr(c.todos).filter(function(item){
       // Same visibility rule as the grid marker (buildWeekGrid): today's cell
-      // carries every undone rolled-over todo, future cells their own day only.
+      // carries every undone rolled-over task, future cells their scheduled day.
       if (!item || item.done) return false;
-      return d.date === todayIso ? item.createdOn <= todayIso : (d.date > todayIso && item.createdOn === d.date);
+      return d.date === todayIso
+        ? (item.due ? item.due <= todayIso : item.createdOn <= todayIso)
+        : (d.date > todayIso && (item.due ? item.due === d.date : item.createdOn === d.date));
     }).forEach(function(item){
-      rows.push('<div class="lineitem"><span class="badge">' + esc(DB.config.labels.today) + '</span><div class="linegrow"><div class="text">' + esc(item.text) + '</div></div><button class="iconbtn" onclick="deleteTodo(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
+      rows.push('<div class="lineitem"><span class="badge">' + esc(DB.config.labels.task) + '</span><div class="linegrow"><div class="text">' + esc((item.time ? item.time + ' ' : '') + item.text) + '</div></div><button class="iconbtn" onclick="deleteTodo(\'' + esc(d.caseId) + '\',\'' + esc(item.id) + '\');renderSheet()">\u00d7</button></div>');
     });
     cloneArr(c.chart && c.chart.items).forEach(function(item){
       if (!item) return;
@@ -4199,9 +4228,8 @@ function renderWeekCellSheet(){
     });
   }
   var chips = [
-    { key:"next", label:DB.config.labels.next },
-    { key:"pending", label:DB.config.labels.pending },
-    { key:"todo", label:DB.config.labels.today }
+    { key:"todo", label:DB.config.labels.task },
+    { key:"pending", label:DB.config.labels.pending }
   ];
   cloneArr(DB.config.chartCats).forEach(function(cat){
     if (cat.kind === "event" || cat.kind === "value") chips.push({ key:"cat:" + cat.id, label:cat.name });
@@ -4209,7 +4237,7 @@ function renderWeekCellSheet(){
   var bandChips = cloneArr(DB.config.chartCats).filter(function(cat){ return cat.kind === "band"; }).map(function(cat){
     return '<button class="chipbtn" onclick="openChartItemForDate(\'' + esc(d.caseId) + '\',\'' + esc(cat.id) + '\',\'' + esc(d.date) + '\')">' + esc(cat.name) + '\u2026</button>';
   }).join('');
-  var active = d.itemType || "next";
+  var active = d.itemType || "todo";
   return '<div class="sheetcard"><div class="sheettitle">' + esc((c ? c.label + " " : "") + (d.date || "")) + '</div><div class="stack">' +
     '<div class="chips">' + chips.map(function(chip){
       return '<button class="chipbtn' + (active === chip.key ? ' on' : '') + '" onclick="setCellDraftType(\'' + esc(chip.key) + '\')">' + esc(chip.label) + '</button>';
@@ -4354,7 +4382,7 @@ function renderSettingsSheet(){
         return '<button class="chipbtn' + (cat.color === color ? ' on' : '') + '" style="background:' + esc(color) + ';color:#fff;border-color:' + esc(color) + '" onclick="setChartCatColor(' + index + ',\'' + esc(color) + '\')">' + (cat.color === color ? '✓' : '&nbsp;') + '</button>';
       }).join('') + '</div><div class="row wrap"><button class="smallbtn" onclick="moveChartCat(' + index + ',\'up\')">↑</button><button class="smallbtn" onclick="moveChartCat(' + index + ',\'down\')">↓</button><button class="smallbtn danger" onclick="deleteChartCat(' + index + ')">' + esc(STR.deleteRow) + '</button><span class="note">' + esc(STR.stageInUse) + ' ' + useCount + '</span></div></div>';
     }).join('') + '<div class="row wrap"><button class="ghostbtn" onclick="addChartCat(\'value\')">＋' + esc(STR.kindValue) + '</button><button class="ghostbtn" onclick="addChartCat(\'band\')">＋' + esc(STR.kindBand) + '</button><button class="ghostbtn" onclick="addChartCat(\'event\')">＋' + esc(STR.kindEvent) + '</button></div></div></section>' +
-    '<section class="settingssec"><div class="one">' + esc(STR.labelEditor) + '</div><div class="stack">' + ["phase", "next", "today", "pending", "seeds"].map(function(key){
+    '<section class="settingssec"><div class="one">' + esc(STR.labelEditor) + '</div><div class="stack">' + ["phase", "task", "pending", "seeds"].map(function(key){
       return '<input class="input" value="' + esc(DB.config.labels[key] || "") + '" onchange="updateLabelName(\'' + key + '\',this.value)">';
     }).join('') + '</div></section>' +
     '<section class="settingssec"><div class="one">' + esc(STR.cardPrefs) + '</div><div class="stack">' + cardSettings.cardSections.map(function(name){
@@ -4399,21 +4427,17 @@ function renderMissPrompt(item){
   return '<div class="missrow"><input id="missWhyInput" class="input" value="' + esc(MISS.why || '') + '" placeholder="' + esc(STR.missWhyPh) + '" oninput="trackMissWhyDraft(this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){commitMissSeed()}"><button class="ghostbtn" onclick="commitMissSeed()">' + esc(STR.confirm) + '</button></div>';
 }
 
-function renderNextList(c){
-  return c.next.map(function(item){
-    return '<div class="lineitem"><div class="linegrow">' +
-      '<input class="input subedit" value="' + esc(item.text) + '" onchange="updateNextText(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
-      '<div class="row wrap" style="margin-top:6px"><span class="fieldlabel">' + esc(STR.dueLabel) + '</span><input class="date" type="date" value="' + esc(item.due || '') + '" onchange="updateNextDue(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)"></div>' +
-      renderMissPrompt(item) +
-    '</div><button class="iconbtn" onclick="deleteNext(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
-  }).join('');
-}
-
-function renderTodoList(c){
+// Unified Task rows (Next+Today merged): checkbox / text / scheduled date
+// (optional) / time (optional) / done->pending shortcut / delete.
+function renderTaskList(c){
   return c.todos.map(function(item){
     return '<div class="lineitem"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' +
-      '<div class="linegrow"><input class="input subedit" value="' + esc(item.text) + '" onchange="updateTodoText(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)"><div class="faint">' + esc(item.createdOn) + '</div></div>' +
-      '<button class="iconbtn" onclick="deleteTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
+      '<div class="linegrow"><input class="input subedit" value="' + esc(item.text) + '" onchange="updateTodoText(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
+      '<div class="row wrap" style="margin-top:6px"><span class="fieldlabel">' + esc(STR.dueLabel) + '</span><input class="date" type="date" value="' + esc(item.due || '') + '" onchange="updateTodoDue(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
+      '<span class="fieldlabel">' + esc(STR.timeLabel) + '</span><input class="date" type="time" value="' + esc(item.time || '') + '" onchange="updateTodoTime(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
+      (item.done ? '' : '<button class="smallbtn" onclick="taskToPending(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' + esc(STR.toPendingBtn) + '</button>') + '</div>' +
+      renderMissPrompt(item) +
+    '</div><button class="iconbtn" onclick="deleteTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
   }).join('');
 }
 
@@ -4473,12 +4497,12 @@ function renderSectionCard(title, body, addId, placeholder, addFn, caseId, secCl
 
 function renderReviewCard(c){
   var stage = stageById(c.stageId);
-  var firstNext = c.next[0] || null;
+  var firstNext = boardCardTasks(c).now[0] || null;
   return '<section class="panelcard"><div class="labelrow"><div class="caseid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, todayISO()) + '</div>' +
     (compactMeta(c) ? '<div class="meta">' + esc(compactMeta(c)) + '</div>' : '') +
     '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div></div>' +
     (c.phaseNote ? '<div class="phase sec-phase">' + esc(c.phaseNote) + '</div>' : '') +
-    (firstNext ? '<div class="section sec-next"><div class="sectiontitle">' + esc(DB.config.labels.next) + '</div><div class="lineitem"><div class="linegrow"><div class="text">' + esc(firstNext.text) + '</div>' + (firstNext.due ? '<div class="faint">' + esc(firstNext.due) + '</div>' : '') + '</div></div></div>' : '') +
+    (firstNext ? '<div class="section sec-task"><div class="sectiontitle">' + esc(DB.config.labels.task) + '</div><div class="lineitem"><div class="linegrow"><div class="text">' + esc(firstNext.text) + '</div>' + taskMetaLine(firstNext, true) + '</div></div></div>' : '') +
   '</section>';
 }
 
@@ -4570,7 +4594,9 @@ renderBoard = function(){
         cloneArr(cell.overdue).forEach(function(o){ marks.push({ cls:"overdue", text:"⚠" + String(o.name || "").slice(0, 2) }); });
         cloneArr(cell.events).forEach(function(ev){ marks.push({ cls:ev.status === "done" ? "evdone" : "evplan", text:(ev.status === "done" ? "✓" : "□") + String(ev.name || "").slice(0, 2) }); });
         cloneArr(cell.plans).forEach(function(p){ marks.push({ cls:p.entered ? "evdone" : "evplan", text:"◇" + String(p.name || "").slice(0, 2) }); });
-        cell.markers.forEach(function(marker){ marks.push({ cls:"", text:marker.text }); });
+        // Task / pending markers carry item text now: give them the
+        // block-level ellipsized style so long content stays one line.
+        cell.markers.forEach(function(marker){ marks.push({ cls:marker.kind === "planned" ? "" : "taskmark", text:marker.text }); });
         var bandBits = cloneArr(cell.bands).slice(0, 3).map(function(b){
           var cat = chartCatById(b.catId);
           return '<span class="bandbit" style="background:' + esc((cat && cat.color) || "#64748b") + '"></span>';
@@ -4616,8 +4642,7 @@ renderDetail = function(caseId){
     '<section class="panelcard sec-phase"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
     renderSectionCard(STR.problemsLabel, renderProblemList(c), "problemInput", STR.problemPh, "addProblem", c.id, "sec-problem") +
     (dischargeInline ? dischargePanel : '') +
-    renderSectionCard(DB.config.labels.next, renderNextList(c), "nextInput", STR.nextPh, "addNext", c.id, "sec-next") +
-    renderSectionCard(DB.config.labels.today, renderTodoList(c), "todoInput", STR.todayPh, "addTodo", c.id, "sec-today") +
+    renderSectionCard(DB.config.labels.task, renderTaskList(c), "taskInput", STR.taskPh, "addTask", c.id, "sec-task") +
     renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id, "sec-pending") +
     renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id, "sec-seeds") +
     renderChartPanel(c) +

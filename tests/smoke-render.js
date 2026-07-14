@@ -139,7 +139,8 @@ vm.runInContext(`
   "copyDischargeExport", "copyDayExport", "openWeekCell",
   "startDragCase", "dragMove", "dragEnd", "nearestDropIndex",
   "handlePopState", "navPush", "navUnwindAll", "toggleDensity",
-  "openDayView", "shiftDayDate"
+  "openDayView", "shiftDayDate",
+  "addTask", "taskToPending", "updateTodoDue", "updateTodoTime"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "function") fail("missing runtime fn " + name);
 });
@@ -152,7 +153,9 @@ vm.runInContext(`
   "renderChartMedSheet", "renderChartEventSheet", "renderChartRowSheet",
   "toggleAppt", "deleteAppt", "addAppt", "addDetailAppt", "openApptCell",
   "renderApptCellSheet", "renderApptSection", "chartGroupHidden", "toggleChartGroupPref",
-  "toggleChartDateMode"
+  "toggleChartDateMode",
+  "addNext", "updateNextText", "updateNextDue", "deleteNext",
+  "renderNextList", "renderTodoList", "addTodo", "hasBackToday"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "undefined") fail("removed fn still defined: " + name);
 });
@@ -202,26 +205,26 @@ if (!boardHtml.includes("stale1") && !boardHtml.includes("stale2")) fail("board 
 if (!boardHtml.includes('data-drop-index="0"')) fail("board missing dropzone index");
 if (boardHtml.includes("onpointerenter")) fail("board dropzone still uses inline pointer handlers");
 if (!boardHtml.includes("toggleDensity()")) fail("board missing density toggle");
-// Ward/room shows in the card meta; the five sections carry their color classes.
+// Ward/room shows in the card meta; the four sections carry their color classes.
 if (!boardHtml.includes("3E-305")) fail("board missing ward/room in meta");
-["sec-phase", "sec-next", "sec-today", "sec-pending", "sec-seeds"].forEach((cls) => {
+["sec-phase", "sec-task", "sec-pending", "sec-seeds"].forEach((cls) => {
   if (!boardHtml.includes(cls)) fail("board missing section color class " + cls);
 });
 
-// Normal mode shows ALL next/today items (no 2-item cap).
+// Normal mode shows ALL task items (no 2-item cap).
 vm.runInContext(`
   (function(){
     var t = todayISO();
-    DB.cases[0].next.push({ id:"n3", text:"next-three", due:null });
-    DB.cases[0].next.push({ id:"n4", text:"next-four", due:null });
+    DB.cases[0].todos.push({ id:"n3", text:"task-three", done:false, createdOn:t });
+    DB.cases[0].todos.push({ id:"n4", text:"task-four", done:false, createdOn:t });
     DB.cases[0].todos.push({ id:"t2", text:"todo-two", done:false, createdOn:t });
     DB.cases[0].todos.push({ id:"t3", text:"todo-three", done:false, createdOn:t });
     DB.cases[0].pendings.push({ id:"p2", text:"cx-back", backOn:t });
   })();
 `, sandbox);
 const fullBoardHtml = vm.runInContext("renderBoard()", sandbox);
-if (!fullBoardHtml.includes("next-three") || !fullBoardHtml.includes("next-four")) fail("normal board caps next items");
-if (!fullBoardHtml.includes("todo-three")) fail("normal board caps today items");
+if (!fullBoardHtml.includes("task-three") || !fullBoardHtml.includes("task-four")) fail("normal board caps task items");
+if (!fullBoardHtml.includes("todo-three")) fail("normal board caps task items (todo)");
 
 // Compact mode: summary line, no checkboxes/reorder buttons, urgency badge survives.
 vm.runInContext("SETTINGS.density='compact'", sandbox);
@@ -231,7 +234,7 @@ if (compactHtml.includes("toggleTodo(")) fail("compact card still renders checkb
 if (compactHtml.includes("moveCaseDirection(")) fail("compact card still renders reorder buttons");
 if (!compactHtml.includes("startDragCase(")) fail("compact card missing drag handle");
 if (!compactHtml.includes(vm.runInContext("STR.backTodayBadge", sandbox))) fail("compact card missing back-today badge");
-if (!compactHtml.includes(vm.runInContext("STR.countToday", sandbox) + "3")) fail("compact card missing today count");
+if (!compactHtml.includes(vm.runInContext("STR.countTask", sandbox) + "6")) fail("compact card missing task count");
 if (!compactHtml.includes("compactline")) fail("compact card missing summary line");
 vm.runInContext("SETTINGS.density='normal'", sandbox);
 
@@ -264,9 +267,10 @@ if (dayHtml.includes("toggleDensity()")) fail("density toggle leaked into day vi
 if (!dayHtml.includes("overdueblock")) fail("day view missing overdue block");
 if (!dayHtml.includes("toggleEventDone('c1'")) fail("day view missing event resolve");
 if (!dayHtml.includes("cancelValuePlan('c1'")) fail("day view missing value-plan cancel");
+// A past-due undone task (ABX, due 2026-07-10) rolls onto today's list.
+if (!dayHtml.includes("ABX")) fail("day view missing rolled-over due task");
 vm.runInContext("openDayView('2026-07-10')", sandbox);
 const dayFutureHtml = vm.runInContext("renderBoard()", sandbox);
-if (!dayFutureHtml.includes("ABX")) fail("day view missing next item on its due date");
 if (!dayFutureHtml.includes("★")) fail("day view missing planned-discharge row");
 vm.runInContext("setBoardMode('board')", sandbox);
 
@@ -274,9 +278,13 @@ vm.runInContext("VIEW={ name:'detail', caseId:'c1', editingMeta:false, editingLa
 const detailHtml = vm.runInContext("renderDetail('c1')", sandbox);
 if (!detailHtml.includes("seed-one")) fail("detail missing seed");
 if (!detailHtml.includes("3E-305")) fail("detail missing ward/room in meta");
-["sec-phase", "sec-next", "sec-today", "sec-pending", "sec-seeds"].forEach((cls) => {
+["sec-phase", "sec-task", "sec-pending", "sec-seeds"].forEach((cls) => {
   if (!detailHtml.includes(cls)) fail("detail missing section color class " + cls);
 });
+// Unified task rows carry date/time inputs and the done->pending shortcut.
+if (!detailHtml.includes("updateTodoDue('c1'")) fail("detail task row missing scheduled-date input");
+if (!detailHtml.includes("updateTodoTime('c1'")) fail("detail task row missing time input");
+if (!detailHtml.includes("taskToPending('c1'")) fail("detail task row missing done->pending shortcut");
 // Meta editor carries the ward/room input.
 vm.runInContext("VIEW.editingMeta = true;", sandbox);
 const metaEditHtml = vm.runInContext("renderDetail('c1')", sandbox);
@@ -346,18 +354,24 @@ const chartEventSheet = vm.runInContext("renderChartEventCellSheet()", sandbox);
 if (!chartEventSheet.includes("addChartEventItem()")) fail("chartEventCell sheet missing add");
 if (!chartEventSheet.includes("removeChartItem('c1','ce1')")) fail("chartEventCell sheet missing existing event row");
 const dischargeIx = detailHtml.indexOf(vm.runInContext("STR.dischargePanel", sandbox));
-const nextIx = detailHtml.indexOf(vm.runInContext("DB.config.labels.next", sandbox));
+const taskIx = detailHtml.indexOf(vm.runInContext("DB.config.labels.task", sandbox));
 if (dischargeIx < 0) fail("detail missing discharge panel");
-if (nextIx < 0 || dischargeIx > nextIx) fail("dc-stage discharge panel not before next");
+if (taskIx < 0 || dischargeIx > taskIx) fail("dc-stage discharge panel not before task section");
 if (!detailHtml.includes("copyDayExport('c1')")) fail("detail missing day export");
 
-vm.runInContext("SHEET={name:'weekCell',draft:{caseId:'c1',date:'2026-07-10',itemType:'next',text:''},syncBusy:false};", sandbox);
+// Week cell sheet on a FUTURE date lists the due-dated task with its time.
+vm.runInContext(`
+  var __tomo = (function(){ var b = Date.parse(todayISO() + "T00:00:00"); return new Date(b + 86400000).toISOString().slice(0, 10); })();
+  DB.cases.find(function(c){ return c.id === "c1"; }).todos.push({ id:"nf", text:"FUTURE-TASK", done:false, createdOn:todayISO(), due:__tomo, time:"10:00" });
+  SHEET={name:'weekCell',draft:{caseId:'c1',date:__tomo,itemType:'todo',text:''},syncBusy:false};
+`, sandbox);
 const cellSheet = vm.runInContext("renderWeekCellSheet()", sandbox);
 if (!cellSheet.includes("setCellDraftType('pending')")) fail("week cell sheet missing type chips");
 if (cellSheet.includes("setApptDraftKind")) fail("week cell sheet still has appt kind chips");
-if (!cellSheet.includes("deleteNext('c1','n1')")) fail("week cell sheet missing existing next row");
-// Dynamic add menu: fixed Today chip + chart categories from config + band route.
-if (!cellSheet.includes("setCellDraftType('todo')")) fail("week cell sheet missing today chip");
+if (!cellSheet.includes("deleteTodo('c1','nf')")) fail("week cell sheet missing existing task row");
+if (!cellSheet.includes("10:00 FUTURE-TASK")) fail("week cell sheet missing time-prefixed task text");
+// Dynamic add menu: fixed Task chip + chart categories from config + band route.
+if (!cellSheet.includes("setCellDraftType('todo')")) fail("week cell sheet missing task chip");
 if (!cellSheet.includes("setCellDraftType('cat:cat-ic')")) fail("week cell sheet missing event category chip");
 if (!cellSheet.includes("setCellDraftType('cat:cat-lab')")) fail("week cell sheet missing value category chip");
 if (!cellSheet.includes("openChartItemForDate('c1','cat-med'")) fail("week cell sheet missing band category route");

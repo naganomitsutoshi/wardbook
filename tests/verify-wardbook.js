@@ -39,7 +39,7 @@ const L = sandbox.module.exports;
 
 [
   "defaultStages", "defaultChartCats", "normalizeState", "normalizeCase", "computeDay", "rolloverTodos",
-  "hasBackToday", "boardOrder", "stalenessLevel", "needsReview", "reviewQueue",
+  "hasPendingHold", "boardOrder", "stalenessLevel", "needsReview", "reviewQueue",
   "unsentSeeds", "countSeedsOn", "formatSeedExport", "missSeedText", "makeSeed",
   "moveIdInList", "dcChecklistItems", "stageOn",
   "normalizeChart", "chartDates", "bandOnDate", "chartColMarks", "chartRowsForCase",
@@ -72,13 +72,16 @@ const rolled = L.rolloverTodos({ todos:[
 ] }, "2026-07-07");
 assert.deepStrictEqual(rolled.map((x) => x.id), ["b", "c"]);
 
-assert.strictEqual(L.hasBackToday({ pendings:[{ backOn:"2026-07-07" }] }, "2026-07-07"), true);
-assert.strictEqual(L.hasBackToday({ pendings:[{ backOn:"2026-07-08" }] }, "2026-07-07"), false);
+// Any open pending floats the case - even with no backOn date (most waits
+// have no known return date, 2026-07-15 redesign).
+assert.strictEqual(L.hasPendingHold({ pendings:[{ backOn:null }] }), true);
+assert.strictEqual(L.hasPendingHold({ pendings:[{ backOn:"2026-07-08" }] }), true);
+assert.strictEqual(L.hasPendingHold({ pendings:[] }), false);
 
 const ordered = L.boardOrder([
   { id:"dc", status:"discharged", order:0, pendings:[] },
   { id:"b", status:"active", order:1, pendings:[] },
-  { id:"a", status:"active", order:0, pendings:[{ backOn:"2026-07-07" }] }
+  { id:"a", status:"active", order:0, pendings:[{ backOn:null }] }
 ], "2026-07-07");
 assert.strictEqual(ordered.map((x) => x.id).join(","), "a,b");
 
@@ -129,7 +132,10 @@ const hostileItems = L.normalizeCase({
   id:"ok1", label:"l", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-08T00:00:00.000Z",
   next:[{ id:"y'),alert(1);//", text:"t", due:null }]
 }, "2026-07-08T00:00:00.000Z", "2026-07-08");
-assert.strictEqual(hostileItems.next[0].id, "next-0");
+// Legacy next rows convert to todos (Task merge); hostile id still falls back.
+assert.strictEqual(hostileItems.next.length, 0);
+assert.strictEqual(hostileItems.todos[0].id, "next-0");
+assert.strictEqual(hostileItems.todos[0].text, "t");
 // Colors are hex-only: a css-injection payload falls back to the default.
 const hostileColor = L.normalizeState({
   config:{ stages:[{ id:"s1", name:"n", color:"red;background:url(https://evil/x)" }] }
@@ -242,18 +248,23 @@ const week = L.buildWeekGrid([
   {
     id:"c1", label:"haien", admittedAt:"2026-07-01", status:"active", order:0,
     stageLog:[{ date:"2026-07-01", stageId:"adm" }, { date:"2026-07-07", stageId:"dc" }],
-    next:[{ id:"n1", text:"x", due:"2026-07-11" }],
+    todos:[{ id:"n1", text:"x", done:false, createdOn:"2026-07-01", due:"2026-07-11", time:"14:00" }],
     pendings:[{ id:"p1", text:"y", backOn:"2026-07-12" }],
     discharge:{ plannedOn:"2026-07-13" }
   },
-  { id:"c2", label:"gone", admittedAt:"2026-07-01", status:"discharged", order:1, stageLog:[{ date:"2026-07-01", stageId:"adm" }], next:[], pendings:[], discharge:{ plannedOn:null } }
+  { id:"c2", label:"gone", admittedAt:"2026-07-01", status:"discharged", order:1, stageLog:[{ date:"2026-07-01", stageId:"adm" }], todos:[], pendings:[], discharge:{ plannedOn:null } }
 ], "2026-07-08");
 assert.strictEqual(week.dates.length, 15);
 assert.strictEqual(week.rows.length, 1);
 assert.strictEqual(week.rows[0].dates["2026-07-06"].stageId, "adm");
 assert.strictEqual(week.rows[0].dates["2026-07-08"].stageId, "dc");
-assert.strictEqual(week.rows[0].dates["2026-07-11"].markers[0].kind, "next");
+// Due-dated tasks show their CONTENT (time-prefixed) on their scheduled day.
+assert.strictEqual(week.rows[0].dates["2026-07-11"].markers[0].kind, "todo");
+assert.strictEqual(week.rows[0].dates["2026-07-11"].markers[0].text, "14:00 x");
+assert.strictEqual(week.rows[0].dates["2026-07-08"].markers.some((m) => m.kind === "todo"), false);
+// Pending markers carry content too.
 assert.strictEqual(week.rows[0].dates["2026-07-12"].markers[0].kind, "pending");
+assert.strictEqual(week.rows[0].dates["2026-07-12"].markers[0].text, "待 y");
 assert.strictEqual(week.rows[0].dates["2026-07-13"].markers.some((m) => m.kind === "planned"), true);
 
 const weekAdmissionBand = L.buildWeekGrid([
@@ -296,26 +307,33 @@ const dayCases = [
   {
     id:"c1", label:"haien", admittedAt:"2026-07-05", status:"active", order:0, stageId:"acute",
     stageLog:[{ date:"2026-07-05", stageId:"acute" }],
-    next:[{ id:"n1", text:"culture-check", due:"2026-07-08" }, { id:"n2", text:"far", due:"2026-07-20" }],
-    todos:[{ id:"t1", text:"today-task", done:false, createdOn:"2026-07-07" }, { id:"t2", text:"done-task", done:true, createdOn:"2026-07-08" }],
+    todos:[
+      { id:"t1", text:"today-task", done:false, createdOn:"2026-07-07" },
+      { id:"t2", text:"done-task", done:true, createdOn:"2026-07-08" },
+      { id:"n1", text:"culture-check", done:false, createdOn:"2026-07-05", due:"2026-07-08", time:"09:00" },
+      { id:"n2", text:"far", done:false, createdOn:"2026-07-05", due:"2026-07-20" },
+      { id:"n4", text:"rolled-over", done:false, createdOn:"2026-07-05", due:"2026-07-06" }
+    ],
     pendings:[{ id:"p1", text:"blood-cx", backOn:"2026-07-09" }],
     seeds:[], discharge:{ plannedOn:"2026-07-08" }
   },
   {
     id:"c2", label:"quiet", admittedAt:"2026-07-06", status:"active", order:1, stageId:"adm",
     stageLog:[{ date:"2026-07-06", stageId:"adm" }],
-    next:[], todos:[], pendings:[], seeds:[], discharge:{ plannedOn:null }
+    todos:[], pendings:[], seeds:[], discharge:{ plannedOn:null }
   },
   {
     id:"c3", label:"gone", admittedAt:"2026-07-01", status:"discharged", order:2, stageId:"dc",
     stageLog:[{ date:"2026-07-01", stageId:"adm" }],
-    next:[{ id:"n3", text:"never", due:"2026-07-08" }], todos:[], pendings:[], seeds:[], discharge:{ plannedOn:null }
+    todos:[{ id:"n3", text:"never", done:false, createdOn:"2026-07-01", due:"2026-07-08" }], pendings:[], seeds:[], discharge:{ plannedOn:null }
   }
 ];
 const dayToday = L.buildDayPlan(dayCases, "2026-07-08", "2026-07-08");
 assert.strictEqual(dayToday.length, 1);
 assert.strictEqual(dayToday[0].caseId, "c1");
-assert.strictEqual(dayToday[0].items.map((x) => x.type).join(","), "todo,next,discharge");
+// Timed task first (clock order), then untimed in insertion order; a past-due
+// undone task (n4) rolls onto today; future-due (n2) stays off.
+assert.strictEqual(dayToday[0].items.map((x) => x.id || x.type).join(","), "n1,t1,n4,discharge");
 assert.strictEqual(dayToday[0].items.some((x) => x.text === "done-task"), false);
 assert.strictEqual(dayToday[0].items.some((x) => x.text === "far"), false);
 const dayFuture = L.buildDayPlan(dayCases, "2026-07-09", "2026-07-08");
@@ -325,8 +343,8 @@ const dayEmpty = L.buildDayPlan(dayCases, "2026-07-30", "2026-07-08");
 assert.strictEqual(dayEmpty.length, 0);
 
 const searchCases = [
-  { id:"a", label:"haien", admittedAt:"2026-07-01", stageId:"adm", phaseNote:"CAP", dxTags:["pna"], next:[{ text:"abx" }], todos:[], pendings:[], seeds:[], status:"active" },
-  { id:"b", label:"uti", admittedAt:"2026-06-01", stageId:"dc", phaseNote:"", dxTags:[], next:[], todos:[{ text:"culture" }], pendings:[], seeds:[{ text:"seed" }], status:"discharged" }
+  { id:"a", label:"haien", admittedAt:"2026-07-01", stageId:"adm", phaseNote:"CAP", dxTags:["pna"], todos:[{ text:"abx" }], pendings:[], seeds:[], status:"active" },
+  { id:"b", label:"uti", admittedAt:"2026-06-01", stageId:"dc", phaseNote:"", dxTags:[], todos:[{ text:"culture" }], pendings:[], seeds:[{ text:"seed" }], status:"discharged" }
 ];
 assert.strictEqual(L.searchCases(searchCases, "cap", {}).map((x) => x.case.id).join(","), "a");
 assert.strictEqual(L.searchCases(searchCases, "CULTURE", {}).map((x) => x.case.id).join(","), "b");
@@ -514,28 +532,49 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(migrated.entries.every((e) => e.createdAt && e.updatedAt), true);
   assert.strictEqual(migrated.entries.find((e) => e.id === "ce1").status, "done");
   assert.strictEqual(JSON.stringify(migrated.entries.find((e) => e.id === "cv1").planned), "{}");
-  // Mirrors agree with entries after rebuild.
-  assert.strictEqual(migrated.next.length, 1);
+  // Mirrors agree with entries after rebuild. Legacy next converts to a
+  // due-dated task (mirror fold-in path: createdOn falls back to today).
+  assert.strictEqual(migrated.next.length, 0);
+  assert.strictEqual(migrated.todos.length, 2);
+  const convertedN1 = migrated.entries.find((e) => e.id === "n1");
+  assert.strictEqual(convertedN1.kind, "todo");
+  assert.strictEqual(convertedN1.due, "2026-07-10");
+  assert.strictEqual(convertedN1.done, false);
+  assert.strictEqual(convertedN1.createdOn, "2026-07-08");
   assert.strictEqual(migrated.chart.items.length, 3);
   // Idempotent: normalizing the migrated case again changes nothing.
   const migratedTwice = L.normalizeCase(JSON.parse(JSON.stringify(migrated)), "2026-07-08T11:00:00.000Z", "2026-07-08");
   assert.strictEqual(JSON.stringify(migratedTwice), JSON.stringify(migrated));
 
+  // Persisted-entries path: a synced kind:"next" entry (old app version)
+  // converts in place with a DETERMINISTIC createdOn (from its createdAt, not
+  // today) so both devices rewrite to identical bytes without a stamp bump.
+  const persistedNext = L.normalizeCase({
+    id:"pn", label:"p", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-05T10:00:00.000Z",
+    entries:[{ kind:"next", id:"nx", text:"old-next", due:"2026-07-12", createdAt:"2026-07-03T09:00:00.000Z", updatedAt:"2026-07-03T09:00:00.000Z" }]
+  }, "2026-07-08T10:00:00.000Z", "2026-07-08");
+  const nx = persistedNext.entries.find((e) => e.id === "nx");
+  assert.strictEqual(nx.kind, "todo");
+  assert.strictEqual(nx.due, "2026-07-12");
+  assert.strictEqual(nx.createdOn, "2026-07-03");
+  assert.strictEqual(nx.updatedAt, "2026-07-03T09:00:00.000Z");
+  assert.strictEqual(persistedNext.todos.length, 1);
+
   // Entries win over stale mirrors: a mirror element absent from entries with a
   // known id is NOT resurrected... additions (unknown id) ARE folded in.
   const mixed = JSON.parse(JSON.stringify(migrated));
-  mixed.next.push({ id:"n2", text:"old-device-add", due:null });          // addition -> folds in
+  mixed.next = [{ id:"n2", text:"old-device-add", due:null }];             // legacy-list addition -> folds in as todo
   mixed.todos = [];                                                        // old-device delete -> ignored
   mixed.entries.find((e) => e.id === "n1").text = "entry-truth";          // entries text wins over mirror
   const folded = L.normalizeCase(mixed, "2026-07-08T12:00:00.000Z", "2026-07-08");
-  assert.strictEqual(folded.next.map((x) => x.id).sort().join(","), "n1,n2");
-  assert.strictEqual(folded.next.find((x) => x.id === "n1").text, "entry-truth");
-  assert.strictEqual(folded.todos.length, 1); // t1 restored from entries
+  assert.strictEqual(folded.next.length, 0);
+  assert.strictEqual(folded.todos.map((x) => x.id).sort().join(","), "n1,n2,t1");
+  assert.strictEqual(folded.todos.find((x) => x.id === "n1").text, "entry-truth");
 
   // Local write boundary: edits stamp updatedAt, disappearances tombstone,
   // re-adding content over a local tombstone resurrects it.
   const localCase = JSON.parse(JSON.stringify(migrated));
-  localCase.next[0].text = "changed";
+  localCase.todos.find((x) => x.id === "n1").text = "changed";
   localCase.pendings = [];
   let changed = L.entriesReconcileLocal(localCase, "2026-07-08T13:00:00.000Z", "2026-07-08");
   assert.strictEqual(changed, true);
@@ -630,7 +669,7 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   // survive; after convergence a re-reconcile pushes ZERO docs (ping-pong gate).
   const convBase = L.normalizeCase({
     id:"cc", label:"conv", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-05T00:00:00.000Z",
-    next:[{ id:"base", text:"base", due:null }]
+    todos:[{ id:"base", text:"base", done:false, createdOn:"2026-07-05" }]
   }, "2026-07-05T00:00:00.000Z", "2026-07-05");
   const cfg = { stages:[{ id:"adm", name:"a", color:"#000" }], labels:{ phase:"P", next:"N", today:"T", pending:"Pd", seeds:"S" }, chartCats:[] };
   const devA = { data:{ cases:[JSON.parse(JSON.stringify(convBase))], config:JSON.parse(JSON.stringify(cfg)) }, state:L.syncEmptyState() };
@@ -645,11 +684,11 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(devB.data.cases.length, 1);
   // Concurrent adds: A adds a1, B adds b1 (B later).
   const caseA = devA.data.cases[0];
-  caseA.next.push({ id:"a1", text:"from-A", due:null });
+  caseA.todos.push({ id:"a1", text:"from-A", done:false, createdOn:"2026-07-06" });
   caseA.lastTouchedAt = "2026-07-06T10:00:00.000Z";
   L.entriesReconcileLocal(caseA, "2026-07-06T10:00:00.000Z", "2026-07-06");
   const caseB = devB.data.cases[0];
-  caseB.next.push({ id:"b1", text:"from-B", due:null });
+  caseB.todos.push({ id:"b1", text:"from-B", done:false, createdOn:"2026-07-06" });
   caseB.lastTouchedAt = "2026-07-06T10:05:00.000Z";
   L.entriesReconcileLocal(caseB, "2026-07-06T10:05:00.000Z", "2026-07-06");
   // A pushes its version.
@@ -659,14 +698,14 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   L.syncClearDirty(devA.state, ["cc"]);
   // B merges A's push: both additions must survive; B pushes the union.
   const pushB1 = L.syncReconcile(devB.data, devB.state, [rowA], "2026-07-06T10:15:00.000Z");
-  const idsAfterB = devB.data.cases[0].next.map((x) => x.id).sort().join(",");
+  const idsAfterB = devB.data.cases[0].todos.map((x) => x.id).sort().join(",");
   assert.strictEqual(idsAfterB, "a1,b1,base");
   assert.strictEqual(pushB1.pushes.length, 1);
   const rowB = { id:"cc", deleted:false, case:JSON.parse(JSON.stringify(pushB1.pushes[0].case)), mt:JSON.parse(JSON.stringify(pushB1.pushes[0].mt)) };
   L.syncClearDirty(devB.state, ["cc"]);
   // A merges B's union: converged, and pushes NOTHING back.
   const pushA3 = L.syncReconcile(devA.data, devA.state, [rowB], "2026-07-06T10:20:00.000Z");
-  assert.strictEqual(devA.data.cases[0].next.map((x) => x.id).sort().join(","), "a1,b1,base");
+  assert.strictEqual(devA.data.cases[0].todos.map((x) => x.id).sort().join(","), "a1,b1,base");
   assert.strictEqual(pushA3.pushes.length, 0);
   // B re-reconciles against its own push: still zero (no ping-pong).
   const pushB2 = L.syncReconcile(devB.data, devB.state, [rowB], "2026-07-06T10:25:00.000Z");
@@ -679,18 +718,18 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
 
   // Concurrent element delete (A) vs later edit (B): the newer edit resurrects.
   const caseA2 = devA.data.cases[0];
-  caseA2.next = caseA2.next.filter((x) => x.id !== "base");
+  caseA2.todos = caseA2.todos.filter((x) => x.id !== "base");
   L.entriesReconcileLocal(caseA2, "2026-07-06T11:00:00.000Z", "2026-07-06");
   const caseB2 = devB.data.cases[0];
-  caseB2.next.find((x) => x.id === "base").text = "edited-later";
+  caseB2.todos.find((x) => x.id === "base").text = "edited-later";
   L.entriesReconcileLocal(caseB2, "2026-07-06T11:05:00.000Z", "2026-07-06");
   const mergedNE = L.mergeEntries(caseA2.entries, caseB2.entries);
   const baseAfter = mergedNE.find((e) => e.id === "base");
-  assert.strictEqual(baseAfter.kind, "next");
+  assert.strictEqual(baseAfter.kind, "todo");
   assert.strictEqual(baseAfter.text, "edited-later");
   // And the reverse order (delete newer than edit): tombstone wins.
   const caseB3 = JSON.parse(JSON.stringify(devB.data.cases[0]));
-  caseB3.next = caseB3.next.filter((x) => x.id !== "a1");
+  caseB3.todos = caseB3.todos.filter((x) => x.id !== "a1");
   L.entriesReconcileLocal(caseB3, "2026-07-06T12:00:00.000Z", "2026-07-06");
   const mergedND = L.mergeEntries(caseA2.entries, caseB3.entries);
   assert.strictEqual(mergedND.find((e) => e.id === "a1").kind, "tombstone");
@@ -807,7 +846,7 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   const ptState = L.syncEmptyState();
   const ptCase = L.normalizeCase({
     id:"pt", label:"p", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-08T00:00:00.000Z",
-    next:[{ id:"n1", text:"keep", due:null }]
+    todos:[{ id:"n1", text:"keep", done:false, createdOn:"2026-07-08" }]
   }, "2026-07-08T00:00:00.000Z", "2026-07-08");
   const ptData = { cases:[JSON.parse(JSON.stringify(ptCase))], config:JSON.parse(JSON.stringify(cfg)) };
   const ptBase = L.syncReconcile(ptData, ptState, [], "2026-07-08T00:05:00.000Z");
@@ -835,7 +874,8 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
     next:[], pendings:[], seeds:[], discharge:{ plannedOn:null },
     todos:[
       { id:"tt", text:"today-todo", done:false, createdOn:"2026-07-07" },
-      { id:"tf", text:"future-todo", done:false, createdOn:"2026-07-10" }
+      { id:"tf", text:"future-todo", done:false, createdOn:"2026-07-10" },
+      { id:"td", text:"due-task", done:false, createdOn:"2026-07-06", due:"2026-07-10" }
     ],
     chart:{ items:[
       { id:"ev1", catId:"cat-ic", kind:"event", name:"IC", date:"2026-07-10", status:"planned" },
@@ -865,9 +905,28 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   const projFutureDay = L.buildDayPlan([projCase], "2026-07-10", "2026-07-08");
   const projFutureTypes = projFutureDay[0].items.map((x) => x.type + ":" + (x.id || ""));
   assert.strictEqual(projFutureTypes.includes("todo:tf"), true);
+  assert.strictEqual(projFutureTypes.includes("todo:td"), true);
   assert.strictEqual(projFutureTypes.includes("event:ev1"), true);
   assert.strictEqual(projFutureTypes.includes("valuePlan:vp1"), true);
   assert.strictEqual(projFutureDay[0].items.some((x) => x.type === "overdue"), false);
+  // Due-dated task also rides its day on the week grid (content marker).
+  const projWeek2 = L.buildWeekGrid([projCase], "2026-07-08", 0, 7);
+  assert.strictEqual(projWeek2.rows[0].dates["2026-07-10"].markers.some((m) => m.kind === "todo" && m.text === "due-task"), true);
+
+  // Task time field: valid HH:MM survives normalize, garbage drops to null.
+  const timeCase = L.normalizeCase({
+    id:"tc", label:"t", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-08T00:00:00.000Z",
+    todos:[
+      { id:"ok", text:"ic", done:false, createdOn:"2026-07-08", due:"2026-07-09", time:"14:30" },
+      { id:"bad", text:"x", done:false, createdOn:"2026-07-08", time:"25:99" }
+    ]
+  }, "2026-07-08T00:00:00.000Z", "2026-07-08");
+  assert.strictEqual(timeCase.todos.find((x) => x.id === "ok").time, "14:30");
+  assert.strictEqual(timeCase.todos.find((x) => x.id === "ok").due, "2026-07-09");
+  assert.strictEqual(timeCase.todos.find((x) => x.id === "bad").time, null);
+  // Idempotent (no dirty ping-pong with the new fields).
+  const timeTwice = L.normalizeCase(JSON.parse(JSON.stringify(timeCase)), "2026-07-08T01:00:00.000Z", "2026-07-08");
+  assert.strictEqual(JSON.stringify(timeTwice), JSON.stringify(timeCase));
 
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));
