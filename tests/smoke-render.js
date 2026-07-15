@@ -287,6 +287,24 @@ if (!detailHtml.includes("3E-305")) fail("detail missing ward/room in meta");
 if (!detailHtml.includes("updateTodoDue('c1'")) fail("detail task row missing scheduled-date input");
 if (!detailHtml.includes("updateTodoTime('c1'")) fail("detail task row missing time input");
 if (!detailHtml.includes("taskToPending('c1'")) fail("detail task row missing done->pending shortcut");
+// "+予定" quick add (2026-07-15): button on detail, one sheet, saves a Task with
+// due/time; the discharge toggle writes discharge.plannedOn instead.
+if (!detailHtml.includes("openPlanSheet('c1')")) fail("detail missing +plan button");
+vm.runInContext("SHEET={name:'plan',draft:{caseId:'c1',text:'',date:'',time:'',discharge:false},syncBusy:false};", sandbox);
+const planSheet = vm.runInContext("renderPlanSheet()", sandbox);
+if (!planSheet.includes('id="planText"')) fail("plan sheet missing text input");
+if (!planSheet.includes("addPlanFromSheet()")) fail("plan sheet missing save button");
+if (!planSheet.includes("setPlanDischarge(")) fail("plan sheet missing discharge toggle");
+vm.runInContext("addPlanFromSheet();", sandbox);
+if (vm.runInContext("DB.cases.find(c=>c.id==='c1').todos.some(t=>t.text==='')", sandbox)) fail("plan quick add saved an empty task");
+vm.runInContext("SHEET.draft.text='plan-ct'; SHEET.draft.date='2099-01-02'; SHEET.draft.time='14:30'; addPlanFromSheet();", sandbox);
+const planParsed = JSON.parse(vm.runInContext("JSON.stringify(DB.cases.find(c=>c.id==='c1').todos.find(t=>t.text==='plan-ct')||null)", sandbox));
+if (!planParsed || planParsed.due !== "2099-01-02" || planParsed.time !== "14:30" || planParsed.done) fail("plan quick add did not save task with due/time");
+vm.runInContext("SHEET={name:'plan',draft:{caseId:'c1',text:'',date:'2099-02-03',time:'',discharge:true},syncBusy:false}; addPlanFromSheet();", sandbox);
+if (vm.runInContext("DB.cases.find(c=>c.id==='c1').discharge.plannedOn", sandbox) !== "2099-02-03") fail("plan discharge toggle did not set plannedOn");
+// Restore the fixture value: a far-future plannedOn would stretch chartDates
+// across decades, and later chart tests expect the original ★ column.
+vm.runInContext("DB.cases.find(c=>c.id==='c1').discharge.plannedOn='2026-07-10'; SHEET={name:'',draft:{},syncBusy:false};", sandbox);
 // Meta editor carries the ward/room input.
 vm.runInContext("VIEW.editingMeta = true;", sandbox);
 const metaEditHtml = vm.runInContext("renderDetail('c1')", sandbox);

@@ -1815,6 +1815,11 @@ Object.assign(STR, {
   dayPendingPrefix:"\u5f85",
   dayDischargeLabel:"\u9000\u9662\u4e88\u5b9a",
   weekCaseCol:"\u60a3\u8005",
+  addPlanBtn:"\uff0b\u4e88\u5b9a",
+  planSheetTitle:"\u4e88\u5b9a\u3092\u8ffd\u52a0",
+  planTextPh:"\u5185\u5bb9\uff08\u4f8b\uff1a\u9020\u5f71CT\u30fb\u5bb6\u65cf\u9762\u8ac7\uff09",
+  planAsDischarge:"\u9000\u9662\u4e88\u5b9a\u65e5\u3068\u3057\u3066\u767b\u9332",
+  planSaveBtn:"\u8ffd\u52a0",
   wardRoom:"\u75c5\u68df\u30fb\u75c5\u5ba4",
   wardRoomPh:"\u4f8b\uff1a3\u6771 305",
   problemsLabel:"\u30d7\u30ed\u30d6\u30ec\u30e0",
@@ -3407,6 +3412,42 @@ function openWeekCell(caseId, date){
   }, "weekCellInput", false);
 }
 
+// "+予定" quick add (2026-07-15 CEO壁打ち): rounds happen on the detail screen,
+// so a plan is written there in one sheet as a Task with a due date - no
+// kind choice (Task vs chart event vs value-plan was the main friction).
+// The discharge toggle writes discharge.plannedOn instead: same field as the
+// discharge panel, just a shallower path to it.
+function openPlanSheet(caseId){
+  openSheetWithDraft("plan", { caseId:caseId, text:"", date:"", time:"", discharge:false }, "planText", false);
+}
+
+function setPlanDischarge(checked){
+  SHEET.draft.discharge = !!checked;
+  renderSheet();
+  if (!SHEET.draft.discharge) {
+    queueFocusTarget("planText", false);
+    flushQueuedFocus();
+  }
+}
+
+function addPlanFromSheet(){
+  var d = SHEET.draft || {};
+  var dateOk = /^\d{4}-\d{2}-\d{2}$/.test(String(d.date || ""));
+  if (d.discharge) {
+    if (!dateOk) return;
+    mutateCase(d.caseId, function(c){ c.discharge.plannedOn = d.date; });
+    closeSheet();
+    return;
+  }
+  var text = String(d.text || "").trim();
+  if (!text) return;
+  var time = /^\d{2}:\d{2}$/.test(String(d.time || "")) ? d.time : null;
+  mutateCase(d.caseId, function(c){
+    c.todos.push({ id:uid(), text:text, done:false, createdOn:todayISO(), due:dateOk ? d.date : null, time:time });
+  });
+  closeSheet();
+}
+
 function setCellDraftType(type){
   SHEET.draft.itemType = String(type || "todo");
   renderSheet();
@@ -4232,6 +4273,19 @@ function renderWeekCellSheet(){
     '<div class="plain">' + (rows.length ? rows.join('') : '<div class="faint">-</div>') + '</div><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
+function renderPlanSheet(){
+  var d = SHEET.draft || {};
+  var c = DB.cases.find(function(item){ return item.id === d.caseId; });
+  var discharge = !!d.discharge;
+  return '<div class="sheetcard"><div class="sheettitle">' + esc((c ? (c.label || '-') + ' ' : '') + STR.planSheetTitle) + '</div><div class="stack">' +
+    (discharge ? '' : '<div class="row"><input id="planText" class="input" placeholder="' + esc(STR.planTextPh) + '" value="' + esc(d.text || '') + '" oninput="sheetDraftValue(\'text\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addPlanFromSheet()}"></div>') +
+    '<div class="row wrap"><span class="fieldlabel">' + esc(discharge ? STR.plannedOn : STR.dueLabel) + '</span><input class="date" type="date" value="' + esc(d.date || '') + '" onchange="sheetDraftValue(\'date\',this.value)">' +
+    (discharge ? '' : '<span class="fieldlabel">' + esc(STR.timeLabel) + '</span><input class="date" type="time" value="' + esc(d.time || '') + '" onchange="sheetDraftValue(\'time\',this.value)">') + '</div>' +
+    '<label class="row"><input class="check" type="checkbox" ' + (discharge ? 'checked ' : '') + 'onclick="setPlanDischarge(this.checked)"><div class="text">' + esc(STR.planAsDischarge) + '</div></label>' +
+    '<div class="bottomrow"><button class="primary" onclick="addPlanFromSheet()">' + esc(STR.planSaveBtn) + '</button><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div>' +
+  '</div></div>';
+}
+
 function chartEventMarkClass(item, today){
   if (item.status !== "planned") return "evdone";
   return item.date < today ? "overdue" : "evplan";
@@ -4626,6 +4680,7 @@ renderDetail = function(caseId){
     '<div class="field" style="margin-top:10px"><div class="fieldlabel">' + esc(STR.addDxTag) + '</div>' + renderTagList(c) + '<div class="row" style="margin-top:8px"><input id="dxTagInput" class="input" placeholder="' + esc(STR.dxTagPh) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addDxTag(\'' + esc(c.id) + '\',this.value);this.value=\'\'}"><button class="ghostbtn" onclick="addDxTag(\'' + esc(c.id) + '\',document.getElementById(\'dxTagInput\').value);document.getElementById(\'dxTagInput\').value=\'\'">+</button></div></div></section>' +
     renderAdmissionPanel(c) +
     '<section class="panelcard sec-phase"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
+    '<section class="panelcard"><button class="ghostbtn" style="width:100%" onclick="openPlanSheet(\'' + esc(c.id) + '\')">' + esc(STR.addPlanBtn) + '</button></section>' +
     renderSectionCard(STR.problemsLabel, renderProblemList(c), "problemInput", STR.problemPh, "addProblem", c.id, "sec-problem") +
     (dischargeInline ? dischargePanel : '') +
     renderSectionCard(DB.config.labels.task, renderTaskList(c), "taskInput", STR.taskPh, "addTask", c.id, "sec-task") +
@@ -4656,7 +4711,8 @@ renderSheet = function(){
   var renderers = {
     admission:renderAdmissionSheet, stage:renderStageSheet, sync:renderSyncSheet,
     data:renderDataSheet, settings:renderSettingsSheet, weekCell:renderWeekCellSheet,
-    chartItem:renderChartItemSheet, chartValue:renderChartValueSheet, chartEventCell:renderChartEventCellSheet
+    chartItem:renderChartItemSheet, chartValue:renderChartValueSheet, chartEventCell:renderChartEventCellSheet,
+    plan:renderPlanSheet
   };
   var html = renderers[SHEET.name] ? renderers[SHEET.name]() : "";
   el.className = "sheet" + (html ? " open" : "");
