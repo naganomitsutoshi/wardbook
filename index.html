@@ -3928,19 +3928,6 @@ function deleteCase(caseId){
   openBoard();
 }
 
-function moveCaseDirection(caseId, direction){
-  // Operate on the DISPLAYED order (urgent-first board order, same as drag &
-  // drop) - moving against raw order values jumps unpredictably whenever a
-  // 戻り予定 case is hoisted to the top.
-  var ids = boardCases().map(function(c){ return c.id; });
-  var next = moveIdInList(ids, caseId, direction);
-  if (next.join("\n") === ids.join("\n")) return;
-  reorderActiveByIds(next);
-  saveState();
-  render();
-  syncAfterSave();
-}
-
 // Drag & drop: no re-render between pointerdown and pointerup. Re-rendering
 // mid-gesture destroys the captured element, which kills the pointer stream on
 // touch devices (the original bug). Hit-testing runs on document-level
@@ -4079,7 +4066,6 @@ function renderBoardCard(c){
         orderedSections +
       '</div>' +
     '</div>' +
-    '<div class="inline" style="margin-top:8px" onclick="event.stopPropagation()"><button class="smallbtn" onclick="moveCaseDirection(\'' + esc(c.id) + '\',\'up\')">↑</button><button class="smallbtn" onclick="moveCaseDirection(\'' + esc(c.id) + '\',\'down\')">↓</button></div>' +
   '</article>';
 }
 

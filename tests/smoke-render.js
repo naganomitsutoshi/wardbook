@@ -225,6 +225,8 @@ vm.runInContext(`
 const fullBoardHtml = vm.runInContext("renderBoard()", sandbox);
 if (!fullBoardHtml.includes("task-three") || !fullBoardHtml.includes("task-four")) fail("normal board caps task items");
 if (!fullBoardHtml.includes("todo-three")) fail("normal board caps task items (todo)");
+// Reorder is drag-handle only (2026-07-15): no up/down arrow buttons on cards.
+if (fullBoardHtml.includes("moveCaseDirection(")) fail("normal card still renders reorder buttons");
 
 // Compact mode: summary line, no checkboxes/reorder buttons, urgency badge survives.
 vm.runInContext("SETTINGS.density='compact'", sandbox);
