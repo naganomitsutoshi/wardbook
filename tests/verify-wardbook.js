@@ -43,6 +43,7 @@ const L = sandbox.module.exports;
   "unsentSeeds", "countSeedsOn", "formatSeedExport", "missSeedText", "makeSeed",
   "moveIdInList", "dcChecklistItems", "stageOn",
   "normalizeChart", "chartDates", "bandOnDate", "chartColMarks", "chartRowsForCase",
+  "chartExportLines", "fmtMonthDay",
   "buildWeekGrid", "buildDayPlan", "searchCases", "reviewStreak", "syncDiffFields",
   "syncMergeCase", "syncEmptyState", "syncMarkRestored", "syncNoteLocalChanges", "syncReconcile",
   "syncClearDirty", "syncDeriveKey", "syncEncryptJson", "syncDecryptJson",
@@ -927,6 +928,30 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   // Idempotent (no dirty ping-pong with the new fields).
   const timeTwice = L.normalizeCase(JSON.parse(JSON.stringify(timeCase)), "2026-07-08T01:00:00.000Z", "2026-07-08");
   assert.strictEqual(JSON.stringify(timeTwice), JSON.stringify(timeCase));
+
+  // chartExportLines: AI-readable 経過表 table + band/event lines (pure).
+  const chartCats = [
+    { id:"vital", name:"バイタル", kind:"value", color:"#3b82f6" },
+    { id:"rx", name:"処方", kind:"band", color:"#16a34a" },
+    { id:"exam", name:"検査", kind:"event", color:"#f97316" }
+  ];
+  const chartCase = { chart:{ items:[
+    { id:"i1", catId:"vital", kind:"value", name:"体温", values:{ "2026-07-14":"36.8", "2026-07-15":"37.5" } },
+    { id:"i2", catId:"vital", kind:"value", name:"血圧", values:{ "2026-07-15":"128" } },
+    { id:"i3", catId:"rx", kind:"band", name:"抗菌薬", startDate:"2026-07-13", endDate:"2026-07-17" },
+    { id:"i4", catId:"exam", kind:"event", name:"CT", date:"2026-07-17", status:"planned" },
+    { id:"i5", catId:"exam", kind:"event", name:"採血", date:"2026-07-14", status:"done" }
+  ] } };
+  const chartText = L.chartExportLines(chartCase, chartCats, "2026-07-16").join("\n");
+  assert.ok(chartText.includes("## 経過表"), "chart export heading");
+  assert.ok(chartText.includes("| 項目 | 7/14 | 7/15 |"), "chart export header: " + chartText);
+  assert.ok(chartText.includes("| 体温 | 36.8 | 37.5 |"), "chart export value row: " + chartText);
+  assert.ok(chartText.includes("| 血圧 |  | 128 |"), "chart export sparse row: " + chartText);
+  assert.ok(chartText.includes("- 処方／抗菌薬（帯）: 7/13〜7/17"), "chart export band line: " + chartText);
+  assert.ok(chartText.includes("- 検査／CT: 7/17 予定"), "chart export future event: " + chartText);
+  assert.ok(chartText.includes("- 検査／採血: 7/14 ✓"), "chart export done event: " + chartText);
+  assert.strictEqual(L.chartExportLines({ chart:{ items:[] } }, chartCats, "2026-07-16").length, 0, "empty chart export");
+  assert.strictEqual(L.fmtMonthDay("2026-07-05"), "7/5", "fmtMonthDay strips zero padding");
 
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));

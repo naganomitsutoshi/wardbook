@@ -53,7 +53,7 @@ const documentStub = {
 const sandbox = {
   console,
   document:documentStub,
-  window:{},
+  window:{ innerWidth:1000 },
   navigator:{
     clipboard:{ writeText(){ return Promise.resolve(); } },
     share(){ return Promise.resolve(); }
@@ -249,12 +249,14 @@ if (!weekHtml.includes("openDetail('c1')")) fail("week case header missing detai
 if (!weekHtml.includes("onclick=\"openWeekCell(")) fail("week cell missing onclick");
 if (!weekHtml.includes("openDayView('")) fail("week date header missing day-view tap");
 if (weekHtml.includes("todayrow")) fail("week view still transposed");
-// SPEC-F projections: done/planned event marks, overdue on the today column,
-// value-plan diamonds and faint chart-band bits.
-if (!weekHtml.includes("evdone")) fail("week cell missing done event mark");
-if (!weekHtml.includes("evplan")) fail("week cell missing planned mark");
-if (!weekHtml.includes("overdue")) fail("week today column missing overdue mark");
-if (!weekHtml.includes("bandbit")) fail("week cell missing chart band bit");
+// SPEC-F projections now render as compact dots (2026-07-16): done events keep
+// the faded evdone dot, overdue keeps the red overdue dot; band bits were
+// removed from week cells by design (bands live only in the 経過表).
+if (!weekHtml.includes("dotstack")) fail("week cell missing dot stack");
+if (!weekHtml.includes("wdot")) fail("week cell missing dots");
+if (!weekHtml.includes("evdone")) fail("week cell missing done event dot");
+if (!weekHtml.includes("overdue")) fail("week today column missing overdue dot");
+if (weekHtml.includes("bandbit")) fail("week cell should no longer render chart band bits");
 
 // Day overview: today's todos/pendings grouped per case, no density toggle.
 vm.runInContext("setBoardMode('day')", sandbox);
@@ -332,9 +334,10 @@ if (!chartHtml.includes(vm.runInContext("'\\u5165'", sandbox))) fail("chart miss
 if (!chartHtml.includes(vm.runInContext("'\\u2605'", sandbox))) fail("chart missing planned-discharge column mark");
 if (!chartHtml.includes(vm.runInContext("'\\u305d\\u306e\\u4ed6'", sandbox))) fail("chart missing orphan group");
 if (!chartHtml.includes("openChartItem('c1','cat-med','')")) fail("chart missing per-category add button");
-// Two fixed header rows (D + M/D), tap-toggle removed.
+// Single fixed header row now (2026-07-16): M/D headline + D-number beneath.
 const theadPart = chartHtml.slice(chartHtml.indexOf("<thead>"), chartHtml.indexOf("</thead>"));
-if ((theadPart.match(/<tr>/g) || []).length !== 2) fail("chart header is not two fixed rows");
+if ((theadPart.match(/<tr>/g) || []).length !== 1) fail("chart header is not one row");
+if (!chartHtml.includes("dnum")) fail("chart header missing D-number sub-label");
 if (chartHtml.includes("toggleChartDateMode")) fail("chart still has date-mode toggle");
 // MAR marks: planned diamond, overdue warning, done check.
 if (!chartHtml.includes("◇")) fail("chart missing planned value mark");

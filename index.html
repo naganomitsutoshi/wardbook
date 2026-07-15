@@ -297,7 +297,7 @@
     text-align:left;
     background:var(--card);
   }
-  .chartgrid .sticky{min-width:72px;max-width:110px;overflow:hidden}
+  .chartgrid .sticky{min-width:92px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .weekgrid th,.weekgrid td{min-width:44px}
   .weekgrid .sticky{min-width:76px;max-width:120px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
   .weekgrid thead th{cursor:pointer}
@@ -306,6 +306,19 @@
   .weekgrid .suncol{color:var(--weekend-sun)}
   .weekgrid .satcol{color:var(--weekend-sat)}
   .weekgrid .todaycol,.chartgrid .todaycol{background:var(--panel)}
+  /* Density-down chart cells: bigger tap targets + a one-row header. */
+  .chartgrid td{min-width:50px;padding:8px 6px;font-size:13px}
+  .chartgrid thead th{padding:6px 6px;font-size:12px;line-height:1.25}
+  .dnum{display:block;font-size:9px;color:var(--muted);font-weight:400}
+  /* Week-cell dots: one dot per scheduled item, colored by type. */
+  .dotstack{display:flex;gap:4px;justify-content:center;flex-wrap:wrap;align-items:center;margin-top:4px;min-height:12px}
+  .wdot{display:inline-block;width:10px;height:10px;border-radius:999px;background:var(--muted)}
+  .wdot.task{background:#16a34a}
+  .wdot.pending{background:#f97316}
+  .wdot.overdue{background:#dc2626}
+  .wdot.evdone{opacity:.4}
+  .wstar{font-size:12px;line-height:10px;color:#eab308}
+  .dotmore{font-size:10px;color:var(--muted);font-weight:700}
   .mark.evplan{font-weight:600}
   .mark.evdone{opacity:.5}
   .mark.overdue{color:#dc2626;font-weight:700}
@@ -1629,6 +1642,56 @@ function buildOutboxBatch(cases, todayIso, batchId, stats){
   };
 }
 
+function fmtMonthDay(date){
+  return Number(String(date).slice(5, 7)) + "/" + Number(String(date).slice(8, 10));
+}
+
+// 経過表 (temperature board) as AI-readable text: a compact 項目 x 日付 table
+// for entered values, plus one line each for bands (periods) and events (dated).
+// Pure: caller passes the category list and today's ISO date.
+function chartExportLines(c, cats, today){
+  var groups = chartRowsForCase(c, cats).filter(function(g){ return g.items.length; });
+  if (!groups.length) return [];
+  var valueItems = [];
+  var dateSet = {};
+  groups.forEach(function(g){
+    g.items.forEach(function(it){
+      if (it.kind === "value" && isObj(it.values)) {
+        var ds = Object.keys(it.values).filter(function(d){ return it.values[d] !== "" && it.values[d] != null; });
+        if (ds.length) { valueItems.push(it); ds.forEach(function(d){ dateSet[d] = true; }); }
+      }
+    });
+  });
+  var dates = Object.keys(dateSet).sort();
+  if (dates.length > 14) dates = dates.slice(dates.length - 14);
+  var lines = ["", "## 経過表"];
+  if (valueItems.length && dates.length) {
+    lines.push("| 項目 | " + dates.map(fmtMonthDay).join(" | ") + " |");
+    lines.push("|---|" + dates.map(function(){ return "---"; }).join("|") + "|");
+    valueItems.forEach(function(it){
+      lines.push("| " + (it.name || "-") + " | " + dates.map(function(d){
+        var val = it.values[d];
+        return (val != null && val !== "") ? String(val) : "";
+      }).join(" | ") + " |");
+    });
+  }
+  var extras = [];
+  groups.forEach(function(g){
+    var prefix = g.cat && g.cat.name ? g.cat.name + "／" : "";
+    g.items.forEach(function(it){
+      if (it.kind === "band" && it.startDate) {
+        extras.push("- " + prefix + (it.name || "-") + "（帯）: " + fmtMonthDay(it.startDate) + "〜" + (it.endDate ? fmtMonthDay(it.endDate) : ""));
+      }
+      if (it.kind === "event" && it.date) {
+        var mark = it.status === "done" ? " ✓" : (it.date < today ? " ⚠未" : " 予定");
+        extras.push("- " + prefix + (it.name || "-") + ": " + fmtMonthDay(it.date) + mark);
+      }
+    });
+  });
+  if (extras.length) { lines.push(""); lines = lines.concat(extras); }
+  return lines;
+}
+
 function todayISOFallback(){
   return "2000-01-01";
 }
@@ -1645,6 +1708,8 @@ if (typeof module !== "undefined") {
     bandOnDate:bandOnDate,
     chartColMarks:chartColMarks,
     chartRowsForCase:chartRowsForCase,
+    chartExportLines:chartExportLines,
+    fmtMonthDay:fmtMonthDay,
     computeDay:computeDay,
     rolloverTodos:rolloverTodos,
     hasPendingHold:hasPendingHold,
@@ -3898,6 +3963,7 @@ function dayExportText(caseId){
   pushSection(lines, "Task", cloneArr(c.todos), fmtTaskLine);
   pushSection(lines, "Pending", cloneArr(c.pendings), fmtPendingLine);
   pushSection(lines, "Seeds", cloneArr(c.seeds), function(seed){ return "- " + seed.text; });
+  chartExportLines(c, DB.config.chartCats, todayISO()).forEach(function(line){ lines.push(line); });
   return lines.join("\n");
 }
 
@@ -4304,22 +4370,35 @@ function renderChartEventDots(items, date, today){
   }).join('') + (hits.length > 2 ? '<span class="mark">+' + (hits.length - 2) + '</span>' : '');
 }
 
+function expandChartPast(){
+  VIEW.chartPast = (Number.isFinite(Number(VIEW.chartPast)) ? Number(VIEW.chartPast) : 3) + 7;
+  render();
+}
+
 function renderChartPanel(c){
   var open = !!VIEW.chartOpen;
   var head = '<div class="collapsehead" onclick="toggleChartPanel()"><div class="one">' + esc(STR.chartPanel) + '</div><div class="meta">' + (open ? '-' : '+') + '</div></div>';
   if (!open) return '<section class="panelcard">' + head + '</section>';
   var today = todayISO();
-  var dates = chartDates(c, today);
+  var allDates = chartDates(c, today);
+  // Portrait crams badly, so show a recent window (default ~4 days incl. today)
+  // plus any future-dated plans; the past button widens it 7 days at a time.
+  // Wide screens (landscape / PC) show the whole stay.
+  var pastN = Number.isFinite(Number(VIEW.chartPast)) ? Math.max(0, Number(VIEW.chartPast)) : 3;
+  var wide = typeof window !== "undefined" && window.innerWidth >= 860;
+  var pastDates = allDates.filter(function(d){ return d <= today; });
+  var hiddenPast = Math.max(0, pastDates.length - (pastN + 1));
+  var dates = (!wide && hiddenPast > 0)
+    ? pastDates.slice(pastDates.length - (pastN + 1)).concat(allDates.filter(function(d){ return d > today; }))
+    : allDates;
   var marks = chartColMarks(c);
   var groups = chartRowsForCase(c, DB.config.chartCats).filter(function(group){
     return group.orphan || !chartCatHidden(group.cat.id);
   });
-  // Two fixed header rows (D-number + M/D) - the paper 温度板's 病日+暦日 pair.
-  // The old tap-toggle (chartDateMode) is gone by design decision.
+  // Single header row: M/D headline, D-number beneath, then the admit/discharge
+  // column mark. (Merged from the old two-row D-number + M/D pair to save height.)
   var headRow = '<tr><th class="sticky"></th>' + dates.map(function(date){
-    return '<th class="' + (date === today ? 'todaycol' : '') + '">D' + computeDay(c.admittedAt, date) + '</th>';
-  }).join('') + '</tr><tr><th class="sticky"></th>' + dates.map(function(date){
-    return '<th class="' + (date === today ? 'todaycol' : '') + '">' + esc(Number(date.slice(5, 7)) + '/' + Number(date.slice(8, 10))) + '<span class="colmark">' + (marks[date] ? esc(marks[date]) : '&nbsp;') + '</span></th>';
+    return '<th class="' + (date === today ? 'todaycol' : '') + '">' + esc(Number(date.slice(5, 7)) + '/' + Number(date.slice(8, 10))) + '<span class="dnum">D' + computeDay(c.admittedAt, date) + '</span><span class="colmark">' + (marks[date] ? esc(marks[date]) : '&nbsp;') + '</span></th>';
   }).join('') + '</tr>';
   var body = groups.map(function(group){
     var cat = group.cat;
@@ -4337,7 +4416,7 @@ function renderChartPanel(c){
       }).join('') + '</tr>' : '';
     } else {
       rows = group.items.map(function(item){
-        var labelTh = '<th class="sticky chartlabel" onclick="openChartItem(\'' + esc(c.id) + '\',\'' + esc(item.catId) + '\',\'' + esc(item.id) + '\')">' + esc((item.name || '-').slice(0, 4)) + '</th>';
+        var labelTh = '<th class="sticky chartlabel" onclick="openChartItem(\'' + esc(c.id) + '\',\'' + esc(item.catId) + '\',\'' + esc(item.id) + '\')">' + esc(item.name || '-') + '</th>';
         if (item.kind === "band") {
           return '<tr>' + labelTh + dates.map(function(date){
             return '<td class="bandcell' + (date === today ? ' todaycol' : '') + '">' + (bandOnDate(item, date) ? '<div class="band" style="background:' + esc(cat.color) + '"></div>' : '') + '</td>';
@@ -4358,7 +4437,8 @@ function renderChartPanel(c){
     }
     return headerRow + rows;
   }).join('');
-  return '<section class="panelcard">' + head + '<div class="chartwrap" style="margin-top:10px"><table class="chartgrid"><thead>' + headRow + '</thead><tbody>' + body + '</tbody></table></div></section>';
+  var pastBtn = (!wide && hiddenPast > 0) ? '<div class="row" style="margin-top:8px"><button class="ghostbtn smallbtn" onclick="expandChartPast()">◀ 過去を表示</button></div>' : '';
+  return '<section class="panelcard">' + head + pastBtn + '<div class="chartwrap" style="margin-top:10px"><table class="chartgrid"><thead>' + headRow + '</thead><tbody>' + body + '</tbody></table></div></section>';
 }
 
 function renderChartItemSheet(){
@@ -4628,22 +4708,21 @@ renderBoard = function(){
       return '<tr><th class="sticky casecell" onclick="openDetail(\'' + esc(row.case.id) + '\')">' + esc(row.case.label) + ' D' + computeDay(row.case.admittedAt, todayISO()) + '</th>' + week.dates.map(function(date){
         var cell = row.dates[date];
         var bandColor = cell.stageId ? stageById(cell.stageId).color : "transparent";
-        // Chart projections share the marker stack: overdue first (today only),
-        // then planned/done events, value plans, then the classic markers.
-        var marks = [];
-        cloneArr(cell.overdue).forEach(function(o){ marks.push({ cls:"overdue", text:"⚠" + String(o.name || "").slice(0, 2) }); });
-        cloneArr(cell.events).forEach(function(ev){ marks.push({ cls:ev.status === "done" ? "evdone" : "evplan", text:(ev.status === "done" ? "✓" : "□") + String(ev.name || "").slice(0, 2) }); });
-        cloneArr(cell.plans).forEach(function(p){ marks.push({ cls:p.entered ? "evdone" : "evplan", text:"◇" + String(p.name || "").slice(0, 2) }); });
-        // Task / pending markers carry item text now: give them the
-        // block-level ellipsized style so long content stays one line.
-        cell.markers.forEach(function(marker){ marks.push({ cls:marker.kind === "planned" ? "" : "taskmark", text:marker.text }); });
-        var bandBits = cloneArr(cell.bands).slice(0, 3).map(function(b){
-          var cat = chartCatById(b.catId);
-          return '<span class="bandbit" style="background:' + esc((cat && cat.color) || "#64748b") + '"></span>';
-        }).join('');
-        return '<td class="' + (date === week.today ? 'todaycol' : '') + '" onclick="openWeekCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="markerstack">' + marks.slice(0, 5).map(function(marker){
-          return '<span class="mark' + (marker.cls ? ' ' + marker.cls : '') + '">' + esc(marker.text) + '</span>';
-        }).join('') + (marks.length > 5 ? '<span class="mark">+' + (marks.length - 5) + '</span>' : '') + '</div>' + (bandBits ? '<div class="bandrow">' + bandBits + '</div>' : '') + '</td>';
+        // Compact per-day dots: one dot per scheduled item, colored by type.
+        // The item text now lives behind the cell tap (openWeekCell sheet), so
+        // the grid stays a clean at-a-glance overview on a phone.
+        var dots = [];
+        cloneArr(cell.overdue).forEach(function(){ dots.push({ cls:"overdue" }); });
+        cloneArr(cell.events).forEach(function(ev){ dots.push({ cls:ev.status === "done" ? "evdone" : "", color:(chartCatById(ev.catId) || {}).color }); });
+        cloneArr(cell.plans).forEach(function(p){ dots.push({ cls:p.entered ? "evdone" : "", color:(chartCatById(p.catId) || {}).color }); });
+        cell.markers.forEach(function(marker){
+          if (marker.kind === "planned") dots.push({ star:true });
+          else dots.push({ cls:marker.kind === "pending" ? "pending" : "task" });
+        });
+        return '<td class="' + (date === week.today ? 'todaycol' : '') + '" onclick="openWeekCell(\'' + esc(row.case.id) + '\',\'' + esc(date) + '\')"><div class="weekband" style="background:' + esc(bandColor) + '"></div><div class="dotstack">' + dots.slice(0, 6).map(function(dot){
+          if (dot.star) return '<span class="wstar">★</span>';
+          return '<span class="wdot' + (dot.cls ? ' ' + dot.cls : '') + '"' + (dot.color ? ' style="background:' + esc(dot.color) + '"' : '') + '></span>';
+        }).join('') + (dots.length > 6 ? '<span class="dotmore">+' + (dots.length - 6) + '</span>' : '') + '</div></td>';
       }).join('') + '</tr>';
     }).join('') + '</tbody></table></div>';
   } else if (VIEW.boardMode === "day") {
