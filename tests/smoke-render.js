@@ -345,6 +345,16 @@ if (!chartHtml.includes("⚠")) fail("chart missing overdue mark");
 if (!chartHtml.includes("✓")) fail("chart missing done event mark");
 vm.runInContext("VIEW.chartOpen = false;", sandbox);
 
+// Narrow (phone portrait): both nav buttons must show. The ▶ future button is
+// unconditional on narrow so you can extend the grid into empty future days for
+// planning — regression guard: it used to hide whenever the case had <=3
+// future-dated entries (i.e. almost always), so it never appeared.
+vm.runInContext("VIEW.chartOpen = true; window.innerWidth = 400;", sandbox);
+const chartNarrow = vm.runInContext("renderDetail('c1')", sandbox);
+if (!chartNarrow.includes("expandChartFuture()")) fail("narrow chart missing future (▶) button");
+if (!chartNarrow.includes("expandChartPast()")) fail("narrow chart missing past (◀) button");
+vm.runInContext("window.innerWidth = 1000; VIEW.chartOpen = false;", sandbox);
+
 // Admission record panel + problem section (2026-07-11).
 if (!detailHtml.includes("toggleAdmPanel()")) fail("detail missing admission panel");
 if (!detailHtml.includes("CHF")) fail("detail missing active problem");

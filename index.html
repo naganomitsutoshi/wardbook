@@ -4376,7 +4376,7 @@ function expandChartPast(){
 }
 
 function expandChartFuture(){
-  VIEW.chartFuture = (Number.isFinite(Number(VIEW.chartFuture)) ? Number(VIEW.chartFuture) : 3) + 7;
+  VIEW.chartFuture = (Number.isFinite(Number(VIEW.chartFuture)) ? Number(VIEW.chartFuture) : 0) + 7;
   render();
 }
 
@@ -4386,19 +4386,25 @@ function renderChartPanel(c){
   if (!open) return '<section class="panelcard">' + head + '</section>';
   var today = todayISO();
   var allDates = chartDates(c, today);
-  // Portrait crams badly, so show a recent window (default ~4 days incl. today)
-  // and a short future window; the ◀/▶ buttons each widen their side 7 days at
-  // a time. Wide screens (landscape / PC) show the whole stay.
+  // The chart's own dates stop at the last entered value/plan (never past what
+  // you've planned). Past accumulates on its own (days since admission), but the
+  // future is blank until you fill it — so ▶ extends the grid with empty future
+  // days you can tap to plan. ◀ widens the past window 7 days at a time. Wide
+  // screens (landscape / PC) show the whole stay with no buttons.
   var pastN = Number.isFinite(Number(VIEW.chartPast)) ? Math.max(0, Number(VIEW.chartPast)) : 3;
-  var futureN = Number.isFinite(Number(VIEW.chartFuture)) ? Math.max(0, Number(VIEW.chartFuture)) : 3;
+  var futureN = Number.isFinite(Number(VIEW.chartFuture)) ? Math.max(0, Number(VIEW.chartFuture)) : 0;
   var wide = typeof window !== "undefined" && window.innerWidth >= 860;
   var pastDates = allDates.filter(function(d){ return d <= today; });
-  var futureDates = allDates.filter(function(d){ return d > today; });
   var hiddenPast = Math.max(0, pastDates.length - (pastN + 1));
-  var hiddenFuture = Math.max(0, futureDates.length - futureN);
-  var shownPast = (!wide && hiddenPast > 0) ? pastDates.slice(pastDates.length - (pastN + 1)) : pastDates;
-  var shownFuture = (!wide && hiddenFuture > 0) ? futureDates.slice(0, futureN) : futureDates;
-  var dates = wide ? allDates : shownPast.concat(shownFuture);
+  var startDate = (!wide && hiddenPast > 0) ? pastDates[pastDates.length - (pastN + 1)] : (allDates[0] || today);
+  var lastData = allDates.length ? allDates[allDates.length - 1] : today;
+  var startMs = Date.parse(startDate + "T00:00:00");
+  var endMs = Math.max(Date.parse(lastData + "T00:00:00"), Date.parse(today + "T00:00:00") + futureN * 86400000);
+  var dates = [];
+  for (var curMs = startMs; Number.isFinite(curMs) && Number.isFinite(endMs) && curMs <= endMs && dates.length < 400; curMs += 86400000) {
+    var dCol = new Date(curMs);
+    dates.push(dCol.getFullYear() + "-" + String(dCol.getMonth() + 1).padStart(2, "0") + "-" + String(dCol.getDate()).padStart(2, "0"));
+  }
   var marks = chartColMarks(c);
   var groups = chartRowsForCase(c, DB.config.chartCats).filter(function(group){
     return group.orphan || !chartCatHidden(group.cat.id);
@@ -4446,7 +4452,7 @@ function renderChartPanel(c){
     return headerRow + rows;
   }).join('');
   var pastBtn = (!wide && hiddenPast > 0) ? '<button class="ghostbtn smallbtn" onclick="expandChartPast()">◀ 過去を表示</button>' : '';
-  var futureBtn = (!wide && hiddenFuture > 0) ? '<button class="ghostbtn smallbtn" onclick="expandChartFuture()">未来を表示 ▶</button>' : '';
+  var futureBtn = !wide ? '<button class="ghostbtn smallbtn" onclick="expandChartFuture()">未来を表示 ▶</button>' : '';
   var navRow = (pastBtn || futureBtn) ? '<div class="row" style="margin-top:8px;justify-content:space-between">' + (pastBtn || '<span></span>') + (futureBtn || '<span></span>') + '</div>' : '';
   return '<section class="panelcard">' + head + navRow + '<div class="chartwrap" style="margin-top:10px"><table class="chartgrid"><thead>' + headRow + '</thead><tbody>' + body + '</tbody></table></div></section>';
 }
