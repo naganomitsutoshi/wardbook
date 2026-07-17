@@ -143,7 +143,9 @@ const hostileColor = L.normalizeState({
 }, "2026-07-08T00:00:00.000Z", "2026-07-08");
 assert.strictEqual(hostileColor.config.stages[0].color, L.defaultStages()[0].color);
 
-assert.strictEqual(L.dcChecklistItems().some((x) => x.k === "dxtags"), true);
+// 2026-07-17 項目一新: 8項目・キー再利用(meds/follow/summary)＋新キー5つ
+assert.strictEqual(L.dcChecklistItems().map((x) => x.k).join(","),
+  "decision,meds,referral,cdr,attach,follow,careplan,summary");
 
 // Removed feature (appts) is still purged; the OLD chart model (meds/events/rows,
 // removed in da27072) normalizes to empty items under the SPEC-E schema instead

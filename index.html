@@ -1107,15 +1107,17 @@ function normalizeStageLog(raw, admittedAt, stageId){
 }
 
 function dcChecklistItems(){
+  // 2026-07-17 CEO\u8981\u671b\u3067\u9805\u76ee\u4e00\u65b0\u3002meds/follow/summary \u306f\u30ad\u30fc\u518d\u5229\u7528\u3067\u65e2\u5b58\u30c1\u30a7\u30c3\u30af\u3092\u6e29\u5b58\u3002
+  // \u65e7\u30ad\u30fc(nurse/docs/family/billing/dxtags)\u306e\u4fdd\u5b58\u5024\u306f checklist \u5185\u306b\u6b8b\u3063\u3066\u3082\u7121\u5bb3\u3002
   return [
-    { k:"summary", t:"\u9000\u9662\u30b5\u30de\u30ea\u4f5c\u6210", h:"\u7d4c\u904e\u3092\u8981\u7d04" },
-    { k:"follow", t:"\u5916\u6765\u4e88\u7d04", h:"\u518d\u8a3a\u65e5\u3092\u78ba\u8a8d" },
-    { k:"meds", t:"\u51e6\u65b9\u78ba\u8a8d", h:"\u5185\u5bb9\u3068\u65e5\u6570" },
-    { k:"nurse", t:"\u6307\u5c0e\u4f9d\u983c", h:"\u751f\u6d3b\u6307\u5c0e\u30fb\u81ea\u5df1\u7ba1\u7406" },
-    { k:"docs", t:"\u66f8\u985e\u78ba\u8a8d", h:"\u8a3a\u65ad\u66f8\u30fb\u4f11\u8077\u66f8" },
-    { k:"family", t:"\u5bb6\u65cf\u8aac\u660e", h:"\u9000\u9662\u8aac\u660e\u3068\u540c\u610f" },
-    { k:"billing", t:"\u4f1a\u8a08\u78ba\u8a8d", h:"\u9650\u5ea6\u984d\u30fb\u652f\u6255\u3044" },
-    { k:"dxtags", t:"\u8a3a\u65ad\u30bf\u30b0\u3092\u78ba\u8a8d", h:"\u9000\u9662\u6642\u306e\u8a18\u9332\u7528" }
+    { k:"decision", t:"\u9000\u9662\u6c7a\u5b9a", h:"" },
+    { k:"meds", t:"\u9000\u9662\u51e6\u65b9", h:"\u5185\u5bb9\u3068\u65e5\u6570" },
+    { k:"referral", t:"\u7d39\u4ecb\u72b6", h:"" },
+    { k:"cdr", t:"CDR", h:"" },
+    { k:"attach", t:"\u6dfb\u4ed8\u8cc7\u6599", h:"" },
+    { k:"follow", t:"\u6b21\u56de\u5916\u6765\u4e88\u7d04", h:"\u518d\u8a3a\u65e5\u3092\u78ba\u8a8d" },
+    { k:"careplan", t:"\u9000\u9662\u7642\u990a\u8a08\u753b\u66f8", h:"" },
+    { k:"summary", t:"\u9000\u9662\u30b5\u30de\u30ea", h:"\u7d4c\u904e\u3092\u8981\u7d04" }
   ];
 }
 
