@@ -2128,6 +2128,9 @@ Object.assign(STR, {
   aiTokenPrompt:"AI\u5408\u8a00\u8449\u3092\u5165\u529b\uff08\u521d\u56de\u306e\u307f\u30fb\u3053\u306e\u7aef\u672b\u306b\u4fdd\u5b58\uff09",
   aiAuthError:"\u5408\u8a00\u8449\u304c\u4e00\u81f4\u3057\u307e\u305b\u3093\u3002\u3082\u3046\u4e00\u5ea6\u30dc\u30bf\u30f3\u3092\u62bc\u3057\u3066\u5165\u529b\u3057\u76f4\u3057\u3066\u304f\u3060\u3055\u3044",
   aiError:"\u53d6\u5f97\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002\u901a\u4fe1\u74b0\u5883\u3092\u78ba\u8a8d\u3057\u3066\u518d\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044",
+  aiBadgeLoading:"AI\u53d6\u5f97\u4e2d",
+  aiBadgeDone:"AI\u56de\u7b54\u3042\u308a",
+  aiBadgeError:"AI\u53d6\u5f97\u5931\u6557",
   aiPromptSection:"\u6307\u5c0e\u533bAI\u3078\u306e\u6307\u793a\u6587\uff08\u30d7\u30ed\u30f3\u30d7\u30c8\uff09",
   aiPromptNote:"\u3053\u306e\u6307\u793a\u6587\u304c\u305d\u306e\u307e\u307eAI\u306b\u9001\u3089\u308c\u307e\u3059\u3002\u3053\u3053\u3067\u89b3\u70b9\u3084\u6587\u91cf\u3092\u8abf\u6574\u3067\u304d\u307e\u3059\u3002\u3053\u306e\u7aef\u672b\u306e\u307f\u306b\u4fdd\u5b58\uff08\u4ed6\u7aef\u672b\u306b\u306f\u540c\u671f\u3055\u308c\u307e\u305b\u3093\uff09\u3002\u7a7a\u306b\u3059\u308b\u3068\u521d\u671f\u5024\u306b\u623b\u308a\u307e\u3059",
   aiPromptReset:"\u521d\u671f\u5024\u306b\u623b\u3059",
@@ -3138,6 +3141,8 @@ function openDetail(caseId){
   VIEW.admOpen = false;
   VIEW.chartOpen = false;
   VIEW.chartCollapsed = {};
+  // Opening the case consumes the "done" badge (the saved log is now visible).
+  if (AI.caseId === caseId && AI.status === "done") AI = { caseId:"", status:"", text:"" };
   render();
 }
 
@@ -4532,7 +4537,7 @@ function renderBoardCard(c){
       '<div class="linegrow">' +
         '<div class="labelrow"><div class="caseid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, todayISO()) + '</div>' +
         (compactMeta(c) ? '<div class="meta">' + esc(compactMeta(c)) + '</div>' : '') +
-        '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div></div>' +
+        '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div>' + aiCardBadge(c) + '</div>' +
         orderedSections +
       '</div>' +
     '</div>' +
@@ -4557,7 +4562,7 @@ function renderBoardCardCompact(c, stage, undone, stageStyle, staleClass){
         '<div class="labelrow"><div class="caseid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, todayISO()) + '</div>' +
         (compactMeta(c) ? '<div class="meta">' + esc(compactMeta(c)) + '</div>' : '') +
         '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div>' +
-        (hasBack ? '<span class="badge">' + esc(STR.backTodayBadge) + '</span>' : '') + '</div>' +
+        (hasBack ? '<span class="badge">' + esc(STR.backTodayBadge) + '</span>' : '') + aiCardBadge(c) + '</div>' +
         (c.phaseNote ? '<div class="phase oneline sec-phase">' + esc(c.phaseNote) + '</div>' : '') +
         summary +
       '</div>' +
@@ -5074,7 +5079,9 @@ function resetAiPrompt(){
 
 function runAiFeedback(caseId){
   var c = DB.cases.find(function(row){ return row.id === caseId; });
-  if (!c || (AI.caseId === caseId && AI.status === "loading")) return;
+  // Single-flight: one fetch at a time keeps the global AI state (and the
+  // board-card badge derived from it) unambiguous.
+  if (!c || AI.status === "loading") return;
   var payload = aiFeedbackPayload(c);
   var hasBody = String(payload.adm).trim() || payload.notes.some(function(n){ return String(n.text || "").trim(); });
   if (!hasBody) {
@@ -5100,26 +5107,63 @@ function runAiFeedback(caseId){
   }).then(function(data){
     var text = String((data && data.text) || "").trim();
     if (!text) throw new Error("empty");
-    AI = { caseId:caseId, status:"", text:"" };
+    // The fetch keeps running after leaving the detail screen; "done" drives
+    // the board-card badge until the case is next opened. The fresh log starts
+    // expanded so it can be read immediately.
+    var itemId = uid();
+    AI = { caseId:caseId, status:"done", text:"" };
+    VIEW.aiOpen = isObj(VIEW.aiOpen) ? VIEW.aiOpen : {};
+    VIEW.aiOpen[itemId] = true;
     // Persist via the shared list CRUD so entries absorption + sync ride along.
-    addListItem("aiLogs", caseId, text, null, function(t){ return { id:uid(), text:t, date:todayISO() }; });
+    addListItem("aiLogs", caseId, text, null, function(t){ return { id:itemId, text:t, date:todayISO() }; });
   }).catch(function(err){
     AI = { caseId:caseId, status:"error", text:(err && err.message === "auth") ? STR.aiAuthError : STR.aiError };
     render();
   });
 }
 
+// Saved logs are collapsed by default (date + first-line preview); tapping the
+// header toggles. Expansion state lives in VIEW only (UI state, not synced).
+function aiLogOpen(itemId){
+  var map = isObj(VIEW.aiOpen) ? VIEW.aiOpen : {};
+  return !!map[itemId];
+}
+
+function toggleAiLog(itemId){
+  VIEW.aiOpen = isObj(VIEW.aiOpen) ? VIEW.aiOpen : {};
+  VIEW.aiOpen[itemId] = !VIEW.aiOpen[itemId];
+  render();
+}
+
+function aiLogPreview(text){
+  var line = String(text || "").split("\n").map(function(s){ return s.trim(); }).filter(Boolean)[0] || "";
+  return line.length > 24 ? line.slice(0, 24) + "…" : line;
+}
+
+// Board-card badge: the fetch keeps running after leaving the detail screen
+// (global AI state; the result is saved via addListItem on resolve), so the
+// card surfaces its progress instead of looking cancelled.
+function aiCardBadge(c){
+  if (AI.caseId !== c.id || !AI.status) return '';
+  var label = AI.status === "loading" ? STR.aiBadgeLoading : AI.status === "done" ? STR.aiBadgeDone : STR.aiBadgeError;
+  return '<span class="badge">' + esc(label) + '</span>';
+}
+
 function renderAiPanel(c){
   var mine = AI.caseId === c.id;
-  var busy = mine && AI.status === "loading";
+  var busy = AI.status === "loading";
   var status = '';
-  if (busy) status = '<div class="faint">' + esc(STR.aiLoading) + '</div>';
+  if (mine && busy) status = '<div class="faint">' + esc(STR.aiLoading) + '</div>';
   else if (mine && AI.status === "error") status = '<div class="faint">' + esc(AI.text) + '</div>';
   var logs = cloneArr(c.aiLogs).sort(function(a, b){
     if (a.date !== b.date) return a.date < b.date ? 1 : -1;
     return a.id < b.id ? 1 : -1;
   }).map(function(item){
-    return '<div class="lineitem"><div class="linegrow"><div class="text" style="white-space:pre-wrap">' + esc(item.text) + '</div><div class="faint">' + esc(item.date + ' ' + STR.aiUnreviewed) + '</div></div><button class="iconbtn" onclick="deleteAiLog(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
+    var open = aiLogOpen(item.id);
+    var head = '<div class="text" style="cursor:pointer" onclick="toggleAiLog(\'' + esc(item.id) + '\')">' +
+      (open ? '▾ ' : '▸ ') + esc(item.date + (open ? '' : ' ' + aiLogPreview(item.text))) + '</div>';
+    var body = open ? '<div class="text" style="white-space:pre-wrap">' + esc(item.text) + '</div><div class="faint">' + esc(STR.aiUnreviewed) + '</div>' : '';
+    return '<div class="lineitem"><div class="linegrow">' + head + body + '</div><button class="iconbtn" onclick="deleteAiLog(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
   }).join('');
   return '<section class="panelcard sec-ai"><div class="one">' + esc(STR.aiPanel) + '</div><div class="stack" style="margin-top:10px">' +
     '<button class="ghostbtn" ' + (busy ? 'disabled ' : '') + 'onclick="runAiFeedback(\'' + esc(c.id) + '\')">' + esc(STR.aiRun) + '</button>' +

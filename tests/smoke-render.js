@@ -115,7 +115,7 @@ vm.runInContext(`
         dxTags:["cap"], order:1, lastTouchedAt:"2026-07-06T18:00:00.000Z",
         problems:[{ id:"prob-one", text:"CHF", status:"active" }, { id:"prob-two", text:"AKI", status:"resolved" }],
         notes:[{ id:"note-one", text:"afebrile-day", date:"2026-07-06" }],
-        aiLogs:[{ id:"ai-one", text:"ai-fb-keep", date:"2026-07-07" }],
+        aiLogs:[{ id:"ai-one", text:"ai-fb-keep-first-line-long-enough-to-truncate\\nai-fb-second-line", date:"2026-07-07" }],
         adm:{ trigger:"dyspnea", pmh:["DM"], adl:"indep", note:"adm-note" },
         discharge:{ checklist:{ summary:true }, plannedOn:"2026-07-10" }
       },
@@ -144,7 +144,8 @@ vm.runInContext(`
   "openDayView", "shiftDayDate",
   "addTask", "taskToPending", "updateTodoDue", "updateTodoTime",
   "runAiFeedback", "aiFeedbackPayload", "deleteAiLog",
-  "aiPromptText", "saveAiPrompt", "resetAiPrompt"
+  "aiPromptText", "saveAiPrompt", "resetAiPrompt",
+  "toggleAiLog", "aiCardBadge"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "function") fail("missing runtime fn " + name);
 });
@@ -480,14 +481,33 @@ const aiPayloadStr = JSON.stringify(aiPayload);
 });
 vm.runInContext("updateCaseBio('c1','age',''); updateCaseBio('c1','weightKg',''); updateCaseBio('c1','cr',''); updateCaseBio('c1','crDate','');", sandbox);
 
-// Saved AI feedback (Phase 2.1, 2026-07-21): shown in the panel with the
-// unreviewed mark, deletable to trash — but NEVER exported and (above) never
-// fed back into the AI payload.
-if (!detailHtml.includes("ai-fb-keep")) fail("detail missing saved AI feedback");
+// Saved AI feedback (Phase 2.1, 2026-07-21): deletable to trash — but NEVER
+// exported and (above) never fed back into the AI payload. Collapsed by
+// default (2026-07-22): date + first-line preview, tap the header to expand.
+if (!detailHtml.includes("toggleAiLog('ai-one')")) fail("saved AI feedback missing collapse toggle");
+if (!detailHtml.includes("ai-fb-keep")) fail("collapsed AI feedback missing preview");
+if (detailHtml.includes("ai-fb-second-line")) fail("collapsed AI feedback shows full text");
+if (detailHtml.includes(vm.runInContext("STR.aiUnreviewed", sandbox))) fail("collapsed AI feedback shows unreviewed mark");
 if (!detailHtml.includes("deleteAiLog('c1','ai-one')")) fail("saved AI feedback missing delete");
-if (!detailHtml.includes(vm.runInContext("STR.aiUnreviewed", sandbox))) fail("saved AI feedback missing unreviewed mark");
+const detailAiOpen = vm.runInContext("toggleAiLog('ai-one'); renderDetail('c1')", sandbox);
+if (!detailAiOpen.includes("ai-fb-second-line")) fail("expanded AI feedback missing full text");
+if (!detailAiOpen.includes(vm.runInContext("STR.aiUnreviewed", sandbox))) fail("expanded AI feedback missing unreviewed mark");
+vm.runInContext("toggleAiLog('ai-one')", sandbox);
 if (dayExportSmoke.includes("ai-fb-keep")) fail("AI feedback leaked into day export");
 if (dcExportSmoke.includes("ai-fb-keep")) fail("AI feedback leaked into discharge export");
+
+// Background fetch visibility (2026-07-22): the fetch keeps running after
+// leaving the detail screen — the board card carries a status badge while
+// loading / when done / on error, and opening the case consumes "done".
+vm.runInContext("VIEW.name='board'; VIEW.boardMode='board'; AI={caseId:'c1',status:'loading',text:''};", sandbox);
+if (!vm.runInContext("renderBoard()", sandbox).includes(vm.runInContext("STR.aiBadgeLoading", sandbox))) fail("board card missing AI loading badge");
+vm.runInContext("AI={caseId:'c1',status:'done',text:''};", sandbox);
+if (!vm.runInContext("renderBoard()", sandbox).includes(vm.runInContext("STR.aiBadgeDone", sandbox))) fail("board card missing AI done badge");
+vm.runInContext("AI={caseId:'c1',status:'error',text:'x'};", sandbox);
+if (!vm.runInContext("renderBoard()", sandbox).includes(vm.runInContext("STR.aiBadgeError", sandbox))) fail("board card missing AI error badge");
+vm.runInContext("AI={caseId:'c1',status:'done',text:''}; openDetail('c1');", sandbox);
+if (vm.runInContext("AI.status", sandbox) !== "") fail("openDetail did not clear the done badge");
+vm.runInContext("AI={caseId:'',status:'',text:''}; VIEW.name='board';", sandbox);
 
 // Chart sheets render.
 vm.runInContext("SHEET={name:'chartItem',draft:{caseId:'c1',catId:'cat-vital',itemId:'',kind:'value',name:'',startDate:'',endDate:'',date:''},syncBusy:false};", sandbox);
