@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseapp.com; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'; worker-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseapp.com https://wardbook-ai.naganomitsutoshi.workers.dev; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'; worker-src 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#f5f6f8">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1919,7 +1919,15 @@ Object.assign(STR, {
   admPanel:"\u5165\u9662\u6642\u8a18\u9332",
   admTextPh:"\u5165\u9662\u5951\u6a5f\u30fb\u4e3b\u8981\u65e2\u5f80\u30fbADL\u306a\u3069\u3092\u81ea\u7531\u306b\u8a18\u8f09",
   notesLabel:"\u65e5\u3005\u306e\u8a18\u9332",
-  notePh:"\u4eca\u65e5\u306e\u8a18\u9332\u3092\u8ffd\u52a0\uff08\u4f8b\uff1a\u89e3\u71b1\u30fb\u98df\u4e8b\u518d\u958b\uff09"
+  notePh:"\u4eca\u65e5\u306e\u8a18\u9332\u3092\u8ffd\u52a0\uff08\u4f8b\uff1a\u89e3\u71b1\u30fb\u98df\u4e8b\u518d\u958b\uff09",
+  aiPanel:"\u6307\u5c0e\u533bAI",
+  aiRun:"\u30d5\u30a3\u30fc\u30c9\u30d0\u30c3\u30af\u3092\u53d6\u5f97\uff08\u7d045\u5186/\u56de\uff09",
+  aiLoading:"\u554f\u3044\u5408\u308f\u305b\u4e2d\u2026\uff08\u6700\u59271\u5206\u307b\u3069\uff09",
+  aiUnreviewed:"\u203bAI\u751f\u6210\u30fb\u672a\u76e3\u4fee\u3002\u81e8\u5e8a\u5224\u65ad\u306e\u6839\u62e0\u306b\u3057\u306a\u3044",
+  aiEmpty:"\u5165\u9662\u6642\u8a18\u9332\u30fb\u65e5\u3005\u306e\u8a18\u9332\u304c\u7a7a\u3067\u3059",
+  aiTokenPrompt:"AI\u5408\u8a00\u8449\u3092\u5165\u529b\uff08\u521d\u56de\u306e\u307f\u30fb\u3053\u306e\u7aef\u672b\u306b\u4fdd\u5b58\uff09",
+  aiAuthError:"\u5408\u8a00\u8449\u304c\u4e00\u81f4\u3057\u307e\u305b\u3093\u3002\u3082\u3046\u4e00\u5ea6\u30dc\u30bf\u30f3\u3092\u62bc\u3057\u3066\u5165\u529b\u3057\u76f4\u3057\u3066\u304f\u3060\u3055\u3044",
+  aiError:"\u53d6\u5f97\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002\u901a\u4fe1\u74b0\u5883\u3092\u78ba\u8a8d\u3057\u3066\u518d\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044"
 });
 
 let DB = normalizeState(null);
@@ -3940,6 +3948,17 @@ function notesChrono(c){
   });
 }
 
+// AI relay payload — this allowlist IS the PII boundary (CEO decision
+// 2026-07-21): only the admission text and dated note bodies ever leave the
+// device. Label, ward/room, age band, sex and every other case field must
+// never be added here.
+function aiFeedbackPayload(c){
+  return {
+    adm: admOf(c).text || "",
+    notes: notesChrono(c).map(function(n){ return { date:n.date, text:n.text }; })
+  };
+}
+
 function formatSeedSnapshot(seed){
   var snap = isObj(seed && seed.snapshot) ? seed.snapshot : {};
   var parts = [];
@@ -4661,6 +4680,69 @@ function renderNoteList(c){
   }).join('');
 }
 
+// AI feedback (Phase 2): the app never holds the API key — the request goes
+// through the wardbook-ai Worker (key + gate passphrase live in Cloudflare
+// secrets). Result is ephemeral (not synced, not stored in DB).
+var AI_URL = "https://wardbook-ai.naganomitsutoshi.workers.dev";
+var AI = { caseId:"", status:"", text:"" };
+
+function aiToken(){
+  var t = "";
+  try { t = localStorage.getItem("wb_ai_token") || ""; } catch (e) {}
+  if (!t) {
+    t = String(window.prompt(STR.aiTokenPrompt) || "").trim();
+    if (t) { try { localStorage.setItem("wb_ai_token", t); } catch (e) {} }
+  }
+  return t;
+}
+
+function runAiFeedback(caseId){
+  var c = DB.cases.find(function(row){ return row.id === caseId; });
+  if (!c || (AI.caseId === caseId && AI.status === "loading")) return;
+  var payload = aiFeedbackPayload(c);
+  var hasBody = String(payload.adm).trim() || payload.notes.some(function(n){ return String(n.text || "").trim(); });
+  if (!hasBody) {
+    AI = { caseId:caseId, status:"error", text:STR.aiEmpty };
+    render();
+    return;
+  }
+  var token = aiToken();
+  if (!token) return;
+  AI = { caseId:caseId, status:"loading", text:"" };
+  render();
+  fetch(AI_URL, {
+    method:"POST",
+    headers:{ "Content-Type":"application/json", "X-WB-Token":token },
+    body:JSON.stringify(payload)
+  }).then(function(res){
+    if (res.status === 401) {
+      try { localStorage.removeItem("wb_ai_token"); } catch (e) {}
+      throw new Error("auth");
+    }
+    if (!res.ok) throw new Error("http" + res.status);
+    return res.json();
+  }).then(function(data){
+    AI = { caseId:caseId, status:"done", text:String((data && data.text) || "") };
+    render();
+  }).catch(function(err){
+    AI = { caseId:caseId, status:"error", text:(err && err.message === "auth") ? STR.aiAuthError : STR.aiError };
+    render();
+  });
+}
+
+function renderAiPanel(c){
+  var mine = AI.caseId === c.id;
+  var busy = mine && AI.status === "loading";
+  var body = '';
+  if (busy) body = '<div class="faint">' + esc(STR.aiLoading) + '</div>';
+  else if (mine && AI.status === "done") body = '<div class="text" style="white-space:pre-wrap">' + esc(AI.text) + '</div><div class="faint">' + esc(STR.aiUnreviewed) + '</div>';
+  else if (mine && AI.status === "error") body = '<div class="faint">' + esc(AI.text) + '</div>';
+  return '<section class="panelcard sec-ai"><div class="one">' + esc(STR.aiPanel) + '</div><div class="stack" style="margin-top:10px">' +
+    '<button class="ghostbtn" ' + (busy ? 'disabled ' : '') + 'onclick="runAiFeedback(\'' + esc(c.id) + '\')">' + esc(STR.aiRun) + '</button>' +
+    body +
+  '</div></section>';
+}
+
 function renderSectionCard(title, body, addId, placeholder, addFn, caseId, secClass){
   return '<section class="panelcard' + (secClass ? ' ' + secClass : '') + '"><div class="one">' + esc(title) + '</div><div class="stack" style="margin-top:10px">' +
     (body || '<div class="faint">-</div>') +
@@ -4819,6 +4901,7 @@ renderDetail = function(caseId){
     renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id, "sec-pending") +
     renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id, "sec-seeds") +
     renderSectionCard(STR.notesLabel, renderNoteList(c), "noteInput", STR.notePh, "addNote", c.id, "sec-note") +
+    renderAiPanel(c) +
     renderChartPanel(c) +
     (!dischargeInline ? dischargePanel : '') +
     '<section class="panelcard"><textarea id="dayExportText" class="reviewtextarea hidden" readonly>' + esc(dayExportText(c.id)) + '</textarea><button class="ghostbtn" onclick="copyDayExport(\'' + esc(c.id) + '\')">' + esc(STR.dayExport) + '</button></section>' +

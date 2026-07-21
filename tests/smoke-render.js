@@ -141,7 +141,8 @@ vm.runInContext(`
   "startDragCase", "dragMove", "dragEnd", "nearestDropIndex",
   "handlePopState", "navPush", "navUnwindAll", "toggleDensity",
   "openDayView", "shiftDayDate",
-  "addTask", "taskToPending", "updateTodoDue", "updateTodoTime"
+  "addTask", "taskToPending", "updateTodoDue", "updateTodoTime",
+  "runAiFeedback", "aiFeedbackPayload"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "function") fail("missing runtime fn " + name);
 });
@@ -389,6 +390,21 @@ if (!dayExportSmoke.includes("Admission note") || !dayExportSmoke.includes("dysp
 if (!dayExportSmoke.includes("2026-07-06 afebrile-day")) fail("day export missing daily note");
 const dcExportSmoke = vm.runInContext("dischargeExportText('c1')", sandbox);
 if (!dcExportSmoke.includes("Admission note") || !dcExportSmoke.includes("afebrile-day")) fail("discharge export missing admission/notes");
+
+// AI feedback panel (Phase 2, 2026-07-21): button on the detail, and the relay
+// payload allowlist IS the PII boundary — adm text + dated note bodies only.
+// Label / ward-room / age band / sex must never appear in the payload.
+if (!detailHtml.includes("runAiFeedback('c1')")) fail("detail missing AI feedback button");
+if (!detailHtml.includes(vm.runInContext("STR.aiPanel", sandbox))) fail("detail missing AI panel title");
+const aiPayload = JSON.parse(vm.runInContext("JSON.stringify(aiFeedbackPayload(DB.cases.find(c=>c.id==='c1')))", sandbox));
+if (Object.keys(aiPayload).sort().join(",") !== "adm,notes") fail("AI payload carries extra keys: " + Object.keys(aiPayload).join(","));
+if (!aiPayload.adm.includes("dyspnea")) fail("AI payload missing admission text");
+if (!aiPayload.notes.some((n) => n.text === "afebrile-day" && n.date === "2026-07-06")) fail("AI payload missing daily note");
+if (aiPayload.notes.some((n) => Object.keys(n).sort().join(",") !== "date,text")) fail("AI payload note carries extra keys");
+const aiPayloadStr = JSON.stringify(aiPayload);
+["haien", "3E-305", "80s", '"sex"', "CAP"].forEach((leak) => {
+  if (aiPayloadStr.includes(leak)) fail("AI payload leaked case metadata: " + leak);
+});
 
 // Chart sheets render.
 vm.runInContext("SHEET={name:'chartItem',draft:{caseId:'c1',catId:'cat-vital',itemId:'',kind:'value',name:'',startDate:'',endDate:'',date:''},syncBusy:false};", sandbox);
