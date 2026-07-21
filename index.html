@@ -622,6 +622,13 @@ function normalizeEntryContent(raw, ctx){
     var noteDate = safeDate(row.date, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
     return { kind:"note", id:id, text:text, date:noteDate };
   }
+  if (row.kind === "ai") {
+    if (!text) return null;
+    // Saved AI feedback (Phase 2.1, CEO 2026-07-21): date fixed at creation,
+    // text immutable. Rides the entries store like notes (E2E-encrypted sync).
+    var aiDate = safeDate(row.date, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
+    return { kind:"ai", id:id, text:text, date:aiDate };
+  }
   if (row.kind === "seed") {
     if (!text) return null;
     var snap = isObj(row.snapshot) ? row.snapshot : {};
@@ -717,6 +724,7 @@ function entriesFromMirrors(c, ctx){
   cloneArr(c && c.seeds).forEach(function(x){ rows.push({ kind:"seed", id:x.id, text:x.text, createdOn:x.createdOn, snapshot:x.snapshot, sentAt:x.sentAt }); });
   cloneArr(c && c.problems).forEach(function(x){ rows.push({ kind:"problem", id:x.id, text:x.text, status:x.status }); });
   cloneArr(c && c.notes).forEach(function(x){ rows.push({ kind:"note", id:x.id, text:x.text, date:x.date }); });
+  cloneArr(c && c.aiLogs).forEach(function(x){ rows.push({ kind:"ai", id:x.id, text:x.text, date:x.date }); });
   cloneArr(c && c.chart && c.chart.items).forEach(function(x){
     var kind = x.kind === "band" ? "chartBand" : x.kind === "event" ? "chartEvent" : "chartValue";
     var row = { kind:kind, id:x.id, catId:x.catId, name:x.name };
@@ -742,6 +750,7 @@ function entryRebuildMirrors(c){
   });
   c.problems = live.filter(function(e){ return e.kind === "problem"; }).map(function(e){ return { id:e.id, text:e.text, status:e.status }; });
   c.notes = live.filter(function(e){ return e.kind === "note"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
+  c.aiLogs = live.filter(function(e){ return e.kind === "ai"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
   c.chart = { items: live.filter(function(e){ return e.kind === "chartValue" || e.kind === "chartBand" || e.kind === "chartEvent"; }).map(function(e){
     if (e.kind === "chartValue") return { id:e.id, catId:e.catId, kind:"value", name:e.name, values:JSON.parse(JSON.stringify(e.values)), planned:JSON.parse(JSON.stringify(e.planned)) };
     if (e.kind === "chartBand") return { id:e.id, catId:e.catId, kind:"band", name:e.name, startDate:e.startDate, endDate:e.endDate };
@@ -885,6 +894,7 @@ function normalizeCase(raw, nowIso, todayIso){
   out.seeds = mirrorRows(src.seeds, "seed");
   out.problems = mirrorRows(src.problems, "problem");
   out.notes = mirrorRows(src.notes, "note");
+  out.aiLogs = mirrorRows(src.aiLogs, "ai");
   out.discharge = {
     checklist:isObj(src.discharge && src.discharge.checklist) ? src.discharge.checklist : {},
     plannedOn:src.discharge && src.discharge.plannedOn ? safeDate(src.discharge.plannedOn, null) : null
@@ -932,7 +942,7 @@ function trashCutoffIso(nowIso){
 
 function normalizeTrashEntry(entry, nowIso){
   var row = isObj(entry) ? entry : {};
-  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true, "problem":true, "note":true, "chartItem":true };
+  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true, "problem":true, "note":true, "ai":true, "chartItem":true };
   // Entries of removed types (appt / chartMed / chartEvent) are dropped, not
   // coerced to "case": coercion would turn their payload into a garbage case on restore.
   if (!types[row.type]) return null;
@@ -2166,6 +2176,7 @@ function trashTypeLabel(type){
   if (type === "seed") return DB.config.labels.seeds;
   if (type === "problem") return STR.problemsLabel;
   if (type === "note") return STR.notesLabel;
+  if (type === "ai") return STR.aiPanel;
   if (type === "chartItem") return STR.chartPanel;
   return type;
 }
@@ -2211,6 +2222,7 @@ function restoreTrash(trashId){
     else if (entry.type === "seed") c.seeds.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "problem") c.problems.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "note") c.notes.push(JSON.parse(JSON.stringify(entry.payload)));
+    else if (entry.type === "ai") c.aiLogs.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "chartItem") {
       c.chart = normalizeChart(c.chart);
       c.chart.items.push(JSON.parse(JSON.stringify(entry.payload)));
@@ -4875,7 +4887,9 @@ function renderNoteList(c){
 
 // AI feedback (Phase 2): the app never holds the API key — the request goes
 // through the wardbook-ai Worker (key + gate passphrase live in Cloudflare
-// secrets). Result is ephemeral (not synced, not stored in DB).
+// secrets). Results are saved per case as kind:"ai" entries (CEO 2026-07-21:
+// storage approved; E2E-encrypted like all case text). Saved feedback is
+// NEVER fed back into aiFeedbackPayload and NEVER included in exports.
 var AI_URL = "https://wardbook-ai.naganomitsutoshi.workers.dev";
 var AI = { caseId:"", status:"", text:"" };
 
@@ -4915,8 +4929,11 @@ function runAiFeedback(caseId){
     if (!res.ok) throw new Error("http" + res.status);
     return res.json();
   }).then(function(data){
-    AI = { caseId:caseId, status:"done", text:String((data && data.text) || "") };
-    render();
+    var text = String((data && data.text) || "").trim();
+    if (!text) throw new Error("empty");
+    AI = { caseId:caseId, status:"", text:"" };
+    // Persist via the shared list CRUD so entries absorption + sync ride along.
+    addListItem("aiLogs", caseId, text, null, function(t){ return { id:uid(), text:t, date:todayISO() }; });
   }).catch(function(err){
     AI = { caseId:caseId, status:"error", text:(err && err.message === "auth") ? STR.aiAuthError : STR.aiError };
     render();
@@ -4926,14 +4943,23 @@ function runAiFeedback(caseId){
 function renderAiPanel(c){
   var mine = AI.caseId === c.id;
   var busy = mine && AI.status === "loading";
-  var body = '';
-  if (busy) body = '<div class="faint">' + esc(STR.aiLoading) + '</div>';
-  else if (mine && AI.status === "done") body = '<div class="text" style="white-space:pre-wrap">' + esc(AI.text) + '</div><div class="faint">' + esc(STR.aiUnreviewed) + '</div>';
-  else if (mine && AI.status === "error") body = '<div class="faint">' + esc(AI.text) + '</div>';
+  var status = '';
+  if (busy) status = '<div class="faint">' + esc(STR.aiLoading) + '</div>';
+  else if (mine && AI.status === "error") status = '<div class="faint">' + esc(AI.text) + '</div>';
+  var logs = cloneArr(c.aiLogs).sort(function(a, b){
+    if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+    return a.id < b.id ? 1 : -1;
+  }).map(function(item){
+    return '<div class="lineitem"><div class="linegrow"><div class="text" style="white-space:pre-wrap">' + esc(item.text) + '</div><div class="faint">' + esc(item.date + ' ' + STR.aiUnreviewed) + '</div></div><button class="iconbtn" onclick="deleteAiLog(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
+  }).join('');
   return '<section class="panelcard sec-ai"><div class="one">' + esc(STR.aiPanel) + '</div><div class="stack" style="margin-top:10px">' +
     '<button class="ghostbtn" ' + (busy ? 'disabled ' : '') + 'onclick="runAiFeedback(\'' + esc(c.id) + '\')">' + esc(STR.aiRun) + '</button>' +
-    body +
+    status + logs +
   '</div></section>';
+}
+
+function deleteAiLog(caseId, itemId){
+  deleteListItem("aiLogs", "ai", caseId, itemId);
 }
 
 function renderSectionCard(title, body, addId, placeholder, addFn, caseId, secClass){

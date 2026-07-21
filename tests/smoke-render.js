@@ -115,6 +115,7 @@ vm.runInContext(`
         dxTags:["cap"], order:1, lastTouchedAt:"2026-07-06T18:00:00.000Z",
         problems:[{ id:"prob-one", text:"CHF", status:"active" }, { id:"prob-two", text:"AKI", status:"resolved" }],
         notes:[{ id:"note-one", text:"afebrile-day", date:"2026-07-06" }],
+        aiLogs:[{ id:"ai-one", text:"ai-fb-keep", date:"2026-07-07" }],
         adm:{ trigger:"dyspnea", pmh:["DM"], adl:"indep", note:"adm-note" },
         discharge:{ checklist:{ summary:true }, plannedOn:"2026-07-10" }
       },
@@ -142,7 +143,7 @@ vm.runInContext(`
   "handlePopState", "navPush", "navUnwindAll", "toggleDensity",
   "openDayView", "shiftDayDate",
   "addTask", "taskToPending", "updateTodoDue", "updateTodoTime",
-  "runAiFeedback", "aiFeedbackPayload"
+  "runAiFeedback", "aiFeedbackPayload", "deleteAiLog"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "function") fail("missing runtime fn " + name);
 });
@@ -434,9 +435,18 @@ if (!aiPayload.adm.includes("dyspnea")) fail("AI payload missing admission text"
 if (!aiPayload.notes.some((n) => n.text === "afebrile-day" && n.date === "2026-07-06")) fail("AI payload missing daily note");
 if (aiPayload.notes.some((n) => Object.keys(n).sort().join(",") !== "date,text")) fail("AI payload note carries extra keys");
 const aiPayloadStr = JSON.stringify(aiPayload);
-["haien", "3E-305", "80s", '"sex"', "CAP"].forEach((leak) => {
+["haien", "3E-305", "80s", '"sex"', "CAP", "ai-fb-keep"].forEach((leak) => {
   if (aiPayloadStr.includes(leak)) fail("AI payload leaked case metadata: " + leak);
 });
+
+// Saved AI feedback (Phase 2.1, 2026-07-21): shown in the panel with the
+// unreviewed mark, deletable to trash — but NEVER exported and (above) never
+// fed back into the AI payload.
+if (!detailHtml.includes("ai-fb-keep")) fail("detail missing saved AI feedback");
+if (!detailHtml.includes("deleteAiLog('c1','ai-one')")) fail("saved AI feedback missing delete");
+if (!detailHtml.includes(vm.runInContext("STR.aiUnreviewed", sandbox))) fail("saved AI feedback missing unreviewed mark");
+if (dayExportSmoke.includes("ai-fb-keep")) fail("AI feedback leaked into day export");
+if (dcExportSmoke.includes("ai-fb-keep")) fail("AI feedback leaked into discharge export");
 
 // Chart sheets render.
 vm.runInContext("SHEET={name:'chartItem',draft:{caseId:'c1',catId:'cat-vital',itemId:'',kind:'value',name:'',startDate:'',endDate:'',date:''},syncBusy:false};", sandbox);

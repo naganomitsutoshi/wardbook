@@ -651,6 +651,24 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(JSON.stringify(bareCase.adm), JSON.stringify({ text:"" }));
   assert.strictEqual(bareCase.problems.length, 0);
   assert.strictEqual(bareCase.notes.length, 0);
+  assert.strictEqual(bareCase.aiLogs.length, 0);
+  // Saved AI feedback (kind:"ai", 2026-07-21): folds like notes, empty text
+  // drops, mirror rebuilds, missing date defaults deterministically, and
+  // re-normalize is byte-stable.
+  const aiCase = L.normalizeCase({
+    id:"ca", label:"cap", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-05T10:00:00.000Z",
+    aiLogs:[
+      { id:"ai1", text:"fb-one", date:"2026-07-07" },
+      { id:"ai2", text:"" },
+      { id:"ai3", text:"fb-dateless" }
+    ]
+  }, "2026-07-08T10:00:00.000Z", "2026-07-08");
+  assert.strictEqual(aiCase.entries.filter((e) => e.kind === "ai").length, 2);
+  assert.strictEqual(aiCase.aiLogs.length, 2);
+  assert.strictEqual(aiCase.aiLogs.find((x) => x.id === "ai1").date, "2026-07-07");
+  assert.strictEqual(aiCase.aiLogs.find((x) => x.id === "ai3").date, "2026-07-08");
+  const aiTwice = L.normalizeCase(JSON.parse(JSON.stringify(aiCase)), "2026-07-08T11:00:00.000Z", "2026-07-08");
+  assert.strictEqual(JSON.stringify(aiTwice), JSON.stringify(aiCase));
   // Problem tombstone/merge is kind-agnostic (rides the shared merge).
   const prA = { kind:"problem", id:"q", text:"a", status:"active", createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-02T00:00:00.000Z" };
   const prB = { kind:"problem", id:"q", text:"b", status:"resolved", createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-03T00:00:00.000Z" };
