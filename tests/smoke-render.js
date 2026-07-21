@@ -143,7 +143,8 @@ vm.runInContext(`
   "handlePopState", "navPush", "navUnwindAll", "toggleDensity",
   "openDayView", "shiftDayDate",
   "addTask", "taskToPending", "updateTodoDue", "updateTodoTime",
-  "runAiFeedback", "aiFeedbackPayload", "deleteAiLog"
+  "runAiFeedback", "aiFeedbackPayload", "deleteAiLog",
+  "aiPromptText", "saveAiPrompt", "resetAiPrompt"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "function") fail("missing runtime fn " + name);
 });
@@ -550,10 +551,27 @@ if (settingsHtml.includes("toggleChartGroupPref")) fail("settings still has old 
 if (!settingsHtml.includes("updateChartCatName(")) fail("settings missing chart category rename inputs");
 if (!settingsHtml.includes("addChartCat('value')") || !settingsHtml.includes("addChartCat('event')")) fail("settings missing add-category buttons");
 if (!settingsHtml.includes("toggleChartCatPref('cat-vital'")) fail("settings missing chart visibility prefs");
-["stageEditor", "labelEditor", "cardPrefs", "themePrefs", "chartItems", "chartPrefs"].forEach((key) => {
+["stageEditor", "labelEditor", "cardPrefs", "themePrefs", "chartItems", "chartPrefs", "aiPromptSection"].forEach((key) => {
   const label = vm.runInContext(`STR.${key}`, sandbox);
   if (!settingsHtml.includes(label)) fail("settings missing " + key);
 });
+
+// AI instruction prompt (2026-07-22): the default text is visible + editable in
+// settings, a device-local override wins, and reset falls back to the default.
+if (!settingsHtml.includes("saveAiPrompt(")) fail("settings missing AI prompt editor");
+if (!settingsHtml.includes("resetAiPrompt()")) fail("settings missing AI prompt reset");
+if (!settingsHtml.includes(vm.runInContext("STR.aiPromptDefault.split('\\n')[0]", sandbox))) fail("settings missing default AI prompt text");
+vm.runInContext("localStorage.setItem('wb_ai_prompt','custom-ai-style')", sandbox);
+if (vm.runInContext("aiPromptText()", sandbox) !== "custom-ai-style") fail("custom AI prompt not returned");
+if (!vm.runInContext("renderSettingsSheet()", sandbox).includes("custom-ai-style")) fail("settings not showing custom AI prompt");
+// The relay request body = allowlisted payload + the instruction text (sys),
+// nothing else. Captured via a stub fetch; the promise never resolves.
+vm.runInContext("localStorage.setItem('wb_ai_token','tok'); var AI_CAPTURED=''; fetch=function(url,opts){ AI_CAPTURED=opts.body; return new Promise(function(){}); }; runAiFeedback('c1');", sandbox);
+const aiReqBody = JSON.parse(vm.runInContext("AI_CAPTURED", sandbox));
+if (Object.keys(aiReqBody).sort().join(",") !== "adm,notes,sys") fail("AI request body keys: " + Object.keys(aiReqBody).join(","));
+if (aiReqBody.sys !== "custom-ai-style") fail("AI request not carrying the custom instruction");
+vm.runInContext("AI={caseId:'',status:'',text:''}; saveAiPrompt('')", sandbox);
+if (vm.runInContext("aiPromptText()===STR.aiPromptDefault", sandbox) !== true) fail("AI prompt reset did not restore default");
 
 vm.runInContext("REVIEW = { ids:['c1'], index:0, mode:'done', empty:false, noteDraft:'', copied:false, outboxStatus:'status-line' }", sandbox);
 const reviewDone = vm.runInContext("renderReviewDone()", sandbox);
