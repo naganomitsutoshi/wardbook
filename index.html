@@ -611,6 +611,13 @@ function normalizeEntryContent(raw, ctx){
     if (!text) return null;
     return { kind:"problem", id:id, text:text, status:row.status === "resolved" ? "resolved" : "active" };
   }
+  if (row.kind === "note") {
+    if (!text) return null;
+    // Daily note: date fixed at creation. createdAt fallback keeps the
+    // conversion deterministic for rows arriving without a date.
+    var noteDate = safeDate(row.date, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
+    return { kind:"note", id:id, text:text, date:noteDate };
+  }
   if (row.kind === "seed") {
     if (!text) return null;
     var snap = isObj(row.snapshot) ? row.snapshot : {};
@@ -705,6 +712,7 @@ function entriesFromMirrors(c, ctx){
   cloneArr(c && c.pendings).forEach(function(x){ rows.push({ kind:"pending", id:x.id, text:x.text, backOn:x.backOn }); });
   cloneArr(c && c.seeds).forEach(function(x){ rows.push({ kind:"seed", id:x.id, text:x.text, createdOn:x.createdOn, snapshot:x.snapshot, sentAt:x.sentAt }); });
   cloneArr(c && c.problems).forEach(function(x){ rows.push({ kind:"problem", id:x.id, text:x.text, status:x.status }); });
+  cloneArr(c && c.notes).forEach(function(x){ rows.push({ kind:"note", id:x.id, text:x.text, date:x.date }); });
   cloneArr(c && c.chart && c.chart.items).forEach(function(x){
     var kind = x.kind === "band" ? "chartBand" : x.kind === "event" ? "chartEvent" : "chartValue";
     var row = { kind:kind, id:x.id, catId:x.catId, name:x.name };
@@ -729,6 +737,7 @@ function entryRebuildMirrors(c){
     return { id:e.id, text:e.text, createdOn:e.createdOn, snapshot:JSON.parse(JSON.stringify(e.snapshot)), sentAt:e.sentAt };
   });
   c.problems = live.filter(function(e){ return e.kind === "problem"; }).map(function(e){ return { id:e.id, text:e.text, status:e.status }; });
+  c.notes = live.filter(function(e){ return e.kind === "note"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
   c.chart = { items: live.filter(function(e){ return e.kind === "chartValue" || e.kind === "chartBand" || e.kind === "chartEvent"; }).map(function(e){
     if (e.kind === "chartValue") return { id:e.id, catId:e.catId, kind:"value", name:e.name, values:JSON.parse(JSON.stringify(e.values)), planned:JSON.parse(JSON.stringify(e.planned)) };
     if (e.kind === "chartBand") return { id:e.id, catId:e.catId, kind:"band", name:e.name, startDate:e.startDate, endDate:e.endDate };
@@ -871,16 +880,28 @@ function normalizeCase(raw, nowIso, todayIso){
   out.stageId = out.stageLog[out.stageLog.length - 1].stageId || out.stageId;
   out.seeds = mirrorRows(src.seeds, "seed");
   out.problems = mirrorRows(src.problems, "problem");
+  out.notes = mirrorRows(src.notes, "note");
   out.discharge = {
     checklist:isObj(src.discharge && src.discharge.checklist) ? src.discharge.checklist : {},
     plannedOn:src.discharge && src.discharge.plannedOn ? safeDate(src.discharge.plannedOn, null) : null
   };
-  out.adm = {
-    trigger:typeof (src.adm && src.adm.trigger) === "string" ? src.adm.trigger : "",
-    pmh:cloneArr(src.adm && src.adm.pmh).filter(function(x){ return typeof x === "string" && x; }),
-    adl:typeof (src.adm && src.adm.adl) === "string" ? src.adm.adl : "",
-    note:typeof (src.adm && src.adm.note) === "string" ? src.adm.note : ""
-  };
+  // Admission record collapsed to one free-text field (2026-07-21 CEO
+  // decision). Legacy 4-field payloads (trigger/pmh/adl/note) merge into text
+  // deterministically, so both devices converge on identical bytes.
+  out.adm = (function(){
+    var admSrc = isObj(src.adm) ? src.adm : {};
+    var admText = typeof admSrc.text === "string" ? admSrc.text : "";
+    if (!admText) {
+      var admParts = [];
+      if (typeof admSrc.trigger === "string" && admSrc.trigger) admParts.push("入院契機：" + admSrc.trigger);
+      var admPmh = cloneArr(admSrc.pmh).filter(function(x){ return typeof x === "string" && x; });
+      if (admPmh.length) admParts.push("主要既往：" + admPmh.join("・"));
+      if (typeof admSrc.adl === "string" && admSrc.adl) admParts.push("ADL：" + admSrc.adl);
+      if (typeof admSrc.note === "string" && admSrc.note) admParts.push("一言：" + admSrc.note);
+      admText = admParts.join("\n");
+    }
+    return { text: admText };
+  })();
   out.order = toNum(src.order, 0);
   out.lastTouchedAt = typeof src.lastTouchedAt === "string" && src.lastTouchedAt ? src.lastTouchedAt : nowIso;
   // The chart was reintroduced with a new schema (SPEC-E): normalizeChart only
@@ -907,7 +928,7 @@ function trashCutoffIso(nowIso){
 
 function normalizeTrashEntry(entry, nowIso){
   var row = isObj(entry) ? entry : {};
-  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true, "problem":true, "chartItem":true };
+  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true, "problem":true, "note":true, "chartItem":true };
   // Entries of removed types (appt / chartMed / chartEvent) are dropped, not
   // coerced to "case": coercion would turn their payload into a garbage case on restore.
   if (!types[row.type]) return null;
@@ -1896,15 +1917,9 @@ Object.assign(STR, {
   problemResolvedTag:"\u89e3\u6c7a\u6e08\u307f",
   problemEmpty:"\u30d7\u30ed\u30d6\u30ec\u30e0\u306f\u672a\u767b\u9332\u3067\u3059",
   admPanel:"\u5165\u9662\u6642\u8a18\u9332",
-  admTrigger:"\u5165\u9662\u5951\u6a5f",
-  admTriggerPh:"\u4f8b\uff1a\u80ba\u708e\u30fb\u8ee2\u5012\u9aa8\u6298",
-  admPmh:"\u4e3b\u8981\u65e2\u5f80",
-  admPmhPh:"\u65e2\u5f80\u30bf\u30b0\uff08\u4f8b\uff1aDM\u30fbCKD\uff09",
-  admAdl:"ADL",
-  admAdlPh:"\u4f8b\uff1a\u81ea\u7acb\uff0f\u4e00\u90e8\u4ecb\u52a9",
-  admNote:"\u4e00\u8a00",
-  admNotePh:"\u5165\u9662\u6642\u306e\u88dc\u8db3\uff08\u4efb\u610f\uff09",
-  admEmpty:"\u5165\u9662\u6642\u8a18\u9332\u306f\u672a\u5165\u529b\u3067\u3059"
+  admTextPh:"\u5165\u9662\u5951\u6a5f\u30fb\u4e3b\u8981\u65e2\u5f80\u30fbADL\u306a\u3069\u3092\u81ea\u7531\u306b\u8a18\u8f09",
+  notesLabel:"\u65e5\u3005\u306e\u8a18\u9332",
+  notePh:"\u4eca\u65e5\u306e\u8a18\u9332\u3092\u8ffd\u52a0\uff08\u4f8b\uff1a\u89e3\u71b1\u30fb\u98df\u4e8b\u518d\u958b\uff09"
 });
 
 let DB = normalizeState(null);
@@ -2064,6 +2079,7 @@ function trashTypeLabel(type){
   if (type === "pending") return DB.config.labels.pending;
   if (type === "seed") return DB.config.labels.seeds;
   if (type === "problem") return STR.problemsLabel;
+  if (type === "note") return STR.notesLabel;
   if (type === "chartItem") return STR.chartPanel;
   return type;
 }
@@ -2108,6 +2124,7 @@ function restoreTrash(trashId){
     else if (entry.type === "pending") c.pendings.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "seed") c.seeds.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "problem") c.problems.push(JSON.parse(JSON.stringify(entry.payload)));
+    else if (entry.type === "note") c.notes.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "chartItem") {
       c.chart = normalizeChart(c.chart);
       c.chart.items.push(JSON.parse(JSON.stringify(entry.payload)));
@@ -3177,29 +3194,14 @@ function updateCaseRoom(caseId, value){
 
 // Admission record (adm) is a plain case field like room/discharge - edited via
 // mutateCase directly (no entries reconcile), rides the encrypted sync blob.
-function admOf(c){ return isObj(c && c.adm) ? c.adm : { trigger:"", pmh:[], adl:"", note:"" }; }
+// Collapsed to one free-text field 2026-07-21; legacy 4-field payloads are
+// merged into text by normalizeCase.
+function admOf(c){ return isObj(c && c.adm) && typeof c.adm.text === "string" ? c.adm : { text:"" }; }
 
-function updateCaseAdm(caseId, field, value){
+function updateCaseAdm(caseId, value){
   var v = String(value || "");
-  if (caseFieldUnchanged(caseId, function(c){ return isObj(c.adm) && c.adm[field] === v; })) return;
-  mutateCase(caseId, function(c){ if (!isObj(c.adm)) c.adm = { trigger:"", pmh:[], adl:"", note:"" }; c.adm[field] = v; });
-}
-
-function addAdmPmh(caseId, value){
-  var text = String(value || "").trim();
-  if (!text) return;
-  queueFocusTarget("admPmhInput", false);
-  mutateCase(caseId, function(c){
-    if (!isObj(c.adm)) c.adm = { trigger:"", pmh:[], adl:"", note:"" };
-    if (!Array.isArray(c.adm.pmh)) c.adm.pmh = [];
-    if (!c.adm.pmh.includes(text)) c.adm.pmh.push(text);
-  });
-}
-
-function removeAdmPmh(caseId, index){
-  mutateCase(caseId, function(c){
-    if (isObj(c.adm) && Array.isArray(c.adm.pmh)) c.adm.pmh = c.adm.pmh.filter(function(x, i){ return i !== index; });
-  });
+  if (caseFieldUnchanged(caseId, function(c){ return isObj(c.adm) && c.adm.text === v; })) return;
+  mutateCase(caseId, function(c){ c.adm = { text:v }; });
 }
 
 function addDxTag(caseId, value){
@@ -3264,6 +3266,20 @@ function toggleProblemStatus(caseId, itemId){
 
 function deleteProblem(caseId, itemId){
   deleteListItem("problems", "problem", caseId, itemId);
+}
+
+// Daily notes: a projection of the entries store (kind:"note"), same CRUD
+// family as problems. The date is stamped at creation and never edited.
+function addNote(caseId, value){
+  return addListItem("notes", caseId, value, "noteInput", function(text){ return { id:uid(), text:text, date:todayISO() }; });
+}
+
+function updateNoteText(caseId, itemId, value){
+  patchListItem("notes", caseId, itemId, function(item){ item.text = String(value || ""); });
+}
+
+function deleteNote(caseId, itemId){
+  deleteListItem("notes", "note", caseId, itemId);
 }
 
 function toggleTodo(caseId, itemId){
@@ -3914,6 +3930,15 @@ function fmtTaskLine(item){
   return "- " + item.text + (when ? " (" + when + ")" : "") + (item.done ? " [done]" : "");
 }
 function fmtPendingLine(item){ return "- " + item.text + (item.backOn ? " (" + item.backOn + ")" : ""); }
+function fmtNoteLine(item){ return "- " + item.date + " " + item.text; }
+
+// Exports read notes oldest-first (chronological narrative for AI feedback).
+function notesChrono(c){
+  return cloneArr(c.notes).sort(function(a, b){
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    return a.id < b.id ? -1 : 1;
+  });
+}
 
 function formatSeedSnapshot(seed){
   var snap = isObj(seed && seed.snapshot) ? seed.snapshot : {};
@@ -3941,6 +3966,8 @@ function dischargeExportText(caseId){
     lines.push("- " + item.date + " " + stageNameFor(item.stageId));
   });
   lines.push("", "## Phase", c.phaseNote || "-");
+  lines.push("", "## Admission note", admOf(c).text || "-");
+  pushSection(lines, "Daily notes", notesChrono(c), fmtNoteLine);
   pushSection(lines, "Remaining Task", cloneArr(c.todos).filter(function(item){ return item && !item.done; }), fmtTaskLine);
   pushSection(lines, "Pending", cloneArr(c.pendings), fmtPendingLine);
   pushSection(lines, "Seeds", cloneArr(c.seeds), function(seed){
@@ -3962,6 +3989,8 @@ function dayExportText(caseId){
     "- Stage: " + stageNameFor(c.stageId),
     "- Phase: " + (c.phaseNote || "-")
   ];
+  lines.push("", "## Admission note", admOf(c).text || "-");
+  pushSection(lines, "Daily notes", notesChrono(c), fmtNoteLine);
   pushSection(lines, "Task", cloneArr(c.todos), fmtTaskLine);
   pushSection(lines, "Pending", cloneArr(c.pendings), fmtPendingLine);
   pushSection(lines, "Seeds", cloneArr(c.seeds), function(seed){ return "- " + seed.text; });
@@ -4607,23 +4636,29 @@ function renderProblemList(c){
 }
 
 // Admission record: collapsible panel at the top of the detail (day-0 context).
-// Half-structured: trigger/adl/note short fields + pmh tags. piiWarning re-shown
-// on the free-text note. Photos/HPI-carbon-copy intentionally out of scope.
+// One free-text field (2026-07-21, was half-structured 4 fields) — also the AI
+// feedback source, so piiWarning stays attached. Photos remain out of scope.
 function renderAdmissionPanel(c){
   var a = admOf(c);
   var open = !!VIEW.admOpen;
   var head = '<div class="collapsehead" onclick="toggleAdmPanel()"><div class="one">' + esc(STR.admPanel) + '</div><div class="meta">' + (open ? '-' : '+') + '</div></div>';
   if (!open) return '<section class="panelcard">' + head + '</section>';
-  var chips = cloneArr(a.pmh).map(function(t, i){
-    return '<span class="tag">' + esc(t) + '<button onclick="removeAdmPmh(\'' + esc(c.id) + '\',' + i + ')">×</button></span>';
-  }).join('');
   var body = '<div class="stack" style="margin-top:10px">' +
-    '<div class="field"><div class="fieldlabel">' + esc(STR.admTrigger) + '</div><input class="input" value="' + esc(a.trigger || '') + '" placeholder="' + esc(STR.admTriggerPh) + '" onblur="updateCaseAdm(\'' + esc(c.id) + '\',\'trigger\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div>' +
-    '<div class="field"><div class="fieldlabel">' + esc(STR.admPmh) + '</div><div class="chips">' + chips + '</div><div class="row" style="margin-top:8px"><input id="admPmhInput" class="input" placeholder="' + esc(STR.admPmhPh) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addAdmPmh(\'' + esc(c.id) + '\',this.value);this.value=\'\'}"><button class="ghostbtn" onclick="addAdmPmh(\'' + esc(c.id) + '\',document.getElementById(\'admPmhInput\').value);document.getElementById(\'admPmhInput\').value=\'\'">＋</button></div></div>' +
-    '<div class="field"><div class="fieldlabel">' + esc(STR.admAdl) + '</div><input class="input" value="' + esc(a.adl || '') + '" placeholder="' + esc(STR.admAdlPh) + '" onblur="updateCaseAdm(\'' + esc(c.id) + '\',\'adl\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div>' +
-    '<div class="field"><div class="fieldlabel">' + esc(STR.admNote) + '</div><input class="input" value="' + esc(a.note || '') + '" placeholder="' + esc(STR.admNotePh) + '" onblur="updateCaseAdm(\'' + esc(c.id) + '\',\'note\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"><div class="note">' + esc(STR.piiWarning) + '</div></div>' +
+    '<div class="field"><textarea class="input" rows="5" placeholder="' + esc(STR.admTextPh) + '" onblur="updateCaseAdm(\'' + esc(c.id) + '\',this.value)">' + esc(a.text || '') + '</textarea><div class="note">' + esc(STR.piiWarning) + '</div></div>' +
   '</div>';
   return '<section class="panelcard">' + head + body + '</section>';
+}
+
+// Daily notes: date-stamped free text, newest first. Text stays editable
+// inline; the date is fixed at creation. Never projected into week/day views
+// (局面ファースト — schedule stays Task/Pending only).
+function renderNoteList(c){
+  return cloneArr(c.notes).sort(function(a, b){
+    if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+    return a.id < b.id ? 1 : -1;
+  }).map(function(item){
+    return '<div class="lineitem"><div class="linegrow"><input class="input subedit" value="' + esc(item.text) + '" onchange="updateNoteText(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)"><div class="faint">' + esc(item.date) + '</div></div><button class="iconbtn" onclick="deleteNote(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
+  }).join('');
 }
 
 function renderSectionCard(title, body, addId, placeholder, addFn, caseId, secClass){
@@ -4783,6 +4818,7 @@ renderDetail = function(caseId){
     renderSectionCard(DB.config.labels.task, renderTaskList(c), "taskInput", STR.taskPh, "addTask", c.id, "sec-task") +
     renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id, "sec-pending") +
     renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id, "sec-seeds") +
+    renderSectionCard(STR.notesLabel, renderNoteList(c), "noteInput", STR.notePh, "addNote", c.id, "sec-note") +
     renderChartPanel(c) +
     (!dischargeInline ? dischargePanel : '') +
     '<section class="panelcard"><textarea id="dayExportText" class="reviewtextarea hidden" readonly>' + esc(dayExportText(c.id)) + '</textarea><button class="ghostbtn" onclick="copyDayExport(\'' + esc(c.id) + '\')">' + esc(STR.dayExport) + '</button></section>' +

@@ -614,7 +614,10 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   // ---- problem entries + admission record (2026-07-11) --------------------
 
   // Problems fold into entries like pending; mirror rebuilds; status coerces to
-  // active; empty-text problems drop; adm normalizes with empty pmh tags filtered.
+  // active; empty-text problems drop. Legacy 4-field adm merges into one text
+  // (2026-07-21 collapse) with empty pmh tags filtered. Daily notes (kind:"note")
+  // fold like problems; empty text drops; a missing date defaults
+  // deterministically (todayIso) so both devices converge.
   const admProbCase = L.normalizeCase({
     id:"cp", label:"chf", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-05T10:00:00.000Z",
     problems:[
@@ -622,22 +625,32 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
       { id:"pr2", text:"AKI", status:"bogus" },
       { id:"pr3", text:"" }
     ],
+    notes:[
+      { id:"nt1", text:"afebrile", date:"2026-07-07" },
+      { id:"nt2", text:"" },
+      { id:"nt3", text:"dateless" }
+    ],
     adm:{ trigger:"dyspnea", pmh:["DM", "CKD", ""], adl:"partial", note:"n" }
   }, "2026-07-08T10:00:00.000Z", "2026-07-08");
   assert.strictEqual(admProbCase.entries.filter((e) => e.kind === "problem").length, 2);
   assert.strictEqual(admProbCase.problems.length, 2);
   assert.strictEqual(admProbCase.problems.find((p) => p.id === "pr2").status, "active");
-  assert.strictEqual(admProbCase.adm.trigger, "dyspnea");
-  assert.strictEqual(admProbCase.adm.pmh.join(","), "DM,CKD");
-  assert.strictEqual(admProbCase.adm.adl, "partial");
-  assert.strictEqual(admProbCase.adm.note, "n");
+  assert.strictEqual(admProbCase.adm.text, "入院契機：dyspnea\n主要既往：DM・CKD\nADL：partial\n一言：n");
+  assert.strictEqual(admProbCase.entries.filter((e) => e.kind === "note").length, 2);
+  assert.strictEqual(admProbCase.notes.find((n) => n.id === "nt1").date, "2026-07-07");
+  assert.strictEqual(admProbCase.notes.find((n) => n.id === "nt3").date, "2026-07-08");
+  // One-field adm payloads pass through untouched (legacy merge only fires
+  // when text is absent).
+  const admNewShape = L.normalizeCase({ id:"cn", label:"y", admittedAt:"2026-07-01", adm:{ text:"free text" } }, "2026-07-08T10:00:00.000Z", "2026-07-08");
+  assert.strictEqual(admNewShape.adm.text, "free text");
   // Idempotent re-normalize (entry stamps stable, no dirty ping-pong).
   const admProbTwice = L.normalizeCase(JSON.parse(JSON.stringify(admProbCase)), "2026-07-08T11:00:00.000Z", "2026-07-08");
   assert.strictEqual(JSON.stringify(admProbTwice), JSON.stringify(admProbCase));
-  // Legacy data without adm/problems fills to empty defaults (backward compat).
+  // Legacy data without adm/problems/notes fills to empty defaults.
   const bareCase = L.normalizeCase({ id:"cb", label:"x", admittedAt:"2026-07-01" }, "2026-07-08T10:00:00.000Z", "2026-07-08");
-  assert.strictEqual(JSON.stringify(bareCase.adm), JSON.stringify({ trigger:"", pmh:[], adl:"", note:"" }));
+  assert.strictEqual(JSON.stringify(bareCase.adm), JSON.stringify({ text:"" }));
   assert.strictEqual(bareCase.problems.length, 0);
+  assert.strictEqual(bareCase.notes.length, 0);
   // Problem tombstone/merge is kind-agnostic (rides the shared merge).
   const prA = { kind:"problem", id:"q", text:"a", status:"active", createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-02T00:00:00.000Z" };
   const prB = { kind:"problem", id:"q", text:"b", status:"resolved", createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-03T00:00:00.000Z" };
@@ -646,10 +659,11 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   const probTrash = L.normalizeState({
     trash:[
       { id:"tp", type:"problem", caseId:"cp", caseLabel:"chf", deletedAt:"2026-07-08T00:00:00.000Z", payload:{ id:"pr1", text:"CHF", status:"active" } },
+      { id:"tn", type:"note", caseId:"cp", caseLabel:"chf", deletedAt:"2026-07-08T00:00:00.000Z", payload:{ id:"nt1", text:"afebrile", date:"2026-07-07" } },
       { id:"tx", type:"appt", caseId:"cp", deletedAt:"2026-07-08T00:00:00.000Z", payload:{ id:"a1", text:"x" } }
     ]
   }, "2026-07-08T10:00:00.000Z", "2026-07-08");
-  assert.strictEqual(probTrash.trash.map((x) => x.id).join(","), "tp");
+  assert.strictEqual(probTrash.trash.map((x) => x.id).join(","), "tp,tn");
 
   // ---- SPEC-F element-wise merge ------------------------------------------
 

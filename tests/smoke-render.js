@@ -114,6 +114,7 @@ vm.runInContext(`
         seeds:[{ id:"s1", text:"seed-one", createdOn:"2026-07-07", snapshot:{ label:"haien", day:3, stageName:"acute", phaseNote:"CAP" }, sentAt:null }],
         dxTags:["cap"], order:1, lastTouchedAt:"2026-07-06T18:00:00.000Z",
         problems:[{ id:"prob-one", text:"CHF", status:"active" }, { id:"prob-two", text:"AKI", status:"resolved" }],
+        notes:[{ id:"note-one", text:"afebrile-day", date:"2026-07-06" }],
         adm:{ trigger:"dyspnea", pmh:["DM"], adl:"indep", note:"adm-note" },
         discharge:{ checklist:{ summary:true }, plannedOn:"2026-07-10" }
       },
@@ -360,12 +361,15 @@ if (!detailHtml.includes("toggleAdmPanel()")) fail("detail missing admission pan
 if (!detailHtml.includes("CHF")) fail("detail missing active problem");
 if (!detailHtml.includes("toggleProblemStatus('c1'")) fail("problem missing status toggle");
 if (!detailHtml.includes("addProblem('c1'")) fail("problem section missing add-input");
-// The admission panel opens to reveal half-structured fields + the PII warning.
+// The admission panel opens to reveal the single free-text field + PII warning.
+// c1 carries the legacy 4-field payload, so the migrated text must be visible
+// (2026-07-21: one-field collapse; normalizeCase merges trigger/pmh/adl/note).
 vm.runInContext("VIEW.admOpen = true;", sandbox);
 const admOpenHtml = vm.runInContext("renderDetail('c1')", sandbox);
-if (!admOpenHtml.includes("updateCaseAdm('c1','trigger'")) fail("open admission panel missing trigger field");
-if (!admOpenHtml.includes("addAdmPmh('c1'")) fail("open admission panel missing pmh add");
-if (!admOpenHtml.includes("dyspnea")) fail("open admission panel missing trigger value");
+if (!admOpenHtml.includes("updateCaseAdm('c1'")) fail("open admission panel missing text field");
+if (admOpenHtml.includes("addAdmPmh")) fail("admission panel still renders legacy pmh add");
+if (!admOpenHtml.includes("dyspnea")) fail("open admission panel missing migrated trigger text");
+if (!admOpenHtml.includes("adm-note")) fail("open admission panel missing migrated note text");
 if (!admOpenHtml.includes(vm.runInContext("STR.piiWarning", sandbox))) fail("admission note missing PII warning");
 vm.runInContext("VIEW.admOpen = false;", sandbox);
 // Design invariant: problems carry no date, so they must never leak into the
@@ -373,6 +377,18 @@ vm.runInContext("VIEW.admOpen = false;", sandbox);
 if (weekHtml.includes("CHF") || weekHtml.includes("AKI")) fail("problem leaked into week projection");
 // Resolved problems render with the resolved tag (greyed "sent" style).
 if (!detailHtml.includes(vm.runInContext("STR.problemResolvedTag", sandbox))) fail("resolved problem missing resolved tag");
+// Daily notes section (2026-07-21): date-stamped free text on the detail only —
+// like problems it must never leak into the week projection (局面ファースト).
+if (!detailHtml.includes("afebrile-day")) fail("detail missing daily note");
+if (!detailHtml.includes("addNote('c1'")) fail("notes section missing add-input");
+if (!detailHtml.includes("deleteNote('c1'")) fail("daily note missing delete");
+if (weekHtml.includes("afebrile-day")) fail("daily note leaked into week projection");
+// Exports carry the admission text + daily notes (AI feedback source).
+const dayExportSmoke = vm.runInContext("dayExportText('c1')", sandbox);
+if (!dayExportSmoke.includes("Admission note") || !dayExportSmoke.includes("dyspnea")) fail("day export missing admission text");
+if (!dayExportSmoke.includes("2026-07-06 afebrile-day")) fail("day export missing daily note");
+const dcExportSmoke = vm.runInContext("dischargeExportText('c1')", sandbox);
+if (!dcExportSmoke.includes("Admission note") || !dcExportSmoke.includes("afebrile-day")) fail("discharge export missing admission/notes");
 
 // Chart sheets render.
 vm.runInContext("SHEET={name:'chartItem',draft:{caseId:'c1',catId:'cat-vital',itemId:'',kind:'value',name:'',startDate:'',endDate:'',date:''},syncBusy:false};", sandbox);
