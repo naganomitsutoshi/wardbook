@@ -310,6 +310,41 @@ if (vm.runInContext("DB.cases.find(c=>c.id==='c1').discharge.plannedOn", sandbox
 // Restore the fixture value: a far-future plannedOn would stretch chartDates
 // across decades, and later chart tests expect the original ★ column.
 vm.runInContext("DB.cases.find(c=>c.id==='c1').discharge.plannedOn='2026-07-10'; SHEET={name:'',draft:{},syncBusy:false};", sandbox);
+// Renal calculator (Phase 1, 1_MKM-verified 2026-07-22): button on detail, one
+// sheet, values persist on the case so the next visit only updates Cr.
+if (!detailHtml.includes("openCalcSheet('c1')")) fail("detail missing calc button");
+vm.runInContext("openCalcSheet('c1');", sandbox);
+if (vm.runInContext("SHEET.name", sandbox) !== "calc") fail("calc sheet did not open");
+const calcEmpty = vm.runInContext("renderCalcSheet()", sandbox);
+if (!calcEmpty.includes(vm.runInContext("STR.calcNeedInput", sandbox))) fail("empty calc sheet must ask for input, not show a number");
+if (!calcEmpty.includes("updateCaseBio('c1','cr'")) fail("calc sheet missing Cr input");
+if (!calcEmpty.includes("updateCaseBio('c1','age'")) fail("calc sheet missing age input");
+if (!calcEmpty.includes("updateCaseBio('c1','weightKg'")) fail("calc sheet missing weight input");
+if (!calcEmpty.includes("updateCaseBio('c1','crDate'")) fail("calc sheet missing Cr date input");
+// Entering values through the mutator must persist them on the case.
+vm.runInContext("updateCaseBio('c1','age','70'); updateCaseBio('c1','weightKg','60'); updateCaseBio('c1','cr','1.0'); updateCaseSex('c1','M');", sandbox);
+const calcBio = JSON.parse(vm.runInContext("JSON.stringify(DB.cases.find(c=>c.id==='c1').bio)", sandbox));
+if (calcBio.age !== 70 || calcBio.weightKg !== 60 || calcBio.cr !== 1) fail("calc inputs did not persist: " + JSON.stringify(calcBio));
+const calcFilled = vm.runInContext("renderCalcSheet()", sandbox);
+// 1_MKM answer D expectations, rendered.
+if (!calcFilled.includes("58.3")) fail("calc sheet missing CCr result");
+if (!calcFilled.includes("57.3")) fail("calc sheet missing eGFR result");
+// The dosing boundary must be stated on screen every time (1_MKM answer B-1/C).
+if (!calcFilled.includes(vm.runInContext("STR.calcEgfrUse", sandbox))) fail("calc sheet missing eGFR not-for-dosing caption");
+if (!calcFilled.includes(vm.runInContext("STR.calcCcrUse", sandbox))) fail("calc sheet missing CCr dosing caption");
+if (!calcFilled.includes(vm.runInContext("STR.calcDisclaimer", sandbox))) fail("calc sheet missing disclaimer");
+// Under 18 warns but still computes (CEO 2026-07-22).
+vm.runInContext("updateCaseBio('c1','age','10');", sandbox);
+const calcPed = vm.runInContext("renderCalcSheet()", sandbox);
+if (!calcPed.includes(vm.runInContext("STR.calcPedWarn", sandbox))) fail("paediatric age must warn");
+if (calcPed.includes(vm.runInContext("STR.calcNeedInput", sandbox))) fail("paediatric age must still compute");
+// Out-of-guard Cr shows a dash, never a number derived from a bad value.
+vm.runInContext("updateCaseBio('c1','age','70'); updateCaseBio('c1','cr','0');", sandbox);
+if (!vm.runInContext("renderCalcSheet()", sandbox).includes(vm.runInContext("STR.calcNeedInput", sandbox))) fail("out-of-range Cr must not produce a result");
+// Restore the fixture: later checks assume no calculator state.
+vm.runInContext("updateCaseBio('c1','age',''); updateCaseBio('c1','weightKg',''); updateCaseBio('c1','cr',''); closeSheet();", sandbox);
+// The PII warning must name the widened boundary (age/sex/weight now allowed).
+if (!vm.runInContext("STR.piiWarning", sandbox).includes("年齢")) fail("piiWarning not revised for the new boundary");
 // Meta editor carries the ward/room input.
 vm.runInContext("VIEW.editingMeta = true;", sandbox);
 const metaEditHtml = vm.runInContext("renderDetail('c1')", sandbox);
@@ -429,15 +464,20 @@ if (!dcExportSmoke.includes("Admission note") || !dcExportSmoke.includes("afebri
 // Label / ward-room / age band / sex must never appear in the payload.
 if (!detailHtml.includes("runAiFeedback('c1')")) fail("detail missing AI feedback button");
 if (!detailHtml.includes(vm.runInContext("STR.aiPanel", sandbox))) fail("detail missing AI panel title");
+// Load the calculator fields with distinctive values first: the allowlist below
+// must hold even when the case is carrying age/weight/Cr (added 2026-07-22).
+vm.runInContext("updateCaseBio('c1','age','77'); updateCaseBio('c1','weightKg','63.5'); updateCaseBio('c1','cr','1.23'); updateCaseBio('c1','crDate','2026-07-19');", sandbox);
 const aiPayload = JSON.parse(vm.runInContext("JSON.stringify(aiFeedbackPayload(DB.cases.find(c=>c.id==='c1')))", sandbox));
 if (Object.keys(aiPayload).sort().join(",") !== "adm,notes") fail("AI payload carries extra keys: " + Object.keys(aiPayload).join(","));
 if (!aiPayload.adm.includes("dyspnea")) fail("AI payload missing admission text");
 if (!aiPayload.notes.some((n) => n.text === "afebrile-day" && n.date === "2026-07-06")) fail("AI payload missing daily note");
 if (aiPayload.notes.some((n) => Object.keys(n).sort().join(",") !== "date,text")) fail("AI payload note carries extra keys");
 const aiPayloadStr = JSON.stringify(aiPayload);
-["haien", "3E-305", "80s", '"sex"', "CAP", "ai-fb-keep"].forEach((leak) => {
+["haien", "3E-305", "80s", '"sex"', "CAP", "ai-fb-keep",
+ '"bio"', "63.5", "1.23", "2026-07-19"].forEach((leak) => {
   if (aiPayloadStr.includes(leak)) fail("AI payload leaked case metadata: " + leak);
 });
+vm.runInContext("updateCaseBio('c1','age',''); updateCaseBio('c1','weightKg',''); updateCaseBio('c1','cr',''); updateCaseBio('c1','crDate','');", sandbox);
 
 // Saved AI feedback (Phase 2.1, 2026-07-21): shown in the panel with the
 // unreviewed mark, deletable to trash — but NEVER exported and (above) never

@@ -1034,5 +1034,64 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   // Band/event rows are not value rows and must never absorb a number.
   assert.strictEqual(L.chartDayParse("抗菌薬 3", dayItems).matched.length, 0, "band row must not take a value");
 
+  // ---- renal calculators --------------------------------------------------
+  // Expected values supplied by 1_MKM (answer D, 2026-07-22). These pin the
+  // coefficients: if anyone edits the formulas, this fails before a wrong dose
+  // ever reaches a patient. Do not "fix" a failure by adjusting the expectation.
+  assert.strictEqual(L.calcRound1(L.calcCcr(70, "M", 60, 1.0)), 58.3, "CCr 70y M 60kg Cr1.0");
+  assert.strictEqual(L.calcRound1(L.calcCcr(70, "F", 60, 1.0)), 49.6, "CCr 70y F 60kg Cr1.0");
+  assert.strictEqual(L.calcRound1(L.calcCcr(80, "F", 45, 0.8)), 39.8, "CCr 80y F 45kg Cr0.8");
+  assert.strictEqual(L.calcRound1(L.calcEgfr(70, "M", 1.0)), 57.3, "eGFR 70y M Cr1.0");
+  assert.strictEqual(L.calcRound1(L.calcEgfr(70, "F", 1.0)), 42.4, "eGFR 70y F Cr1.0");
+  assert.strictEqual(L.calcRound1(L.calcEgfr(80, "F", 0.8)), 52.0, "eGFR 80y F Cr0.8");
+
+  // The female coefficients are the easiest thing to drop in a refactor, so
+  // assert the male/female pair differs by exactly the published factor.
+  assert.ok(Math.abs(L.calcCcr(70, "F", 60, 1.0) / L.calcCcr(70, "M", 60, 1.0) - 0.85) < 1e-12, "CCr female factor 0.85");
+  assert.ok(Math.abs(L.calcEgfr(70, "F", 1.0) / L.calcEgfr(70, "M", 1.0) - 0.739) < 1e-12, "eGFR female factor 0.739");
+
+  // An unset sex must not silently borrow the male result's authority — it
+  // computes uncorrected, and the sheet warns. Same number as "M" by design.
+  assert.strictEqual(L.calcRound1(L.calcCcr(70, "", 60, 1.0)), 58.3, "unset sex computes uncorrected");
+
+  // Missing or out-of-guard input yields null, never a number. A partially
+  // filled sheet must show "—", not a value derived from a blank field.
+  [
+    [null, "M", 60, 1.0], [70, "M", null, 1.0], [70, "M", 60, null],
+    [70, "M", 60, 0], [70, "M", 60, -1], [0, "M", 60, 1.0], [130, "M", 60, 1.0],
+    [70, "M", 10, 1.0], [70, "M", 300, 1.0], [70, "M", 60, 25],
+    ["", "M", "", ""], ["abc", "M", 60, 1.0]
+  ].forEach(function(args){
+    assert.strictEqual(L.calcCcr(args[0], args[1], args[2], args[3]), null, "CCr rejects " + JSON.stringify(args));
+  });
+  [[null, "M", 1.0], [70, "M", null], [70, "M", 0], [0, "M", 1.0], [130, "M", 1.0], [70, "M", 25]].forEach(function(args){
+    assert.strictEqual(L.calcEgfr(args[0], args[1], args[2]), null, "eGFR rejects " + JSON.stringify(args));
+  });
+
+  // Under-18 still computes (CEO 2026-07-22: warn, do not refuse).
+  assert.ok(L.calcCcr(10, "M", 30, 0.5) > 0, "paediatric age still computes");
+  assert.strictEqual(L.CALC_ADULT_MIN_AGE, 18, "adult threshold pinned for the sheet warning");
+  assert.strictEqual(L.calcRound1(null), null, "round passes null through");
+
+  // ---- bio field (calculator inputs on the case) ---------------------------
+  const bioCase = L.normalizeCase({ id:"bio1", label:"x", bio:{ age:"70", weightKg:"60.5", cr:"1.02", crDate:"2026-07-20", weightDate:"bad" } }, "2026-07-22T00:00:00.000Z", "2026-07-22");
+  assert.strictEqual(bioCase.bio.age, 70, "bio age coerces to integer");
+  assert.strictEqual(bioCase.bio.weightKg, 60.5, "bio weight keeps decimals");
+  assert.strictEqual(bioCase.bio.cr, 1.02, "bio cr keeps decimals");
+  assert.strictEqual(bioCase.bio.crDate, "2026-07-20", "bio crDate kept");
+  assert.strictEqual(bioCase.bio.weightDate, "", "bio rejects a malformed date");
+
+  // Back-compat: a case saved by an older device has no `bio` at all. It must
+  // rebuild as empty rather than throwing or inventing values.
+  const bioLegacy = L.normalizeCase({ id:"bio2", label:"y" }, "2026-07-22T00:00:00.000Z", "2026-07-22");
+  assert.strictEqual(bioLegacy.bio.age, null, "missing bio defaults age to null");
+  assert.strictEqual(bioLegacy.bio.weightKg, null, "missing bio defaults weight to null");
+  assert.strictEqual(bioLegacy.bio.cr, null, "missing bio defaults cr to null");
+  assert.strictEqual(bioLegacy.bio.crDate, "", "missing bio defaults crDate to empty");
+  const junkBio = L.normalizeCase({ id:"bio3", label:"z", bio:{ age:"abc", weightKg:-5, cr:{} } }, "2026-07-22T00:00:00.000Z", "2026-07-22");
+  assert.strictEqual(junkBio.bio.age, null, "junk age drops to null");
+  assert.strictEqual(junkBio.bio.weightKg, null, "negative weight drops to null");
+  assert.strictEqual(junkBio.bio.cr, null, "non-numeric cr drops to null");
+
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));

@@ -246,6 +246,14 @@
   }
   .sheettitle{font-size:16px;font-weight:700;margin-bottom:12px}
   .note{font-size:12px;color:var(--muted)}
+  .note.warn{color:var(--danger, #b3261e);font-weight:600}
+  /* CCr renders at full size, eGFR inside .calcsub at 70%. The size gap is the
+     safety cue: the big number is the one you dose from. */
+  .calcresult{padding:8px 0}
+  .calcvalue{font-size:32px;font-weight:700;line-height:1.1;margin:2px 0}
+  .calcunit{font-size:13px;font-weight:400;color:var(--muted)}
+  .calcsub .calcvalue{font-size:22px}
+  .calcsub{opacity:.85}
   .dropzone{
     height:10px;border-radius:999px;transition:background .12s ease;
   }
@@ -899,6 +907,30 @@ function normalizeCase(raw, nowIso, todayIso){
     checklist:isObj(src.discharge && src.discharge.checklist) ? src.discharge.checklist : {},
     plannedOn:src.discharge && src.discharge.plannedOn ? safeDate(src.discharge.plannedOn, null) : null
   };
+  // Renal calculator inputs (2026-07-21 CEO decision moved the PII boundary one
+  // step: exact age / sex / weight may be stored, 生年月日 stays forbidden).
+  // Latest value only — no history, so the chart remains the one home for time
+  // series and the two features never compete. Sex reuses out.sex rather than
+  // duplicating it. Old devices simply lack `bio`; the defaults below rebuild
+  // it, so nothing is destroyed on the way back.
+  out.bio = (function(){
+    var bioSrc = isObj(src.bio) ? src.bio : {};
+    function bioNum(value){
+      if (typeof value === "number") return isFinite(value) && value >= 0 ? value : null;
+      var text = String(value == null ? "" : value).trim();
+      if (!text) return null;
+      var n = Number(text);
+      return isFinite(n) && n >= 0 ? n : null;
+    }
+    var bioAge = bioNum(bioSrc.age);
+    return {
+      age:bioAge === null ? null : Math.round(bioAge),
+      weightKg:bioNum(bioSrc.weightKg),
+      cr:bioNum(bioSrc.cr),
+      crDate:safeDate(bioSrc.crDate, "") || "",
+      weightDate:safeDate(bioSrc.weightDate, "") || ""
+    };
+  })();
   // Admission record collapsed to one free-text field (2026-07-21 CEO
   // decision). Legacy 4-field payloads (trigger/pmh/adl/note) merge into text
   // deterministically, so both devices converge on identical bytes.
@@ -1794,6 +1826,58 @@ function chartDayParse(text, items){
   return { matched:matched, unknown:unknown };
 }
 
+// ---- renal function calculators -------------------------------------------
+// Formulas verified by 1_MKM on 2026-07-22 against 腎疾患マニュアル 第2版
+// (糸球体濾過量 節). Do not edit either constant without a fresh MKM review —
+// a wrong coefficient here becomes a wrong dose at the bedside.
+//
+//   CCr  (Cockcroft-Gault) = this patient's own mL/min  -> USE FOR DOSING
+//   eGFR (Japanese Cr eq.) = mL/min/1.73m2, BSA-normalised -> CKD staging ONLY
+//
+// The bounds below are input-typo guards, NOT medical thresholds: 1_MKM stated
+// no established cut-offs exist (answer B-3). Ages under CALC_ADULT_MIN_AGE
+// still compute — CEO decided 2026-07-22 to warn rather than refuse.
+var CALC_LIMITS = { ageMin:1, ageMax:120, weightMin:20, weightMax:200, crMin:0.1, crMax:20 };
+var CALC_ADULT_MIN_AGE = 18;
+
+function calcNum(value){
+  if (typeof value === "number") return isFinite(value) ? value : null;
+  var text = String(value == null ? "" : value).trim();
+  if (!text) return null;
+  var n = Number(text);
+  return isFinite(n) ? n : null;
+}
+
+function calcInRange(n, min, max){
+  return n !== null && n >= min && n <= max;
+}
+
+// Every input must clear its guard before anything is returned: a partially
+// filled sheet shows "not enough input", never a number computed from a blank.
+function calcCcr(age, sex, weightKg, cr){
+  var a = calcNum(age), w = calcNum(weightKg), s = calcNum(cr);
+  if (!calcInRange(a, CALC_LIMITS.ageMin, CALC_LIMITS.ageMax)) return null;
+  if (!calcInRange(w, CALC_LIMITS.weightMin, CALC_LIMITS.weightMax)) return null;
+  if (!calcInRange(s, CALC_LIMITS.crMin, CALC_LIMITS.crMax)) return null;
+  var v = (140 - a) * w / (72 * s);
+  if (sex === "F") v = v * 0.85;
+  return v > 0 ? v : null;
+}
+
+function calcEgfr(age, sex, cr){
+  var a = calcNum(age), s = calcNum(cr);
+  if (!calcInRange(a, CALC_LIMITS.ageMin, CALC_LIMITS.ageMax)) return null;
+  if (!calcInRange(s, CALC_LIMITS.crMin, CALC_LIMITS.crMax)) return null;
+  var v = 194 * Math.pow(s, -1.094) * Math.pow(a, -0.287);
+  if (sex === "F") v = v * 0.739;
+  return v > 0 ? v : null;
+}
+
+// One decimal place — 1_MKM: finer digits carry no clinical meaning.
+function calcRound1(value){
+  return value === null ? null : Math.round(value * 10) / 10;
+}
+
 function todayISOFallback(){
   return "2000-01-01";
 }
@@ -1803,6 +1887,11 @@ if (typeof module !== "undefined") {
     defaultStages:defaultStages,
     defaultLabels:defaultLabels,
     defaultChartCats:defaultChartCats,
+    calcCcr:calcCcr,
+    calcEgfr:calcEgfr,
+    calcRound1:calcRound1,
+    CALC_LIMITS:CALC_LIMITS,
+    CALC_ADULT_MIN_AGE:CALC_ADULT_MIN_AGE,
     normalizeState:normalizeState,
     normalizeCase:normalizeCase,
     normalizeChart:normalizeChart,
@@ -1877,12 +1966,35 @@ const STR = {
   register:"登録",
   cancel:"キャンセル",
   back:"← 一覧",
-  piiWarning:"氏名・ID・生年月日など直接識別する情報は入力しない（部屋番号など運用メモは可・端末内で暗号化）",
+  piiWarning:"氏名・ID・生年月日など直接識別する情報は入力しない（年齢・性別・体重・部屋番号など運用メモは可・端末内で暗号化）",
   labelPh:"ラベル（例：肺炎）",
   firstNotePh:"見立ての一言（例：CAP、CTRXで3日解熱見込み）",
   ageBands:["10代以下","20代","30代","40代","50代","60代","70代","80代","90代以上"],
   sexM:"男",
   sexF:"女",
+  calcBtn:"計算",
+  calcTitle:"腎機能の計算",
+  calcAge:"年齢（歳）",
+  calcWeight:"体重（kg）",
+  calcCr:"血清 Cr（mg/dL）",
+  calcCrDate:"Cr 測定日",
+  calcWeightDate:"体重 測定日",
+  calcCcrLabel:"CCr（Cockcroft-Gault）",
+  calcCcrUse:"用量調整はこちら（患者個々の値）",
+  calcEgfrLabel:"eGFR（日本人 Cr 式）",
+  calcEgfrUse:"体表面積で補正した値。CKD 分類用。用量設定には直接用いない",
+  calcUnitCcr:"mL/分",
+  calcUnitEgfr:"mL/分/1.73m²",
+  calcNeedInput:"年齢・体重・Cr を入れると計算します",
+  calcRangeNote:"計算できる範囲：年齢 1〜120歳／体重 20〜200kg／Cr 0.1〜20mg/dL",
+  calcPedWarn:"⚠ 成人向けの式です。小児での妥当性は確認されていません",
+  calcSexWarn:"⚠ 性別が未設定です（女性の係数が反映されません）",
+  calcDateMissing:"測定日 未入力",
+  calcWeightNote:"実測体重で計算します。肥満例では高め、低体重・高齢者では低めに出ます",
+  calcDisclaimer:"参考値です。用量は必ず添付文書で確認してください。急性腎障害・腎機能の変動期では血清 Cr が定常状態にないため、実際の腎機能を反映しません。",
+  calcFormulaCcr:"式：（140−年齢）× 体重 ÷（72 × Cr）／女性 ×0.85",
+  calcFormulaEgfr:"式：194 × Cr^−1.094 × 年齢^−0.287／女性 ×0.739",
+  calcSourceNote:"出典：腎疾患マニュアル 第2版（1_MKM 検証済 2026-07-22）",
   unset:"未設定",
   addDxTag:"＋病名タグ",
   dxTagPh:"病名タグ（確定病名で検索用）",
@@ -3113,6 +3225,14 @@ function openStagePicker(caseId){
   renderSheet();
 }
 
+function openCalcSheet(caseId){
+  navNoteSheetOpen();
+  VIEW.calcFor = caseId;
+  SHEET.name = "calc";
+  SHEET.draft = {};
+  renderSheet();
+}
+
 function openSyncSheet(){
   navNoteSheetOpen();
   SHEET.name = "sync";
@@ -3300,6 +3420,22 @@ function updateCaseAdm(caseId, value){
   var v = String(value || "");
   if (caseFieldUnchanged(caseId, function(c){ return isObj(c.adm) && c.adm.text === v; })) return;
   mutateCase(caseId, function(c){ c.adm = { text:v }; });
+}
+
+// Calculator inputs persist on the case so the next round only needs the new
+// Cr. Bound to onchange (not oninput): mutateCase re-renders, and a re-render
+// per keystroke would steal focus mid-number.
+function updateCaseBio(caseId, key, value){
+  if (["age", "weightKg", "cr", "crDate", "weightDate"].indexOf(key) < 0) return;
+  var raw = String(value == null ? "" : value).trim();
+  mutateCase(caseId, function(c){
+    if (!isObj(c.bio)) c.bio = {};
+    if (key === "crDate" || key === "weightDate") { c.bio[key] = raw; return; }
+    if (!raw) { c.bio[key] = null; return; }
+    var n = Number(raw);
+    if (!isFinite(n) || n < 0) return;
+    c.bio[key] = key === "age" ? Math.round(n) : n;
+  });
 }
 
 function addDxTag(caseId, value){
@@ -5015,6 +5151,57 @@ function renderAdmissionSheet(){
     '</div></div>';
 }
 
+// Renal calculator sheet. Layout is deliberately lopsided: CCr is the headline
+// because it is the value you dose from, eGFR sits below at half the weight
+// with its "not for dosing" caption attached (1_MKM answer B-1). Never present
+// the two as equals.
+function renderCalcSheet(){
+  var c = DB.cases.find(function(item){ return item.id === VIEW.calcFor; });
+  if (!c) return '';
+  var b = isObj(c.bio) ? c.bio : {};
+  var ccr = calcRound1(calcCcr(b.age, c.sex, b.weightKg, b.cr));
+  var egfr = calcRound1(calcEgfr(b.age, c.sex, b.cr));
+  var warn = '';
+  if (b.age !== null && b.age !== undefined && b.age < CALC_ADULT_MIN_AGE) warn += '<div class="note warn">' + esc(STR.calcPedWarn) + '</div>';
+  if (!c.sex) warn += '<div class="note warn">' + esc(STR.calcSexWarn) + '</div>';
+  function bigResult(label, value, unit, use){
+    var shown = value === null ? '—' : String(value);
+    return '<div class="calcresult"><div class="fieldlabel">' + esc(label) + '</div>' +
+      '<div class="calcvalue">' + esc(shown) + ' <span class="calcunit">' + esc(unit) + '</span></div>' +
+      '<div class="faint">' + esc(use) + '</div></div>';
+  }
+  function field(label, key, value, type, extra){
+    return '<div class="field"><div class="fieldlabel">' + esc(label) + '</div>' +
+      '<input class="' + (type === "date" ? "date" : "input") + '" type="' + esc(type) + '"' +
+      (type === "number" ? ' inputmode="decimal" step="any" min="0"' : '') +
+      ' value="' + esc(value === null || value === undefined ? "" : String(value)) + '"' +
+      ' onchange="updateCaseBio(\'' + esc(c.id) + '\',\'' + esc(key) + '\',this.value)">' +
+      (extra ? '<div class="faint">' + esc(extra) + '</div>' : '') + '</div>';
+  }
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.calcTitle) + '</div><div class="stack">' +
+    (ccr === null && egfr === null ? '<div class="note">' + esc(STR.calcNeedInput) + '</div>' : '') +
+    warn +
+    bigResult(STR.calcCcrLabel, ccr, STR.calcUnitCcr, STR.calcCcrUse) +
+    '<div class="faint">' + esc(STR.calcFormulaCcr) + '</div>' +
+    '<div class="calcsub">' + bigResult(STR.calcEgfrLabel, egfr, STR.calcUnitEgfr, STR.calcEgfrUse) +
+    '<div class="faint">' + esc(STR.calcFormulaEgfr) + '</div></div>' +
+    field(STR.calcAge, "age", b.age, "number", "") +
+    '<div class="field"><div class="fieldlabel">' + esc(STR.editMeta) + '</div><div class="chips">' +
+      '<button class="chipbtn' + (!c.sex ? ' on' : '') + '" onclick="updateCaseSex(\'' + esc(c.id) + '\',\'\')">' + esc(STR.unset) + '</button>' +
+      '<button class="chipbtn' + (c.sex === "M" ? ' on' : '') + '" onclick="updateCaseSex(\'' + esc(c.id) + '\',\'M\')">' + esc(STR.sexM) + '</button>' +
+      '<button class="chipbtn' + (c.sex === "F" ? ' on' : '') + '" onclick="updateCaseSex(\'' + esc(c.id) + '\',\'F\')">' + esc(STR.sexF) + '</button>' +
+    '</div></div>' +
+    field(STR.calcWeight, "weightKg", b.weightKg, "number", STR.calcWeightNote) +
+    field(STR.calcWeightDate, "weightDate", b.weightDate, "date", "") +
+    field(STR.calcCr, "cr", b.cr, "number", "") +
+    field(STR.calcCrDate, "crDate", b.crDate, "date", b.crDate ? "" : STR.calcDateMissing) +
+    '<div class="note">' + esc(STR.calcRangeNote) + '</div>' +
+    '<div class="note warn">' + esc(STR.calcDisclaimer) + '</div>' +
+    '<div class="faint">' + esc(STR.calcSourceNote) + '</div>' +
+    '<div class="row"><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div>' +
+  '</div></div>';
+}
+
 function renderStageSheet(){
   var c = DB.cases.find(function(item){ return item.id === VIEW.stagePickerFor; });
   var active = c ? c.stageId : "";
@@ -5114,7 +5301,7 @@ renderDetail = function(caseId){
     '<div class="field" style="margin-top:10px"><div class="fieldlabel">' + esc(STR.addDxTag) + '</div>' + renderTagList(c) + '<div class="row" style="margin-top:8px"><input id="dxTagInput" class="input" placeholder="' + esc(STR.dxTagPh) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addDxTag(\'' + esc(c.id) + '\',this.value);this.value=\'\'}"><button class="ghostbtn" onclick="addDxTag(\'' + esc(c.id) + '\',document.getElementById(\'dxTagInput\').value);document.getElementById(\'dxTagInput\').value=\'\'">+</button></div></div></section>' +
     renderAdmissionPanel(c) +
     '<section class="panelcard sec-phase"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
-    '<section class="panelcard"><button class="ghostbtn" style="width:100%" onclick="openPlanSheet(\'' + esc(c.id) + '\')">' + esc(STR.addPlanBtn) + '</button></section>' +
+    '<section class="panelcard"><div class="row"><button class="ghostbtn" style="flex:1" onclick="openPlanSheet(\'' + esc(c.id) + '\')">' + esc(STR.addPlanBtn) + '</button><button class="ghostbtn" style="flex:1" onclick="openCalcSheet(\'' + esc(c.id) + '\')">' + esc(STR.calcBtn) + '</button></div></section>' +
     renderSectionCard(STR.problemsLabel, renderProblemList(c), "problemInput", STR.problemPh, "addProblem", c.id, "sec-problem") +
     (dischargeInline ? dischargePanel : '') +
     renderSectionCard(DB.config.labels.task, renderTaskList(c), "taskInput", STR.taskPh, "addTask", c.id, "sec-task") +
@@ -5150,7 +5337,8 @@ renderSheet = function(){
     data:renderDataSheet, settings:renderSettingsSheet, weekCell:renderWeekCellSheet,
     chartItem:renderChartItemSheet, chartValue:renderChartValueSheet, chartEventCell:renderChartEventCellSheet,
     chartDay:renderChartDaySheet,
-    plan:renderPlanSheet
+    plan:renderPlanSheet,
+    calc:renderCalcSheet
   };
   var html = renderers[SHEET.name] ? renderers[SHEET.name]() : "";
   el.className = "sheet" + (html ? " open" : "");

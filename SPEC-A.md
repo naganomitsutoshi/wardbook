@@ -57,6 +57,13 @@ Case = {
   label,                 // anonymous label, e.g. "haien" (pneumonia). NEVER patient name/ID
   ageBand,               // "" | one of the age band strings (see string table)
   sex,                   // "" | "M" | "F"  (display strings in table)
+  bio: {                 // renal calculator inputs (2026-07-22). Latest value only, no history.
+    age,                 // integer years | null. EXACT age, unlike ageBand. DOB stays forbidden.
+    weightKg,            // number | null
+    cr,                  // number | null  (serum creatinine, mg/dL)
+    crDate,              // "YYYY-MM-DD" | ""  (always displayed next to the result)
+    weightDate           // "YYYY-MM-DD" | ""
+  },
   dxTags: [],            // diagnosis tags (strings, for later search)
   status,                // "active" | "discharged"  (Phase A creates only "active")
   admittedAt,            // "YYYY-MM-DD"
@@ -256,5 +263,11 @@ expected.
   admission record (`adm`) and problem list (`problems`) are half-structured / short-tag to keep
   re-identifiability low. `room` is a deliberate quasi-identifier; `piiWarning` bars only direct
   identifiers (name / ID / DOB). Server stores ciphertext only (E2E). See 設計書 §14.
+- **Boundary moved one step on 2026-07-21 (CEO decision)**: `bio.age` (exact integer), `sex` and
+  `bio.weightKg` may be stored, because the renal calculator cannot work without them. 生年月日
+  remains forbidden — the age field is numeric-only and cannot express a date. `piiWarning` was
+  revised accordingly on 2026-07-22 and must be re-shown by any new free-text field.
+- **AI boundary is unaffected**: `aiFeedbackPayload` stays the two-key allowlist (`adm`, `notes`).
+  `bio` must never enter it — pinned by a leak test in `tests/smoke-render.js`.
 - Keep total index.html reasonably compact; prefer clarity over cleverness.
 - Comments in code: English is fine.
