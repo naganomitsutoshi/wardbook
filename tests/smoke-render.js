@@ -335,6 +335,38 @@ if (!chartHtml.includes("openChartEventCell('c1','cat-ic'")) fail("event row mis
 if (!chartHtml.includes(vm.runInContext("'\\u5165'", sandbox))) fail("chart missing admission column mark");
 if (!chartHtml.includes(vm.runInContext("'\\u2605'", sandbox))) fail("chart missing planned-discharge column mark");
 if (!chartHtml.includes(vm.runInContext("'\\u305d\\u306e\\u4ed6'", sandbox))) fail("chart missing orphan group");
+
+// Chart quick entry (2026-07-21): input leaves the table. One sheet covers the
+// whole day, so a 6-item round costs 3 taps instead of ~18, and the cells no
+// longer have to be finger-sized.
+if (!chartHtml.includes("openChartDaySheet('c1')")) fail("detail missing day-entry button");
+if (!chartHtml.includes("openChartDaySheet('c1','")) fail("chart date header missing day-entry handler");
+vm.runInContext("openChartDaySheet('c1');", sandbox);
+if (vm.runInContext("SHEET.name", sandbox) !== "chartDay") fail("day-entry sheet did not open");
+const dayIso = vm.runInContext("SHEET.draft.date", sandbox);
+const daySheet = vm.runInContext("renderChartDaySheet()", sandbox);
+if (!daySheet.includes('id="chartDayLine"')) fail("day sheet missing line input");
+if (!daySheet.includes("chartDayRead()")) fail("day sheet missing read button");
+if (!daySheet.includes("saveChartDay()")) fail("day sheet missing save button");
+// Reading fills the form for the eye to check; "Cr 12" vs "Cr 1.2" must never
+// reach storage unseen, so nothing is written until 確定.
+vm.runInContext("SHEET.draft.line='BT 37.9 cbc 9800 zz 5'; chartDayRead();", sandbox);
+if (vm.runInContext("SHEET.draft.vals['cv1']", sandbox) !== "37.9") fail("read did not fill the matched field");
+if (vm.runInContext(`DB.cases[0].chart.items.find(i=>i.id==='cv1').values['${dayIso}']||''`, sandbox) === "37.9") fail("read wrote to storage before save");
+// An unresolved name is offered as a row to add, never invented.
+if (vm.runInContext("SHEET.draft.unknown.length", sandbox) !== 1) fail("unknown token not surfaced");
+const daySheet2 = vm.runInContext("renderChartDaySheet()", sandbox);
+if (!daySheet2.includes("chartDayAddItem(")) fail("unknown token missing add-to-category button");
+if (!daySheet2.includes(vm.runInContext("STR.chartDayUnknown", sandbox))) fail("unknown section title missing");
+if (vm.runInContext("DB.cases[0].chart.items.some(i=>i.name==='zz')", sandbox)) fail("unknown token created a row on its own");
+// Save commits the whole day in one mutation.
+vm.runInContext("saveChartDay();", sandbox);
+if (vm.runInContext("SHEET.name", sandbox) !== "") fail("day sheet did not close on save");
+if (vm.runInContext(`DB.cases[0].chart.items.find(i=>i.id==='cv1').values['${dayIso}']`, sandbox) !== "37.9") fail("save lost the BT value");
+if (vm.runInContext(`DB.cases[0].chart.items.find(i=>i.id==='cv3').values['${dayIso}']`, sandbox) !== "9800") fail("save lost the cbc value");
+// Clearing a field removes that day rather than storing an empty string.
+vm.runInContext("openChartDaySheet('c1'); chartDaySetVal('cv1',''); saveChartDay();", sandbox);
+if (vm.runInContext(`Object.prototype.hasOwnProperty.call(DB.cases[0].chart.items.find(i=>i.id==='cv1').values,'${dayIso}')`, sandbox)) fail("cleared value not removed");
 if (!chartHtml.includes("openChartItem('c1','cat-med','')")) fail("chart missing per-category add button");
 // Single fixed header row now (2026-07-16): M/D headline + D-number beneath.
 const theadPart = chartHtml.slice(chartHtml.indexOf("<thead>"), chartHtml.indexOf("</thead>"));
@@ -491,6 +523,9 @@ const reviewQueueLen = vm.runInContext("REVIEW.ids.length", sandbox);
 if (reviewQueueLen < 2) fail("review queue missing stale cases");
 const midReviewHtml = vm.runInContext("render(); renderReview()", sandbox);
 if (!midReviewHtml.includes("reviewNoChange(")) fail("review screen missing no-change action");
+// Third entry to the day sheet: the evening review walks the patients anyway,
+// so the numbers can be typed without leaving that flow.
+if (!midReviewHtml.includes("openChartDaySheet(")) fail("review card missing day-entry button");
 for (let i = 0; i < reviewQueueLen; i += 1) {
   vm.runInContext("reviewNoChange(REVIEW.ids[REVIEW.index])", sandbox);
 }

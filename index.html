@@ -307,8 +307,12 @@
   .weekgrid .satcol{color:var(--weekend-sat)}
   .weekgrid .todaycol,.chartgrid .todaycol{background:var(--panel)}
   /* Density-down chart cells: bigger tap targets + a one-row header. */
-  .chartgrid td{min-width:50px;padding:8px 6px;font-size:13px}
-  .chartgrid thead th{padding:6px 6px;font-size:12px;line-height:1.25}
+  /* Values are read, not tapped, now that入力 moved to the day sheet: the cell
+     no longer has to be a finger-sized target, so the number gets the space. */
+  .chartgrid td{min-width:54px;padding:8px 6px;font-size:15px}
+  .chartdayname{min-width:84px}
+  .chartdayval{flex:1}
+  .chartgrid thead th{padding:6px 6px;font-size:12px;line-height:1.25;cursor:pointer}
   .dnum{display:block;font-size:9px;color:var(--muted);font-weight:400}
   /* Week-cell dots: one dot per scheduled item, colored by type. */
   .dotstack{display:flex;gap:4px;justify-content:center;flex-wrap:wrap;align-items:center;margin-top:4px;min-height:12px}
@@ -1715,6 +1719,71 @@ function chartExportLines(c, cats, today){
   return lines;
 }
 
+// ---- chart quick entry (2026-07-21 CEO壁打ち) -------------------------------
+// The old path was one sheet per item x date (openChartValue), so a 6-item day
+// cost ~18 taps, and the table had to double as the input surface - which is
+// also why cells stayed finger-sized and the numbers too small to read. Both
+// complaints share that one cause, so input leaves the table: a line of text is
+// parsed into the day's values, shown in a vertical form, saved once.
+//
+// Deliberately absent from the alias table: anything that reads two ways. "T"
+// is 体温 or T-Bil depending on who wrote it, and a silently wrong row here
+// becomes a wrong dose later. Unresolved names land in `unknown` for the user
+// to place; nothing is ever guessed.
+var CHART_ALIASES = {
+  bt:"体温", kt:"体温", temp:"体温",
+  hr:"脈拍", pr:"脈拍",
+  bp:"血圧",
+  spo2:"SpO2", sat:"SpO2",
+  rr:"呼吸数",
+  wbc:"WBC", crp:"CRP", hb:"Hb", plt:"Plt", na:"Na", k:"K",
+  bun:"BUN", cr:"Cr", cre:"Cr", alb:"Alb", ast:"AST", alt:"ALT", egfr:"eGFR"
+};
+
+// A name glued to its number ("BT37.2") is ambiguous against names that carry
+// digits themselves ("SpO2"), so a separator is required. Colons, equals signs
+// and the full-width forms all count as one.
+function chartDayTokens(text){
+  return String(text == null ? "" : text)
+    .replace(/[　]/g, " ")
+    .replace(/[,，:：=＝／]/g, " ")
+    .split(/\s+/)
+    .filter(function(tok){ return tok; });
+}
+
+function chartValueToken(tok){
+  return /^[<>＜＞]?[0-9]/.test(tok);
+}
+
+function chartDayParse(text, items){
+  var rows = (items || []).filter(function(it){ return it && it.kind === "value" && it.name; });
+  var byName = {};
+  rows.forEach(function(it){ byName[String(it.name).trim().toLowerCase()] = it; });
+  var matched = [];
+  var unknown = [];
+  var pending = null;
+  function dropPending(){
+    if (pending) unknown.push({ name:pending, value:"", suggest:CHART_ALIASES[pending.toLowerCase()] || pending });
+    pending = null;
+  }
+  chartDayTokens(text).forEach(function(tok){
+    if (!chartValueToken(tok)) { dropPending(); pending = tok; return; }
+    if (!pending) { unknown.push({ name:"", value:tok, suggest:"" }); return; }
+    var key = pending.toLowerCase();
+    var hit = byName[key];
+    if (!hit && CHART_ALIASES[key]) hit = byName[String(CHART_ALIASES[key]).toLowerCase()];
+    if (!hit) {
+      var pre = rows.filter(function(it){ return String(it.name).toLowerCase().indexOf(key) === 0; });
+      if (pre.length === 1) hit = pre[0];
+    }
+    if (hit) matched.push({ itemId:hit.id, name:hit.name, value:tok });
+    else unknown.push({ name:pending, value:tok, suggest:CHART_ALIASES[key] || pending });
+    pending = null;
+  });
+  dropPending();
+  return { matched:matched, unknown:unknown };
+}
+
 function todayISOFallback(){
   return "2000-01-01";
 }
@@ -1732,6 +1801,9 @@ if (typeof module !== "undefined") {
     chartColMarks:chartColMarks,
     chartRowsForCase:chartRowsForCase,
     chartExportLines:chartExportLines,
+    chartDayTokens:chartDayTokens,
+    chartDayParse:chartDayParse,
+    CHART_ALIASES:CHART_ALIASES,
     fmtMonthDay:fmtMonthDay,
     computeDay:computeDay,
     rolloverTodos:rolloverTodos,
@@ -1882,6 +1954,12 @@ Object.assign(STR, {
   admissionDate:"\u5165\u9662\u65e5",
   weekdays:["\u65e5","\u6708","\u706b","\u6c34","\u6728","\u91d1","\u571f"],
   chartPanel:"\u7d4c\u904e\u8868",
+  chartDayBtn:"\u5024\u3092\u307e\u3068\u3081\u3066\u5165\u529b",
+  chartDayLinePh:"\u4f8b: BT 37.2 CRP 8.5 WBC 9800",
+  chartDayRead:"\u8aad\u307f\u53d6\u308b",
+  chartDayUnknown:"\u53d6\u308a\u8fbc\u3081\u306a\u304b\u3063\u305f\u8a9e",
+  chartDayOrig:"\u5143",
+  chartDayNoItems:"\u5024\u306e\u9805\u76ee\u304c\u307e\u3060\u3042\u308a\u307e\u305b\u3093",
   chartItems:"\u7d4c\u904e\u8868\u306e\u9805\u76ee",
   chartPrefs:"\u7d4c\u904e\u8868\u306e\u8868\u793a",
   kindValue:"\u5024",
@@ -3860,6 +3938,89 @@ function saveChartValue(){
   closeSheet();
 }
 
+function chartDayItems(c){
+  return cloneArr(c && c.chart && c.chart.items).filter(function(it){
+    return it && it.kind === "value" && it.name;
+  });
+}
+
+function openChartDaySheet(caseId, date){
+  var c = DB.cases.find(function(row){ return row.id === caseId; });
+  if (!c) return;
+  var day = safeDate(date, todayISO());
+  var vals = {};
+  chartDayItems(c).forEach(function(it){
+    vals[it.id] = (it.values && it.values[day]) || "";
+  });
+  openSheetWithDraft("chartDay", {
+    caseId:caseId,
+    date:day,
+    line:"",
+    vals:vals,
+    orig:JSON.parse(JSON.stringify(vals)),
+    unknown:[]
+  }, "chartDayLine", false);
+}
+
+function chartDaySetVal(itemId, value){
+  var d = SHEET.draft || {};
+  d.vals = isObj(d.vals) ? d.vals : {};
+  d.vals[itemId] = value;
+}
+
+// Reading is an explicit button, never oninput: re-rendering the sheet on each
+// keystroke is exactly what made the soft keyboard vanish in the week grid
+// (2026-07-10). Parsed numbers land in the form for the eye to check - "Cr 12"
+// and "Cr 1.2" must never reach storage unseen - so nothing saves until 確定.
+function chartDayRead(){
+  var d = SHEET.draft || {};
+  var c = DB.cases.find(function(row){ return row.id === d.caseId; });
+  if (!c) return;
+  var res = chartDayParse(d.line, chartDayItems(c));
+  d.vals = isObj(d.vals) ? d.vals : {};
+  res.matched.forEach(function(hit){ d.vals[hit.itemId] = hit.value; });
+  d.unknown = res.unknown;
+  d.line = "";
+  renderSheet();
+}
+
+// Unmatched names are never turned into rows on their own; this runs only when
+// the user taps the category they belong to.
+function chartDayAddItem(catId, name, value){
+  var d = SHEET.draft || {};
+  var nm = String(name || "").trim();
+  if (!nm || !d.caseId) return;
+  var newId = uid();
+  mutateCase(d.caseId, function(c){
+    c.chart = normalizeChart(c.chart);
+    c.chart.items.push({ id:newId, catId:catId, kind:"value", name:nm, values:{}, planned:{} });
+  });
+  d.vals = isObj(d.vals) ? d.vals : {};
+  d.vals[newId] = String(value == null ? "" : value);
+  d.unknown = (d.unknown || []).filter(function(u){
+    return String(u.suggest || u.name || "") !== nm;
+  });
+  renderSheet();
+}
+
+function saveChartDay(){
+  var d = SHEET.draft || {};
+  var vals = isObj(d.vals) ? d.vals : {};
+  var date = d.date;
+  mutateCase(d.caseId, function(c){
+    c.chart = normalizeChart(c.chart);
+    c.chart.items.forEach(function(item){
+      if (item.kind !== "value") return;
+      if (!Object.prototype.hasOwnProperty.call(vals, item.id)) return;
+      var v = String(vals[item.id] == null ? "" : vals[item.id]).trim();
+      item.values = isObj(item.values) ? item.values : {};
+      if (v) item.values[date] = v;
+      else delete item.values[date];
+    });
+  });
+  closeSheet();
+}
+
 function openChartEventCell(caseId, catId, date){
   openSheetWithDraft("chartEventCell", { caseId:caseId, catId:catId, date:date, text:"" }, "chartEventInput", false);
 }
@@ -4462,7 +4623,7 @@ function renderChartPanel(c){
   // Single header row: M/D headline, D-number beneath, then the admit/discharge
   // column mark. (Merged from the old two-row D-number + M/D pair to save height.)
   var headRow = '<tr><th class="sticky"></th>' + dates.map(function(date){
-    return '<th class="' + (date === today ? 'todaycol' : '') + '">' + esc(Number(date.slice(5, 7)) + '/' + Number(date.slice(8, 10))) + '<span class="dnum">D' + computeDay(c.admittedAt, date) + '</span><span class="colmark">' + (marks[date] ? esc(marks[date]) : '&nbsp;') + '</span></th>';
+    return '<th class="' + (date === today ? 'todaycol' : '') + '" onclick="openChartDaySheet(\'' + esc(c.id) + '\',\'' + esc(date) + '\')">' + esc(Number(date.slice(5, 7)) + '/' + Number(date.slice(8, 10))) + '<span class="dnum">D' + computeDay(c.admittedAt, date) + '</span><span class="colmark">' + (marks[date] ? esc(marks[date]) : '&nbsp;') + '</span></th>';
   }).join('') + '</tr>';
   var body = groups.map(function(group){
     var cat = group.cat;
@@ -4529,6 +4690,38 @@ function renderChartValueSheet(){
   return '<div class="sheetcard"><div class="sheettitle">' + esc((d.name || "") + ' ' + (d.date || "")) + '</div><div class="stack">' +
     '<div class="field"><input id="chartValueInput" class="input" value="' + esc(d.value || "") + '" oninput="sheetDraftValue(\'value\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){saveChartValue()}"></div>' +
     '<div class="row wrap"><button class="primary" onclick="saveChartValue()">' + esc(STR.confirm) + '</button><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div></div>';
+}
+
+function renderChartDaySheet(){
+  var d = SHEET.draft || {};
+  var c = DB.cases.find(function(row){ return row.id === d.caseId; });
+  if (!c) return "";
+  var vals = isObj(d.vals) ? d.vals : {};
+  var orig = isObj(d.orig) ? d.orig : {};
+  // Names go through data-* attributes, never inlined into the onclick string:
+  // attribute entities decode before JS parsing, so esc() alone cannot stop
+  // injection (same rule as renderChartItemSheet).
+  var rows = chartDayItems(c).map(function(it){
+    var cur = vals[it.id] == null ? "" : vals[it.id];
+    var was = orig[it.id] == null ? "" : orig[it.id];
+    var overwritten = was && String(was) !== String(cur);
+    return '<div class="row wrap"><span class="fieldlabel chartdayname">' + esc(it.name) + '</span>' +
+      '<input class="input chartdayval" value="' + esc(cur) + '" data-item="' + esc(it.id) + '" oninput="chartDaySetVal(this.dataset.item,this.value)">' +
+      (overwritten ? '<span class="faint">' + esc(STR.chartDayOrig + " " + was) + '</span>' : '') + '</div>';
+  }).join('');
+  var cats = (DB.config.chartCats || []).filter(function(cat){ return cat && cat.kind === "value"; });
+  var unknown = (d.unknown || []).map(function(u){
+    var nm = String(u.suggest || u.name || "");
+    var btns = nm ? cats.map(function(cat){
+      return '<button class="smallbtn" data-cat="' + esc(cat.id) + '" data-name="' + esc(nm) + '" data-val="' + esc(u.value || "") + '" onclick="chartDayAddItem(this.dataset.cat,this.dataset.name,this.dataset.val)">＋' + esc(cat.name) + '</button>';
+    }).join('') : '';
+    return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(String(u.name || "?") + " " + String(u.value || "")) + '</div></div>' + btns + '</div>';
+  }).join('');
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.chartDayBtn + " " + (d.date || "")) + '</div><div class="stack">' +
+    '<div class="row"><input id="chartDayLine" class="input" value="' + esc(d.line || "") + '" placeholder="' + esc(STR.chartDayLinePh) + '" oninput="sheetDraftValue(\'line\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){chartDayRead()}"><button class="ghostbtn" onclick="chartDayRead()">' + esc(STR.chartDayRead) + '</button></div>' +
+    (rows ? '<div class="stack">' + rows + '</div>' : '<div class="faint">' + esc(STR.chartDayNoItems) + '</div>') +
+    (unknown ? '<div class="field"><div class="fieldlabel">' + esc(STR.chartDayUnknown) + '</div>' + unknown + '</div>' : '') +
+    '<div class="row wrap"><button class="primary" onclick="saveChartDay()">' + esc(STR.confirm) + '</button><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div></div>';
 }
 
 function renderChartEventCellSheet(){
@@ -4758,6 +4951,7 @@ function renderReviewCard(c){
     '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div></div>' +
     (c.phaseNote ? '<div class="phase sec-phase">' + esc(c.phaseNote) + '</div>' : '') +
     (firstNext ? '<div class="section sec-task"><div class="sectiontitle">' + esc(DB.config.labels.task) + '</div><div class="lineitem"><div class="linegrow"><div class="text">' + esc(firstNext.text) + '</div>' + taskMetaLine(firstNext, true) + '</div></div></div>' : '') +
+    '<div class="row wrap" style="margin-top:8px"><button class="ghostbtn" onclick="openChartDaySheet(\'' + esc(c.id) + '\')">' + esc(STR.chartDayBtn) + '</button></div>' +
   '</section>';
 }
 
@@ -4902,6 +5096,7 @@ renderDetail = function(caseId){
     renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id, "sec-seeds") +
     renderSectionCard(STR.notesLabel, renderNoteList(c), "noteInput", STR.notePh, "addNote", c.id, "sec-note") +
     renderAiPanel(c) +
+    '<section class="panelcard"><button class="ghostbtn" style="width:100%" onclick="openChartDaySheet(\'' + esc(c.id) + '\')">' + esc(STR.chartDayBtn) + '</button></section>' +
     renderChartPanel(c) +
     (!dischargeInline ? dischargePanel : '') +
     '<section class="panelcard"><textarea id="dayExportText" class="reviewtextarea hidden" readonly>' + esc(dayExportText(c.id)) + '</textarea><button class="ghostbtn" onclick="copyDayExport(\'' + esc(c.id) + '\')">' + esc(STR.dayExport) + '</button></section>' +
@@ -4928,6 +5123,7 @@ renderSheet = function(){
     admission:renderAdmissionSheet, stage:renderStageSheet, sync:renderSyncSheet,
     data:renderDataSheet, settings:renderSettingsSheet, weekCell:renderWeekCellSheet,
     chartItem:renderChartItemSheet, chartValue:renderChartValueSheet, chartEventCell:renderChartEventCellSheet,
+    chartDay:renderChartDaySheet,
     plan:renderPlanSheet
   };
   var html = renderers[SHEET.name] ? renderers[SHEET.name]() : "";

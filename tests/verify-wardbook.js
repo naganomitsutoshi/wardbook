@@ -969,5 +969,52 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(L.chartExportLines({ chart:{ items:[] } }, chartCats, "2026-07-16").length, 0, "empty chart export");
   assert.strictEqual(L.fmtMonthDay("2026-07-05"), "7/5", "fmtMonthDay strips zero padding");
 
+  // Chart quick entry (2026-07-21): one line of text -> that day's values.
+  // Only rows the case already carries are matched. Ambiguous abbreviations are
+  // absent from the alias table on purpose: a silently wrong row here turns into
+  // a wrong dose later, so anything unresolved surfaces instead of being guessed.
+  const dayItems = [
+    { id:"v1", kind:"value", name:"体温" },
+    { id:"v2", kind:"value", name:"CRP" },
+    { id:"v3", kind:"value", name:"血圧" },
+    { id:"v4", kind:"value", name:"体重" },
+    { id:"b1", kind:"band", name:"抗菌薬" }
+  ];
+  const parsed = L.chartDayParse("BT 37.2 crp 8.5 血圧 120/80", dayItems);
+  // Values cross the vm realm boundary, so compare joined strings (deepStrictEqual
+  // would trip on the foreign Array prototype, not on the contents).
+  assert.strictEqual(parsed.matched.map((m) => m.itemId + ":" + m.value).join(" "),
+    "v1:37.2 v2:8.5 v3:120/80", "chartDayParse basic: " + JSON.stringify(parsed));
+  assert.strictEqual(parsed.unknown.length, 0, "clean line leaves nothing over");
+
+  // Comma / colon / full-width space all separate the same way; an ASCII slash
+  // does not, so 120/80 stays one value.
+  const sep = L.chartDayParse("BT:37.2，CRP：8.5　体重 60", dayItems);
+  assert.strictEqual(sep.matched.map((m) => m.name + "=" + m.value).join(" "),
+    "体温=37.2 CRP=8.5 体重=60", "chartDayParse separators: " + JSON.stringify(sep));
+
+  // "T" reads as both 体温 and T-Bil, so it must never resolve on its own.
+  assert.ok(!Object.prototype.hasOwnProperty.call(L.CHART_ALIASES, "t"), "ambiguous alias T must not exist");
+  const amb = L.chartDayParse("T 37.2", dayItems);
+  assert.strictEqual(amb.matched.length, 0, "ambiguous name must not match a row");
+  assert.strictEqual(amb.unknown.length, 1, "ambiguous name goes to unknown");
+  assert.strictEqual(amb.unknown[0].value, "37.2", "unknown keeps its number");
+
+  // A prefix resolves only when it can mean one row (体温/体重 collide).
+  assert.strictEqual(L.chartDayParse("体 37", dayItems).matched.length, 0, "ambiguous prefix must not match");
+  assert.strictEqual(L.chartDayParse("CR 8.5", dayItems).matched[0].itemId, "v2", "unique prefix matches");
+
+  // Nothing is dropped silently: a name with no number, and a number with no
+  // name, both still surface. `suggest` carries the canonical spelling so the
+  // add-row button offers "WBC", not "wbc".
+  const stray = L.chartDayParse("wbc 9800 CRP", dayItems);
+  assert.strictEqual(stray.matched.length, 0, "WBC row is absent from this case");
+  assert.strictEqual(stray.unknown.map((u) => u.name + "/" + u.value + "/" + u.suggest).join(" "),
+    "wbc/9800/WBC CRP//CRP", "stray tokens kept: " + JSON.stringify(stray.unknown));
+  assert.strictEqual(L.chartDayParse("5", dayItems).unknown.length, 1, "a bare number is not swallowed");
+
+  // Band/event rows are not value rows and must never absorb a number.
+  assert.strictEqual(L.chartDayParse("抗菌薬 3", dayItems).matched.length, 0, "band row must not take a value");
+
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));
