@@ -2259,8 +2259,8 @@ const STR = {
   taskEditBtn:"編集",
   taskEditClose:"閉じる",
   menuRow:"その他",
-  vaultHtmlRow:"早見表（vault-html）",
-  calcVaultLink:"換算表・早見表（vault-html）を開く",
+  vaultHtmlRow:"早見表（clover-pages）",
+  calcVaultLink:"換算表・早見表（clover-pages）を開く",
   backOnLabel:"戻り日（不明なら空欄）",
   editMeta:"年代・性別",
   review:"夕の棚卸し",
@@ -5385,10 +5385,11 @@ function renderNoteList(c){
 // The instruction text ("sys") is user-editable in settings — see aiPromptText.
 var AI_URL = "https://wardbook-ai.naganomitsutoshi.workers.dev";
 
-// Quick-reference tables (dose tables, conversions, qSOFA) live on vault-html,
-// not in Wardbook (CEO 2026-07-21: patient-independent content is published
-// there). This only opens the index page in a new tab — nothing is sent.
-var VAULT_HTML_URL = "https://vault-html.naganomitsutoshi.workers.dev/";
+// Quick-reference tables (dose tables, conversions, qSOFA) live on clover-pages
+// (renamed from vault-html, CEO 2026-07-22), not in Wardbook (CEO 2026-07-21:
+// patient-independent content is published there). This only opens the index
+// page in a new tab — nothing is sent.
+var VAULT_HTML_URL = "https://clover-pages.naganomitsutoshi.workers.dev/";
 function openVaultHtml(){
   window.open(VAULT_HTML_URL, "_blank", "noopener");
 }
