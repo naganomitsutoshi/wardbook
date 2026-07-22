@@ -287,8 +287,13 @@ expected.
   never summarised or reworded in code; with no source, the score ships without interpretation.
 - `store:"none"` fields (the moment's state — consciousness, respiratory rate) are never persisted:
   a three-day-old value that still looks current is the failure mode a bedside score must avoid.
-- **The calculator tab is the one exception to 局面ファースト** (2026-07-22 CEO decision). It lives
-  in the topbar, never beside the ボード／今日／週間予定 chips, and holds its inputs in
-  `CALC_SCRATCH` — not persisted, not synced, cleared on every open.
+- **The top-level screens are a registry too** (`VIEW_TABS`, 2026-07-22 CEO decision). The
+  calculator sits in the tab row beside ボード／今日／週間予定 — it is a screen, not a topbar
+  shortcut. Adding a screen = one `VIEW_TABS` entry + one `TAB_BODY` function (+ an optional
+  `TAB_ENTER` hook); nothing in the render path enumerates the tabs. An unknown tab id falls back
+  to the board, which stays first (局面ファースト). Enforced by test: unique ids, a label per tab,
+  a body per tab, board first.
+- **The calculator tab holds its inputs in `CALC_SCRATCH`** — not persisted, not synced, discarded
+  on entering the tab (`TAB_ENTER.calc`), so the moment's state is never inherited from last time.
 - Keep total index.html reasonably compact; prefer clarity over cleverness.
 - Comments in code: English is fine.
