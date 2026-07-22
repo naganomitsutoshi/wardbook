@@ -1100,6 +1100,28 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(bioFuture.bio.futureScoreInput, 3, "unknown bio keys survive normalisation");
   assert.strictEqual(bioFuture.bio.age, 70, "known bio keys still normalise alongside unknown ones");
 
+  // ---- tab registry contract ----------------------------------------------
+  // The top-level screens are data too. The board must stay first (it is the
+  // fallback for an unknown id, and 局面ファースト means it leads), and every tab
+  // needs a label — a chip with no text is untappable in practice.
+  assert.ok(Array.isArray(L.VIEW_TABS) && L.VIEW_TABS.length >= 1, "at least one tab registered");
+  assert.strictEqual(L.VIEW_TABS[0].id, "board", "the board stays the first tab");
+  const tabIds = new Set();
+  for (const tab of L.VIEW_TABS) {
+    assert.ok(tab.id && !tabIds.has(tab.id), "tab ids are unique: " + tab.id);
+    tabIds.add(tab.id);
+    assert.ok(tab.labelKey, tab.id + ": needs a label");
+    assert.strictEqual(L.viewTabById(tab.id), tab, tab.id + ": resolves by id");
+  }
+  assert.strictEqual(L.VIEW_TABS.filter((t) => t.density).length, 1, "the density toggle belongs to exactly one tab");
+  assert.ok(tabIds.has("calc"), "the calculator is a tab of its own (CEO 2026-07-22)");
+  assert.strictEqual(L.viewTabById("gone"), null, "unknown tab id resolves to null");
+  // A tab id that no longer exists (older device, dropped tab) must land on the
+  // board rather than render nothing.
+  assert.strictEqual(L.normalizeViewTab("gone"), "board", "unknown tab falls back to the board");
+  assert.strictEqual(L.normalizeViewTab(""), "board", "empty tab falls back to the board");
+  assert.strictEqual(L.normalizeViewTab("calc"), "calc", "a known tab is kept");
+
   // ---- calculator registry contract ---------------------------------------
   // These are the rules that let a new score be added as data. Above all: no
   // tool without a stated source, no result without a stated use. The CCr /

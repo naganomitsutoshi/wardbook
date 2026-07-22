@@ -395,26 +395,49 @@ const adropReopen = vm.runInContext("renderCalcSheet()", sandbox);
 if (!adropReopen.includes(vm.runInContext("STR.calcAdropNeed", sandbox))) fail("reopening must clear SpO2/BP and refuse to score");
 // Restore the fixture for later checks.
 vm.runInContext("updateCaseBio('c1','age',''); updateCaseSex('c1',''); updateCaseBio('c1','bun',''); closeSheet();", sandbox);
-// Calculator tab (patient-less). It sits in the topbar, not beside the board
-// view chips, so the board keeps the lead role.
-if (!vm.runInContext("renderTopbar()", sandbox).includes("openCalcTab()")) fail("topbar missing calculator tab");
-vm.runInContext("openCalcTab(); openCalcTool('kidney');", sandbox);
-if (vm.runInContext("SHEET.name", sandbox) !== "calc") fail("calc tab did not open the sheet");
+// Tab layer: every registered tab must have a body and a chip. This is what
+// makes "adding a screen" a data change — a tab declared without a body would
+// otherwise render blank only when tapped.
+const tabIds = JSON.parse(vm.runInContext("JSON.stringify(VIEW_TABS.map(t=>t.id))", sandbox));
+tabIds.forEach(function(id){
+  if (vm.runInContext("typeof TAB_BODY[" + JSON.stringify(id) + "]", sandbox) !== "function") fail("tab has no body: " + id);
+  if (!vm.runInContext("STR[viewTabById(" + JSON.stringify(id) + ").labelKey]", sandbox)) fail("tab has no label: " + id);
+});
+vm.runInContext("setBoardMode('board')", sandbox);
+const tabBar = vm.runInContext("renderBoard()", sandbox);
+tabIds.forEach(function(id){
+  if (!tabBar.includes("setBoardMode('" + id + "')")) fail("tab row missing chip: " + id);
+});
+// An unknown tab (older device, dropped tab) falls back to the board.
+vm.runInContext("VIEW.boardMode='gone'", sandbox);
+if (!vm.runInContext("renderBoard()", sandbox).includes("dropzone")) fail("unknown tab must fall back to the board");
+vm.runInContext("setBoardMode('board')", sandbox);
+
+// Calculator tab (patient-less). It now sits in the tab row beside ボード／今日／
+// 週間予定 (CEO 2026-07-22), so the topbar no longer carries a button.
+if (vm.runInContext("renderTopbar()", sandbox).includes("openCalcTab()")) fail("calculator button must leave the topbar");
+vm.runInContext("openCalcTab()", sandbox);
+if (vm.runInContext("VIEW.boardMode", sandbox) !== "calc") fail("openCalcTab did not switch to the calc tab");
+if (vm.runInContext("SHEET.name", sandbox) !== "") fail("calc tab must not open a sheet");
 if (vm.runInContext("VIEW.calcFor", sandbox) !== "") fail("calc tab must not be bound to a case");
-const calcTabEmpty = vm.runInContext("renderCalcSheet()", sandbox);
-if (!calcTabEmpty.includes(vm.runInContext("STR.calcNoCase", sandbox))) fail("patient-less sheet must say inputs are not saved");
-if (!calcTabEmpty.includes("updateCaseBio('','cr'")) fail("patient-less sheet missing Cr input");
+if (!vm.runInContext("renderBoard()", sandbox).includes("openCalcTool('adrop')")) fail("calc tab missing the tool list");
+vm.runInContext("openCalcTool('kidney')", sandbox);
+const calcTabEmpty = vm.runInContext("renderBoard()", sandbox);
+if (!calcTabEmpty.includes(vm.runInContext("STR.calcNoCase", sandbox))) fail("calc tab must say inputs are not saved");
+if (!calcTabEmpty.includes("updateCaseBio('','cr'")) fail("calc tab missing Cr input");
+// You leave the tab by picking another tab, so there is no close button.
+if (calcTabEmpty.includes("closeSheet()")) fail("calc tab must not offer a sheet close button");
 // The same numbers must come out, and nothing may reach a case.
 vm.runInContext("updateCaseBio('','age','70'); updateCaseBio('','weightKg','60'); updateCaseBio('','cr','1.0'); updateCaseBio('','sex','M');", sandbox);
-const calcTabFilled = vm.runInContext("renderCalcSheet()", sandbox);
+const calcTabFilled = vm.runInContext("renderBoard()", sandbox);
 if (!calcTabFilled.includes("58.3")) fail("patient-less CCr missing");
 if (!calcTabFilled.includes("57.3")) fail("patient-less eGFR missing");
 const untouched = JSON.parse(vm.runInContext("JSON.stringify(DB.cases.find(c=>c.id==='c1').bio)", sandbox));
 if (untouched.age !== null || untouched.weightKg !== null || untouched.cr !== null) fail("patient-less calculation leaked into a case: " + JSON.stringify(untouched));
-// Reopening starts clean: scratch values must not linger between patients.
-vm.runInContext("closeSheet(); openCalcTab(); openCalcTool('kidney');", sandbox);
-if (!vm.runInContext("renderCalcSheet()", sandbox).includes(vm.runInContext("STR.calcNeedInput", sandbox))) fail("calc tab must reopen empty");
-vm.runInContext("closeSheet();", sandbox);
+// Leaving and coming back starts clean: scratch values must not linger.
+vm.runInContext("setBoardMode('board'); setBoardMode('calc'); openCalcTool('kidney');", sandbox);
+if (!vm.runInContext("renderBoard()", sandbox).includes(vm.runInContext("STR.calcNeedInput", sandbox))) fail("calc tab must be empty on re-entry");
+vm.runInContext("setBoardMode('board');", sandbox);
 // The PII warning must name the widened boundary (age/sex/weight now allowed).
 if (!vm.runInContext("STR.piiWarning", sandbox).includes("年齢")) fail("piiWarning not revised for the new boundary");
 // Meta editor carries the ward/room input.

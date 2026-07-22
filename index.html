@@ -280,9 +280,11 @@
   .missrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
   .missrow .input{flex:1 1 180px}
   .hidden{display:none!important}
-  .seg{display:flex;gap:6px;margin-bottom:10px}
+  /* Tab chips never shrink (they must stay readable), so the row wraps once the
+     tab list outgrows the phone width instead of overflowing sideways. */
+  .seg{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
   .seg button{flex:1}
-  .seg .densitytoggle{flex:0 0 auto}
+  .seg .densitytoggle{flex:0 0 auto;margin-left:auto}
   .searchbar,.filters{display:flex;gap:8px;flex-wrap:wrap}
   .searchbar input,.filters select{flex:1}
   .weekwrap,.chartwrap{overflow:auto}
@@ -2048,6 +2050,30 @@ function calcWarnKeys(tool, values){
   return out;
 }
 
+// Top-level screens are a registry, same idea as CALC_TOOLS: this list is the
+// only place that knows which tabs exist and in what order. The chip row, the
+// body dispatch (TAB_BODY) and the on-enter hooks (TAB_ENTER) all read from it,
+// so adding a screen is a data change plus one render function.
+//   density:true  = the compact/normal toggle belongs on this tab
+//   scratch:true  = entering the tab throws away the previous session's inputs
+var VIEW_TABS = [
+  { id:"board", labelKey:"boardView", density:true },
+  { id:"day",   labelKey:"dayView" },
+  { id:"week",  labelKey:"weekView" },
+  { id:"calc",  labelKey:"calcBtn", scratch:true }
+];
+
+function viewTabById(id){
+  for (var i = 0; i < VIEW_TABS.length; i++) if (VIEW_TABS[i].id === id) return VIEW_TABS[i];
+  return null;
+}
+
+// An unknown tab id (older device, dropped tab, corrupted state) falls back to
+// the board rather than rendering nothing.
+function normalizeViewTab(id){
+  return viewTabById(String(id || "")) ? String(id) : VIEW_TABS[0].id;
+}
+
 function todayISOFallback(){
   return "2000-01-01";
 }
@@ -2064,6 +2090,9 @@ if (typeof module !== "undefined") {
     calcAdropItems:calcAdropItems,
     calcAdropBandKey:calcAdropBandKey,
     calcToolById:calcToolById,
+    viewTabById:viewTabById,
+    normalizeViewTab:normalizeViewTab,
+    VIEW_TABS:VIEW_TABS,
     calcCollect:calcCollect,
     calcWarnKeys:calcWarnKeys,
     CALC_LIMITS:CALC_LIMITS,
@@ -3107,16 +3136,32 @@ function syncOrientationLock(){
   } catch (e) {}
 }
 
-function setBoardMode(mode){
-  var next = mode === "week" ? "week" : mode === "day" ? "day" : "board";
-  var prev = VIEW.boardMode || "board";
-  VIEW.boardMode = next;
-  if (next === "day") VIEW.dayDate = todayISO();
-  if (next === "week" && prev !== "week") {
+// What each tab needs done when you arrive on it. A tab with nothing to set up
+// simply has no entry here.
+var TAB_ENTER = {
+  day:function(){ VIEW.dayDate = todayISO(); },
+  week:function(prev){
+    if (prev === "week") return;
     VIEW.weekPast = 0;
     VIEW.weekFuture = weekDefaultFuture();
     WEEK_SCROLL_RT.initPending = true;
+  },
+  calc:function(prev){
+    if (prev === "calc") return;
+    // Arriving on the calculator always starts from empty: the moment's state
+    // (SpO2, blood pressure, consciousness) must never be inherited from the
+    // last time the tab was used.
+    CALC_SCRATCH = {};
+    VIEW.calcFor = "";
+    VIEW.calcTool = calcOnlyToolId();
   }
+};
+
+function setBoardMode(mode){
+  var next = normalizeViewTab(mode);
+  var prev = VIEW.boardMode || "board";
+  VIEW.boardMode = next;
+  if (TAB_ENTER[next]) TAB_ENTER[next](prev);
   if (next !== "week") resetWeekRange();
   render();
 }
@@ -3489,26 +3534,29 @@ function openCalcSheet(caseId){
   renderSheet();
 }
 
-// Patient-less calculation (topbar). Values live in CALC_SCRATCH only: nothing
-// is written to a case, nothing is synced, nothing survives closing the sheet.
+// Patient-less calculation (the 計算 tab). Values live in CALC_SCRATCH only:
+// nothing is written to a case, nothing is synced, nothing survives leaving the
+// tab. The clearing itself lives in TAB_ENTER.calc, so arriving by chip and
+// arriving by this call behave identically.
 function openCalcTab(){
-  navNoteSheetOpen();
-  CALC_SCRATCH = {};
-  VIEW.calcFor = "";
-  VIEW.calcTool = calcOnlyToolId();
-  SHEET.name = "calc";
-  SHEET.draft = {};
-  renderSheet();
+  setBoardMode("calc");
+}
+
+// The calculator draws on two surfaces (the sheet from a case, the tab). Both
+// read the same state, so the redraw follows whichever one is open.
+function calcRerender(){
+  if (SHEET.name === "calc") renderSheet();
+  else render();
 }
 
 function openCalcTool(id){
   VIEW.calcTool = calcToolById(id) ? id : "";
-  renderSheet();
+  calcRerender();
 }
 
 function backToCalcList(){
   VIEW.calcTool = "";
-  renderSheet();
+  calcRerender();
 }
 
 function openSyncSheet(){
@@ -3743,11 +3791,11 @@ function calcFieldValue(def, value){
 function updateCaseBio(caseId, key, value){
   var def = Object.prototype.hasOwnProperty.call(CALC_FIELDS, key) ? CALC_FIELDS[key] : null;
   if (!def) return;
-  if (def.type === "sex") { if (caseId) updateCaseSex(caseId, String(value == null ? "" : value)); else { CALC_SCRATCH.sex = String(value == null ? "" : value); renderSheet(); } return; }
+  if (def.type === "sex") { if (caseId) updateCaseSex(caseId, String(value == null ? "" : value)); else { CALC_SCRATCH.sex = String(value == null ? "" : value); calcRerender(); } return; }
   var next = calcFieldValue(def, value);
   if (next === undefined) return;
   // store:"none" never reaches a case, even when one is open.
-  if (!caseId || def.store === "none") { CALC_SCRATCH[key] = next; renderSheet(); return; }
+  if (!caseId || def.store === "none") { CALC_SCRATCH[key] = next; calcRerender(); return; }
   mutateCase(caseId, function(c){
     if (!isObj(c.bio)) c.bio = {};
     c.bio[key] = next;
@@ -4794,9 +4842,6 @@ function renderTopbar(){
   return '<div class="topbar"><div class="toprow">' +
     (VIEW.name === "detail" ? '<button class="ghostbtn smallbtn" onclick="openBoard()">' + esc(STR.back) + '</button>' : '') +
     '<div class="title">Wardbook</div><div class="grow"></div>' +
-    // Calculator tab: a tool, not a view of cases, so it sits here rather than
-    // beside ボード／今日／週間予定 — the board keeps the lead role.
-    '<button class="ghostbtn smallbtn" onclick="openCalcTab()">' + esc(STR.calcBtn) + '</button>' +
     '</div></div>';
 }
 
@@ -5576,18 +5621,25 @@ function calcValuesFor(caseId){
   return vals;
 }
 
-function renderCalcListSheet(){
-  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.calcPickTitle) + '</div><div class="stack">' +
-    (VIEW.calcFor ? '' : '<div class="note">' + esc(STR.calcNoCase) + '</div>') +
+// The tool list, without the surrounding card. Both surfaces (sheet and tab)
+// wrap it in their own chrome.
+function calcListBody(){
+  return (VIEW.calcFor ? '' : '<div class="note">' + esc(STR.calcNoCase) + '</div>') +
     CALC_TOOLS.map(function(tool){
       return '<button class="lineitem" style="width:100%;text-align:left" onclick="openCalcTool(\'' + esc(tool.id) + '\')"><span class="text">' + esc(STR[tool.nameKey] || tool.id) + '</span></button>';
-    }).join('') +
+    }).join('');
+}
+
+function renderCalcListSheet(){
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.calcPickTitle) + '</div><div class="stack">' +
+    calcListBody() +
     '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
-function renderCalcSheet(){
-  var tool = calcToolById(VIEW.calcTool);
-  if (!tool) return renderCalcListSheet();
+// The calculator itself, drawn the same way wherever it appears. The sheet adds
+// a title bar and a close button; the tab adds neither. Keeping one body means a
+// new score never has to be laid out twice.
+function calcToolBody(tool){
   var caseId = VIEW.calcFor || "";
   var values = calcValuesFor(caseId);
   if (values === null) return '';
@@ -5639,19 +5691,43 @@ function renderCalcSheet(){
       ' onchange="updateCaseBio(\'' + esc(caseId) + '\',\'' + esc(key) + '\',this.value)">' +
       (note ? '<div class="faint">' + esc(note) + '</div>' : '') + '</div>';
   }
-  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR[tool.nameKey]) + '</div><div class="stack">' +
-    (caseId ? '' : '<div class="note">' + esc(STR.calcNoCase) + '</div>') +
+  return (caseId ? '' : '<div class="note">' + esc(STR.calcNoCase) + '</div>') +
     (anyResult ? '' : '<div class="note">' + esc(STR[tool.needKey]) + '</div>') +
     calcWarnKeys(tool, values).map(function(msgKey){ return '<div class="note warn">' + esc(STR[msgKey]) + '</div>'; }).join('') +
     results.map(resultBlock).join('') +
     tool.fields.map(field).join('') +
     (tool.rangeKey ? '<div class="note">' + esc(STR[tool.rangeKey]) + '</div>' : '') +
     '<div class="note warn">' + esc(STR[tool.disclaimerKey]) + '</div>' +
-    '<div class="faint">' + esc(STR[tool.sourceKey]) + '</div>' +
-    '<div class="row">' +
-    (CALC_TOOLS.length > 1 ? '<button class="ghostbtn" onclick="backToCalcList()">' + esc(STR.calcBackToList) + '</button>' : '') +
+    '<div class="faint">' + esc(STR[tool.sourceKey]) + '</div>';
+}
+
+function calcBackBtn(){
+  return CALC_TOOLS.length > 1 ? '<button class="ghostbtn" onclick="backToCalcList()">' + esc(STR.calcBackToList) + '</button>' : '';
+}
+
+function renderCalcSheet(){
+  var tool = calcToolById(VIEW.calcTool);
+  if (!tool) return renderCalcListSheet();
+  var body = calcToolBody(tool);
+  if (body === '') return '';
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR[tool.nameKey]) + '</div><div class="stack">' +
+    body +
+    '<div class="row">' + calcBackBtn() +
     '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div>' +
   '</div></div>';
+}
+
+// The 計算 tab: the same calculator, without a case behind it. No close button —
+// you leave by picking another tab.
+function renderCalcTabBody(){
+  var tool = calcToolById(VIEW.calcTool);
+  if (!tool) {
+    return '<section class="panelcard"><div class="one">' + esc(STR.calcPickTitle) + '</div><div class="stack" style="margin-top:10px">' + calcListBody() + '</div></section>';
+  }
+  return '<section class="panelcard"><div class="one">' + esc(STR[tool.nameKey]) + '</div><div class="stack" style="margin-top:10px">' +
+    calcToolBody(tool) +
+    (CALC_TOOLS.length > 1 ? '<div class="row">' + calcBackBtn() + '</div>' : '') +
+  '</div></section>';
 }
 
 function renderStageSheet(){
@@ -5691,12 +5767,20 @@ function renderDataSheet(){
     '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
-renderBoard = function(){
+function renderCaseListView(){
   var cases = boardCases();
-  var body;
-  if (VIEW.boardMode === "week") {
+  if (!cases.length) return '<div class="empty">' + esc(STR.emptyBoard) + '</div>';
+  return '<div class="list' + (boardDensityCompact() ? ' compact' : '') + '">' +
+    cases.map(function(c, idx){
+      return '<div class="dropzone" data-drop-index="' + idx + '"></div>' + renderBoardCard(c);
+    }).join('') +
+    '<div class="dropzone" data-drop-index="' + cases.length + '"></div>' +
+  '</div>';
+}
+
+function renderWeekView(){
     var week = buildWeekGrid(DB.cases, todayISO(), VIEW.weekPast, VIEW.weekFuture);
-    body = '<div class="scrollhintwrap"><div id="weekWrap" class="weekwrap"><table class="weekgrid"><thead><tr><th class="sticky">' + esc(STR.weekCaseCol) + '</th>' + week.dates.map(function(date){
+    return '<div class="scrollhintwrap"><div id="weekWrap" class="weekwrap"><table class="weekgrid"><thead><tr><th class="sticky">' + esc(STR.weekCaseCol) + '</th>' + week.dates.map(function(date){
       return '<th class="' + esc(weekHeaderClass(date, week.today)) + '" onclick="openDayView(\'' + esc(date) + '\')">' + esc(weekHeaderLabel(date)) + '</th>';
     }).join('') + '</tr></thead><tbody>' + week.rows.map(function(row){
       return '<tr><th class="sticky casecell" onclick="openDetail(\'' + esc(row.case.id) + '\')">' + esc(row.case.label) + ' D' + computeDay(row.case.admittedAt, todayISO()) + '</th>' + week.dates.map(function(date){
@@ -5719,17 +5803,30 @@ renderBoard = function(){
         }).join('') + (dots.length > 6 ? '<span class="dotmore">+' + (dots.length - 6) + '</span>' : '') + '</div></td>';
       }).join('') + '</tr>';
     }).join('') + '</tbody></table></div></div>';
-  } else if (VIEW.boardMode === "day") {
-    body = renderDayPlanView();
-  } else {
-    body = cases.length ? '<div class="list' + (boardDensityCompact() ? ' compact' : '') + '">' +
-      cases.map(function(c, idx){
-        return '<div class="dropzone" data-drop-index="' + idx + '"></div>' + renderBoardCard(c);
-      }).join('') +
-      '<div class="dropzone" data-drop-index="' + cases.length + '"></div>' +
-    '</div>' : '<div class="empty">' + esc(STR.emptyBoard) + '</div>';
-  }
-  return '<section class="screen"><div class="seg"><button class="chipbtn' + (VIEW.boardMode !== "week" && VIEW.boardMode !== "day" ? ' on' : '') + '" onclick="setBoardMode(\'board\')">' + esc(STR.boardView) + '</button><button class="chipbtn' + (VIEW.boardMode === "day" ? ' on' : '') + '" onclick="setBoardMode(\'day\')">' + esc(STR.dayView) + '</button><button class="chipbtn' + (VIEW.boardMode === "week" ? ' on' : '') + '" onclick="setBoardMode(\'week\')">' + esc(STR.weekView) + '</button>' + (VIEW.boardMode !== "week" && VIEW.boardMode !== "day" ? '<div class="grow"></div><button class="chipbtn densitytoggle' + (boardDensityCompact() ? ' on' : '') + '" onclick="toggleDensity()">' + esc(STR.densityCompact) + '</button>' : '') + '</div>' + body +
+}
+
+// One body per tab id. Adding a screen = one VIEW_TABS entry + one function
+// here; renderBoard itself never learns the list.
+var TAB_BODY = {
+  board:renderCaseListView,
+  day:renderDayPlanView,
+  week:renderWeekView,
+  calc:renderCalcTabBody
+};
+
+function renderTabBar(mode){
+  var tab = viewTabById(mode) || {};
+  return '<div class="seg">' + VIEW_TABS.map(function(t){
+    return '<button class="chipbtn' + (t.id === mode ? ' on' : '') + '" onclick="setBoardMode(\'' + esc(t.id) + '\')">' + esc(STR[t.labelKey] || t.id) + '</button>';
+  }).join('') +
+  (tab.density ? '<button class="chipbtn densitytoggle' + (boardDensityCompact() ? ' on' : '') + '" onclick="toggleDensity()">' + esc(STR.densityCompact) + '</button>' : '') +
+  '</div>';
+}
+
+renderBoard = function(){
+  var mode = normalizeViewTab(VIEW.boardMode);
+  var body = (TAB_BODY[mode] || TAB_BODY[VIEW_TABS[0].id])();
+  return '<section class="screen">' + renderTabBar(mode) + body +
   '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openReview()">' + esc(STR.review) + '</button><button class="ghostbtn" onclick="openMenuSheet()">' + esc(STR.menuRow) + '</button></div></div></div>';
 };
 
