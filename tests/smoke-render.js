@@ -203,8 +203,13 @@ vm.runInContext(`
 `, sandbox);
 
 const boardHtml = vm.runInContext("renderBoard()", sandbox);
-if (!boardHtml.includes("openSyncSheet()") || !boardHtml.includes("openDataSheet()")) fail("board missing sync/data row");
-if (!boardHtml.includes("openSearch()") || !boardHtml.includes("openSettingsSheet()")) fail("board missing search/settings row");
+// Bottom bar is one row (B-2, 2026-07-22): sync/data/search/settings moved into
+// the "menu" sheet. All four entry points must stay reachable from there.
+if (!boardHtml.includes("openMenuSheet()")) fail("board missing menu button");
+const menuHtml = vm.runInContext("renderMenuSheet()", sandbox);
+if (!menuHtml.includes("openSyncSheet()") || !menuHtml.includes("openDataSheet()")) fail("menu missing sync/data row");
+if (!menuHtml.includes("openSearch()") || !menuHtml.includes("openSettingsSheet()")) fail("menu missing search/settings row");
+if (!menuHtml.includes("data-sync-status")) fail("menu missing live sync status");
 if (!boardHtml.includes("haien")) fail("board missing case");
 if (!boardHtml.includes("stale1") && !boardHtml.includes("stale2")) fail("board missing staleness class");
 if (!boardHtml.includes('data-drop-index="0"')) fail("board missing dropzone index");
@@ -216,10 +221,12 @@ if (!boardHtml.includes("3E-305")) fail("board missing ward/room in meta");
   if (!boardHtml.includes(cls)) fail("board missing section color class " + cls);
 });
 
-// Normal mode shows ALL task items (no 2-item cap).
+// Normal mode shows ALL task items (no 2-item cap). Density defaults to
+// compact (B-3, 2026-07-22), so switch to normal explicitly for this check.
 vm.runInContext(`
   (function(){
     var t = todayISO();
+    SETTINGS.density = "normal";
     DB.cases[0].todos.push({ id:"n3", text:"task-three", done:false, createdOn:t });
     DB.cases[0].todos.push({ id:"n4", text:"task-four", done:false, createdOn:t });
     DB.cases[0].todos.push({ id:"t2", text:"todo-two", done:false, createdOn:t });
@@ -290,10 +297,20 @@ if (!detailHtml.includes("3E-305")) fail("detail missing ward/room in meta");
 ["sec-phase", "sec-task", "sec-pending", "sec-seeds"].forEach((cls) => {
   if (!detailHtml.includes(cls)) fail("detail missing section color class " + cls);
 });
-// Unified task rows carry date/time inputs and the done->pending shortcut.
-if (!detailHtml.includes("updateTodoDue('c1'")) fail("detail task row missing scheduled-date input");
-if (!detailHtml.includes("updateTodoTime('c1'")) fail("detail task row missing time input");
-if (!detailHtml.includes("taskToPending('c1'")) fail("detail task row missing done->pending shortcut");
+// Task rows collapse by default (B-1, 2026-07-22): the closed row offers the
+// editor entry point; opening it (VIEW.taskOpen) exposes date/time inputs and
+// the done->pending shortcut. Section jump chips ride the same detail render.
+if (!detailHtml.includes("openTaskEditor('c1','t1')")) fail("detail task row missing editor entry");
+if (detailHtml.includes("updateTodoDue('c1'")) fail("collapsed task row leaks the date editor");
+if (!detailHtml.includes('class="jumprow"') || !detailHtml.includes("jumpToSection('anc-task')")) fail("detail missing section jump chips");
+if (!detailHtml.includes('id="anc-task"') || !detailHtml.includes('id="anc-dc"')) fail("detail missing section anchors");
+vm.runInContext("VIEW.taskOpen='t1'", sandbox);
+const detailOpenHtml = vm.runInContext("renderDetail('c1')", sandbox);
+if (!detailOpenHtml.includes("updateTodoDue('c1'")) fail("detail task row missing scheduled-date input");
+if (!detailOpenHtml.includes("updateTodoTime('c1'")) fail("detail task row missing time input");
+if (!detailOpenHtml.includes("taskToPending('c1'")) fail("detail task row missing done->pending shortcut");
+if (!detailOpenHtml.includes("closeTaskEditor()")) fail("open task row missing close button");
+vm.runInContext("VIEW.taskOpen=''", sandbox);
 // "+予定" quick add (2026-07-15): button on detail, one sheet, saves a Task with
 // due/time; the discharge toggle writes discharge.plannedOn instead.
 if (!detailHtml.includes("openPlanSheet('c1')")) fail("detail missing +plan button");
@@ -574,8 +591,10 @@ vm.runInContext("SHEET={name:'chartEventCell',draft:{caseId:'c1',catId:'cat-ic',
 const chartEventSheet = vm.runInContext("renderChartEventCellSheet()", sandbox);
 if (!chartEventSheet.includes("addChartEventItem()")) fail("chartEventCell sheet missing add");
 if (!chartEventSheet.includes("removeChartItem('c1','ce1')")) fail("chartEventCell sheet missing existing event row");
-const dischargeIx = detailHtml.indexOf(vm.runInContext("STR.dischargePanel", sandbox));
-const taskIx = detailHtml.indexOf(vm.runInContext("DB.config.labels.task", sandbox));
+// Compare section anchors, not labels: the jump-chip row (B-4) repeats every
+// section label near the top, so label indexOf no longer reflects panel order.
+const dischargeIx = detailHtml.indexOf('id="anc-dc"');
+const taskIx = detailHtml.indexOf('id="anc-task"');
 if (dischargeIx < 0) fail("detail missing discharge panel");
 if (taskIx < 0 || dischargeIx > taskIx) fail("dc-stage discharge panel not before task section");
 if (!detailHtml.includes("copyDayExport('c1')")) fail("detail missing day export");

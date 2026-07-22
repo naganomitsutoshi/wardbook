@@ -71,7 +71,7 @@
   html{-webkit-text-size-adjust:100%}
   body{
     margin:0;
-    font:14px/1.4 system-ui,-apple-system,"Segoe UI","Hiragino Kaku Gothic ProN","Yu Gothic UI",sans-serif;
+    font:15px/1.45 system-ui,-apple-system,"Segoe UI","Hiragino Kaku Gothic ProN","Yu Gothic UI",sans-serif;
     color:var(--text);
     background:var(--bg);
   }
@@ -108,7 +108,7 @@
     min-height:36px;
   }
   .handle{width:36px;min-width:36px;padding:0;touch-action:none}
-  .iconbtn{width:36px;padding:0}
+  .iconbtn{width:40px;min-height:40px;padding:0}
   .primary{
     background:var(--accent);
     border-color:var(--accent);
@@ -218,8 +218,9 @@
   .one{font-size:16px;font-weight:700}
   .subedit{font-size:13px}
   .check{
-    width:20px;height:20px;margin-top:2px;
+    width:24px;height:24px;margin-top:1px;
     accent-color:var(--ok);
+    flex-shrink:0;
   }
   .danger{
     border-color:#fecaca;
@@ -270,7 +271,7 @@
   .card.stale1{filter:saturate(.55)}
   .card.stale2{filter:saturate(.2);opacity:.82}
   .bottomrow{display:flex;gap:8px}
-  .bottomrow > *{flex:1;min-height:44px}
+  .bottomrow > *{flex:1;min-height:44px;white-space:nowrap}
   .reviewhead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
   .reviewprogress{font-size:12px;color:var(--muted)}
   .reviewactions,.reviewstack{display:flex;flex-direction:column;gap:8px}
@@ -285,13 +286,28 @@
   .searchbar,.filters{display:flex;gap:8px;flex-wrap:wrap}
   .searchbar input,.filters select{flex:1}
   .weekwrap,.chartwrap{overflow:auto}
+  /* Right-edge fade: both grids extend past the viewport by design (windowed
+     columns), so a persistent hint is accurate — more columns always exist. */
+  .scrollhintwrap{position:relative}
+  .scrollhintwrap::after{
+    content:"";position:absolute;top:0;right:0;bottom:0;width:18px;
+    pointer-events:none;
+    background:linear-gradient(to left,var(--bg),rgba(0,0,0,0));
+  }
+  .datechip{
+    font-size:11px;color:var(--muted);
+    border:1px solid var(--line);border-radius:999px;
+    padding:1px 7px;white-space:nowrap;flex-shrink:0;
+  }
+  .jumprow{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px}
+  .anchor{scroll-margin-top:64px}
   .weekgrid,.chartgrid{border-collapse:separate;border-spacing:0;min-width:max-content}
   .weekgrid th,.weekgrid td,.chartgrid th,.chartgrid td{
     border:1px solid var(--line);
     background:var(--card);
     min-width:28px;
     padding:4px;
-    font-size:11px;
+    font-size:12px;
     text-align:center;
     vertical-align:middle;
   }
@@ -322,7 +338,7 @@
   .chartdayname{min-width:84px}
   .chartdayval{flex:1}
   .chartgrid thead th{padding:6px 6px;font-size:12px;line-height:1.25;cursor:pointer}
-  .dnum{display:block;font-size:9px;color:var(--muted);font-weight:400}
+  .dnum{display:block;font-size:11px;color:var(--muted);font-weight:400}
   /* Week-cell dots: one dot per scheduled item, colored by type. */
   .dotstack{display:flex;gap:4px;justify-content:center;flex-wrap:wrap;align-items:center;margin-top:4px;min-height:12px}
   .wdot{display:inline-block;width:10px;height:10px;border-radius:999px;background:var(--muted)}
@@ -346,7 +362,7 @@
   .daygroup .plain{margin-top:6px}
   .chartlabel{white-space:nowrap;font-weight:400;cursor:pointer}
   .catrow{cursor:pointer;white-space:nowrap}
-  .colmark{display:block;font-size:9px;color:var(--muted);font-weight:700;min-height:11px}
+  .colmark{display:block;font-size:10px;color:var(--muted);font-weight:700;min-height:12px}
   .bandcell{position:relative;height:22px}
   .band{
     position:absolute;
@@ -2199,6 +2215,9 @@ const STR = {
   dueLabel:"指定日",
   timeLabel:"時刻",
   toPendingBtn:"済→待ちに",
+  taskEditBtn:"編集",
+  taskEditClose:"閉じる",
+  menuRow:"その他",
   backOnLabel:"戻り日（不明なら空欄）",
   editMeta:"年代・性別",
   review:"夕の棚卸し",
@@ -2432,7 +2451,7 @@ function defaultSettings(){
     cardSections:["phase", "task", "pending", "seeds"],
     cardHidden:[],
     chartHidden:[],
-    density:"normal"
+    density:"compact"
   };
 }
 
@@ -2460,7 +2479,10 @@ function loadSettings(){
   base.cardSections = normalizeCardSections(cloneArr(src.cardSections).filter(Boolean));
   base.cardHidden = cloneArr(src.cardHidden).filter(Boolean);
   base.chartHidden = cloneArr(src.chartHidden).filter(Boolean);
-  base.density = src.density === "compact" ? "compact" : "normal";
+  // Compact is the default (B-3, CEO 2026-07-22); an explicit stored "normal"
+  // (a device where the toggle was used) is respected, everything else lands
+  // on compact — including settings saved before the key existed.
+  base.density = src.density === "normal" ? "normal" : "compact";
   return base;
 }
 
@@ -3334,6 +3356,7 @@ function openDetail(caseId){
   VIEW.admOpen = false;
   VIEW.chartOpen = false;
   VIEW.chartCollapsed = {};
+  VIEW.taskOpen = "";
   // Opening the case consumes the "done" badge (the saved log is now visible).
   if (AI.caseId === caseId && AI.status === "done") AI = { caseId:"", status:"", text:"" };
   render();
@@ -3398,6 +3421,28 @@ function openSettingsSheet(){
   SHEET.name = "settings";
   SHEET.draft = {};
   renderSheet();
+}
+
+// "その他" sheet (B-2, CEO 2026-07-22): the second bottom-bar row (sync / data /
+// search / settings) moved here so the fixed bar is one row tall. Sync status
+// stays visible as the row's subtitle via the same data-sync-status hook.
+function openMenuSheet(){
+  navNoteSheetOpen();
+  SHEET.name = "menu";
+  SHEET.draft = {};
+  renderSheet();
+}
+
+function renderMenuSheet(){
+  function row(label, action, sub){
+    return '<button class="lineitem" style="width:100%;text-align:left" onclick="' + action + '"><span class="text" style="flex:1">' + esc(label) + '</span>' + (sub || '') + '</button>';
+  }
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.menuRow) + '</div><div class="stack">' +
+    row(STR.syncRow, 'openSyncSheet()', '<span class="faint" data-sync-status>' + esc(syncStatusLabel()) + '</span>') +
+    row(STR.dataRow, 'openDataSheet()') +
+    row(STR.searchRow, 'closeSheet();openSearch()') +
+    row(STR.settingsRow, 'openSettingsSheet()') +
+    '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
 function openAdmissionSheet(){
@@ -3595,6 +3640,26 @@ function setStage(caseId, stageId){
 function setViewEditingMeta(on){
   VIEW.editingMeta = !!on;
   render();
+}
+
+// One task editor open at a time; opening another closes the previous.
+function openTaskEditor(caseId, itemId){
+  if (VIEW.caseId !== caseId) return;
+  VIEW.taskOpen = safeId(itemId);
+  render();
+}
+
+function closeTaskEditor(){
+  VIEW.taskOpen = "";
+  render();
+}
+
+// Detail section jump (B-4): smooth-scroll to an anchor-wrapped panel. The
+// sticky topbar offset is handled by .anchor{scroll-margin-top}.
+function jumpToSection(anchorId){
+  if (!document.getElementById) return;
+  var el = document.getElementById(safeId(anchorId));
+  if (el && el.scrollIntoView) el.scrollIntoView({ behavior:"smooth", block:"start" });
 }
 
 function setViewEditingLabel(on){
@@ -4768,7 +4833,8 @@ function renderBoardCard(c){
     task:(undone.length || tasks.later.length) ? '<div class="section sec-task"><div class="sectiontitle">' + esc(DB.config.labels.task) + ' ' + undone.length + '</div><div class="plain">' + undone.map(function(item){
       return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + taskMetaLine(item, false) + '</div></label>';
     }).join('') + tasks.later.map(function(item){
-      return '<div class="lineitem"><div class="linegrow"><div class="text faint">' + esc(item.text) + '</div>' + taskMetaLine(item, true) + '</div></div>';
+      var when = (item.due ? item.due.slice(5) : '') + (item.time ? ' ' + item.time : '');
+      return '<div class="lineitem"><div class="linegrow"><div class="compactline"><div class="text">' + esc(item.text) + '</div>' + (when ? '<span class="datechip">' + esc(when) + '</span>' : '') + '</div></div></div>';
     }).join('') + '</div></div>' : '',
     pending:showPendings ? '<div class="section sec-pending"><div class="sectiontitle">' + esc(DB.config.labels.pending) + '</div><div class="plain">' + c.pendings.map(function(item){
       var urgent = item.backOn && item.backOn <= todayISO();
@@ -4997,7 +5063,7 @@ function expandChartFuture(){
 function renderChartPanel(c){
   var open = !!VIEW.chartOpen;
   var head = '<div class="collapsehead" onclick="toggleChartPanel()"><div class="one">' + esc(STR.chartPanel) + '</div><div class="meta">' + (open ? '-' : '+') + '</div></div>';
-  if (!open) return '<section class="panelcard">' + head + '</section>';
+  if (!open) return '<section class="panelcard anchor" id="anc-chart">' + head + '</section>';
   var today = todayISO();
   var allDates = chartDates(c, today);
   // The chart's own dates stop at the last entered value/plan (never past what
@@ -5068,7 +5134,7 @@ function renderChartPanel(c){
   var pastBtn = (!wide && hiddenPast > 0) ? '<button class="ghostbtn smallbtn" onclick="expandChartPast()">◀ 過去を表示</button>' : '';
   var futureBtn = !wide ? '<button class="ghostbtn smallbtn" onclick="expandChartFuture()">未来を表示 ▶</button>' : '';
   var navRow = (pastBtn || futureBtn) ? '<div class="row" style="margin-top:8px;justify-content:space-between">' + (pastBtn || '<span></span>') + (futureBtn || '<span></span>') + '</div>' : '';
-  return '<section class="panelcard">' + head + navRow + '<div class="chartwrap" style="margin-top:10px"><table class="chartgrid"><thead>' + headRow + '</thead><tbody>' + body + '</tbody></table></div></section>';
+  return '<section class="panelcard anchor" id="anc-chart">' + head + navRow + '<div class="scrollhintwrap" style="margin-top:10px"><div class="chartwrap"><table class="chartgrid"><thead>' + headRow + '</thead><tbody>' + body + '</tbody></table></div></div></section>';
 }
 
 function renderChartItemSheet(){
@@ -5216,13 +5282,27 @@ function renderMissPrompt(item){
 
 // Unified Task rows (Next+Today merged): checkbox / text / scheduled date
 // (optional) / time (optional) / done->pending shortcut / delete.
+// Task rows collapse to one line by default (B-1, CEO 2026-07-22): the always-
+// open date/time editor made each row ~130px tall and the detail screen scroll-
+// heavy. Tapping the text (or 編集) opens the full editor for that row only;
+// VIEW.taskOpen is screen-local state — never stored, never synced.
 function renderTaskList(c){
   return c.todos.map(function(item){
-    return '<div class="lineitem"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' +
+    var open = VIEW.taskOpen === item.id;
+    var check = '<input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">';
+    if (!open) {
+      var when = (item.due ? item.due.slice(5) : '') + (item.time ? ' ' + item.time : '');
+      return '<div class="lineitem">' + check +
+        '<div class="linegrow"><div class="compactline" onclick="openTaskEditor(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="text' + (item.done ? ' faint' : '') + '">' + esc(item.text) + '</div>' + (when ? '<span class="datechip">' + esc(when) + '</span>' : '') + '</div>' +
+        renderMissPrompt(item) +
+      '</div><button class="smallbtn" onclick="openTaskEditor(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' + esc(STR.taskEditBtn) + '</button></div>';
+    }
+    return '<div class="lineitem">' + check +
       '<div class="linegrow"><input class="input subedit" value="' + esc(item.text) + '" onchange="updateTodoText(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
       '<div class="row wrap" style="margin-top:6px"><span class="fieldlabel">' + esc(STR.dueLabel) + '</span><input class="date" type="date" value="' + esc(item.due || '') + '" onchange="updateTodoDue(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
       '<span class="fieldlabel">' + esc(STR.timeLabel) + '</span><input class="date" type="time" value="' + esc(item.time || '') + '" onchange="updateTodoTime(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
-      (item.done ? '' : '<button class="smallbtn" onclick="taskToPending(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' + esc(STR.toPendingBtn) + '</button>') + '</div>' +
+      (item.done ? '' : '<button class="smallbtn" onclick="taskToPending(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' + esc(STR.toPendingBtn) + '</button>') +
+      '<button class="smallbtn" onclick="closeTaskEditor()">' + esc(STR.taskEditClose) + '</button></div>' +
       renderMissPrompt(item) +
     '</div><button class="iconbtn" onclick="deleteTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
   }).join('');
@@ -5262,11 +5342,11 @@ function renderAdmissionPanel(c){
   var a = admOf(c);
   var open = !!VIEW.admOpen;
   var head = '<div class="collapsehead" onclick="toggleAdmPanel()"><div class="one">' + esc(STR.admPanel) + '</div><div class="meta">' + (open ? '-' : '+') + '</div></div>';
-  if (!open) return '<section class="panelcard">' + head + '</section>';
+  if (!open) return '<section class="panelcard anchor" id="anc-adm">' + head + '</section>';
   var body = '<div class="stack" style="margin-top:10px">' +
     '<div class="field"><textarea class="input" rows="5" placeholder="' + esc(STR.admTextPh) + '" onblur="updateCaseAdm(\'' + esc(c.id) + '\',this.value)">' + esc(a.text || '') + '</textarea><div class="note">' + esc(STR.piiWarning) + '</div></div>' +
   '</div>';
-  return '<section class="panelcard">' + head + body + '</section>';
+  return '<section class="panelcard anchor" id="anc-adm">' + head + body + '</section>';
 }
 
 // Daily notes: date-stamped free text, newest first. Text stays editable
@@ -5411,7 +5491,7 @@ function renderAiPanel(c){
     var body = open ? '<div class="text" style="white-space:pre-wrap">' + esc(item.text) + '</div><div class="faint">' + esc(STR.aiUnreviewed) + '</div>' : '';
     return '<div class="lineitem"><div class="linegrow">' + head + body + '</div><button class="iconbtn" onclick="deleteAiLog(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
   }).join('');
-  return '<section class="panelcard sec-ai"><div class="one">' + esc(STR.aiPanel) + '</div><div class="stack" style="margin-top:10px">' +
+  return '<section class="panelcard sec-ai anchor" id="anc-ai"><div class="one">' + esc(STR.aiPanel) + '</div><div class="stack" style="margin-top:10px">' +
     '<button class="ghostbtn" ' + (busy ? 'disabled ' : '') + 'onclick="runAiFeedback(\'' + esc(c.id) + '\')">' + esc(STR.aiRun) + '</button>' +
     status + logs +
   '</div></section>';
@@ -5421,8 +5501,8 @@ function deleteAiLog(caseId, itemId){
   deleteListItem("aiLogs", "ai", caseId, itemId);
 }
 
-function renderSectionCard(title, body, addId, placeholder, addFn, caseId, secClass){
-  return '<section class="panelcard' + (secClass ? ' ' + secClass : '') + '"><div class="one">' + esc(title) + '</div><div class="stack" style="margin-top:10px">' +
+function renderSectionCard(title, body, addId, placeholder, addFn, caseId, secClass, anchorId){
+  return '<section class="panelcard' + (secClass ? ' ' + secClass : '') + (anchorId ? ' anchor" id="' + esc(anchorId) : '') + '"><div class="one">' + esc(title) + '</div><div class="stack" style="margin-top:10px">' +
     (body || '<div class="faint">-</div>') +
     (addId ? '<div class="row"><input id="' + esc(addId) + '" class="input" placeholder="' + esc(placeholder) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){' + addFn + '(\'' + esc(caseId) + '\',this.value);this.value=\'\';}"><button class="ghostbtn" onclick="' + addFn + '(\'' + esc(caseId) + '\',document.getElementById(\'' + esc(addId) + '\').value);document.getElementById(\'' + esc(addId) + '\').value=\'\'">＋</button></div>' : '') +
   '</div></section>';
@@ -5616,7 +5696,7 @@ renderBoard = function(){
   var body;
   if (VIEW.boardMode === "week") {
     var week = buildWeekGrid(DB.cases, todayISO(), VIEW.weekPast, VIEW.weekFuture);
-    body = '<div id="weekWrap" class="weekwrap"><table class="weekgrid"><thead><tr><th class="sticky">' + esc(STR.weekCaseCol) + '</th>' + week.dates.map(function(date){
+    body = '<div class="scrollhintwrap"><div id="weekWrap" class="weekwrap"><table class="weekgrid"><thead><tr><th class="sticky">' + esc(STR.weekCaseCol) + '</th>' + week.dates.map(function(date){
       return '<th class="' + esc(weekHeaderClass(date, week.today)) + '" onclick="openDayView(\'' + esc(date) + '\')">' + esc(weekHeaderLabel(date)) + '</th>';
     }).join('') + '</tr></thead><tbody>' + week.rows.map(function(row){
       return '<tr><th class="sticky casecell" onclick="openDetail(\'' + esc(row.case.id) + '\')">' + esc(row.case.label) + ' D' + computeDay(row.case.admittedAt, todayISO()) + '</th>' + week.dates.map(function(date){
@@ -5638,7 +5718,7 @@ renderBoard = function(){
           return '<span class="wdot' + (dot.cls ? ' ' + dot.cls : '') + '"' + (dot.color ? ' style="background:' + esc(dot.color) + '"' : '') + '></span>';
         }).join('') + (dots.length > 6 ? '<span class="dotmore">+' + (dots.length - 6) + '</span>' : '') + '</div></td>';
       }).join('') + '</tr>';
-    }).join('') + '</tbody></table></div>';
+    }).join('') + '</tbody></table></div></div>';
   } else if (VIEW.boardMode === "day") {
     body = renderDayPlanView();
   } else {
@@ -5650,7 +5730,7 @@ renderBoard = function(){
     '</div>' : '<div class="empty">' + esc(STR.emptyBoard) + '</div>';
   }
   return '<section class="screen"><div class="seg"><button class="chipbtn' + (VIEW.boardMode !== "week" && VIEW.boardMode !== "day" ? ' on' : '') + '" onclick="setBoardMode(\'board\')">' + esc(STR.boardView) + '</button><button class="chipbtn' + (VIEW.boardMode === "day" ? ' on' : '') + '" onclick="setBoardMode(\'day\')">' + esc(STR.dayView) + '</button><button class="chipbtn' + (VIEW.boardMode === "week" ? ' on' : '') + '" onclick="setBoardMode(\'week\')">' + esc(STR.weekView) + '</button>' + (VIEW.boardMode !== "week" && VIEW.boardMode !== "day" ? '<div class="grow"></div><button class="chipbtn densitytoggle' + (boardDensityCompact() ? ' on' : '') + '" onclick="toggleDensity()">' + esc(STR.densityCompact) + '</button>' : '') + '</div>' + body +
-  '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openReview()">' + esc(STR.review) + '</button></div><div class="row wrap" style="margin-top:8px"><button class="ghostbtn smallbtn" onclick="openSyncSheet()"><span data-sync-status>' + esc(syncStatusLabel()) + '</span></button><button class="ghostbtn smallbtn" onclick="openDataSheet()">' + esc(STR.dataRow) + '</button><button class="ghostbtn smallbtn" onclick="openSearch()">' + esc(STR.searchRow) + '</button><button class="ghostbtn smallbtn" onclick="openSettingsSheet()">' + esc(STR.settingsRow) + '</button></div></div></div>';
+  '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openReview()">' + esc(STR.review) + '</button><button class="ghostbtn" onclick="openMenuSheet()">' + esc(STR.menuRow) + '</button></div></div></div>';
 };
 
 renderDetail = function(caseId){
@@ -5659,7 +5739,7 @@ renderDetail = function(caseId){
   var stage = stageById(c.stageId);
   var dischargeInline = c.stageId === "dc";
   var dischargeOpen = dischargeInline || !!VIEW.dischargeOpen;
-  var dischargePanel = '<section class="panelcard"><div class="collapsehead"' + (dischargeInline ? '' : ' onclick="toggleDischargePanel()"') + '><div class="one">' + esc(STR.dischargePanel) + '</div><div class="meta">' + dischargeProgress(c) + '/' + dcChecklistItems().length + (dischargeInline ? '' : (dischargeOpen ? ' -' : ' +')) + '</div></div>' +
+  var dischargePanel = '<section class="panelcard anchor" id="anc-dc"><div class="collapsehead"' + (dischargeInline ? '' : ' onclick="toggleDischargePanel()"') + '><div class="one">' + esc(STR.dischargePanel) + '</div><div class="meta">' + dischargeProgress(c) + '/' + dcChecklistItems().length + (dischargeInline ? '' : (dischargeOpen ? ' -' : ' +')) + '</div></div>' +
     (dischargeOpen ? '<div class="stack" style="margin-top:10px"><div class="row wrap"><span class="fieldlabel">' + esc(STR.plannedOn) + '</span><input class="date" type="date" value="' + esc(c.discharge.plannedOn || '') + '" onchange="mutateCase(\'' + esc(c.id) + '\',function(row){row.discharge.plannedOn=this.value||null}.bind(this))"></div><div class="checklist">' + dcChecklistItems().map(function(item){
       return '<label class="checkitem"><input class="check" type="checkbox" ' + (c.discharge.checklist[item.k] ? 'checked ' : '') + 'onclick="mutateCase(\'' + esc(c.id) + '\',function(row){row.discharge.checklist[\'' + esc(item.k) + '\']=this.checked}.bind(this))"><div class="linegrow"><div class="text">' + esc(item.t) + '</div><div class="faint">' + esc(item.h) + '</div></div></label>';
     }).join('') + '</div><textarea id="dcExportText" class="reviewtextarea hidden" readonly>' + esc(dischargeExportText(c.id)) + '</textarea><div class="row wrap"><button class="ghostbtn" onclick="copyDischargeExport(\'' + esc(c.id) + '\')">' + esc(STR.dcExport) + '</button>' + (c.status === "discharged" ? '<button class="ghostbtn" onclick="undischargeCase(\'' + esc(c.id) + '\')">' + esc(STR.backToActive) + '</button>' : '<button class="ghostbtn danger" onclick="dischargeCase(\'' + esc(c.id) + '\')">' + esc(STR.doDischarge) + '</button>') + '</div></div>' : '') + '</section>';
@@ -5671,15 +5751,28 @@ renderDetail = function(caseId){
       (VIEW.editingMeta ? renderMetaEditor(c) : '') +
     '</div><button class="pickbtn" onclick="openStagePicker(\'' + esc(c.id) + '\')">' + stageDot(stage) + esc(stage.name) + '</button></div>' +
     '<div class="field" style="margin-top:10px"><div class="fieldlabel">' + esc(STR.addDxTag) + '</div>' + renderTagList(c) + '<div class="row" style="margin-top:8px"><input id="dxTagInput" class="input" placeholder="' + esc(STR.dxTagPh) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addDxTag(\'' + esc(c.id) + '\',this.value);this.value=\'\'}"><button class="ghostbtn" onclick="addDxTag(\'' + esc(c.id) + '\',document.getElementById(\'dxTagInput\').value);document.getElementById(\'dxTagInput\').value=\'\'">+</button></div></div></section>' +
+    '<nav class="jumprow">' + [
+      { id:"anc-adm", label:STR.admPanel },
+      { id:"anc-problems", label:STR.problemsLabel },
+      { id:"anc-task", label:DB.config.labels.task },
+      { id:"anc-pending", label:DB.config.labels.pending },
+      { id:"anc-seeds", label:DB.config.labels.seeds },
+      { id:"anc-notes", label:STR.notesLabel },
+      { id:"anc-ai", label:STR.aiPanel },
+      { id:"anc-chart", label:STR.chartPanel },
+      { id:"anc-dc", label:STR.dischargePanel }
+    ].map(function(j){
+      return '<button class="chipbtn" onclick="jumpToSection(\'' + esc(j.id) + '\')">' + esc(j.label) + '</button>';
+    }).join('') + '</nav>' +
     renderAdmissionPanel(c) +
     '<section class="panelcard sec-phase"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
     '<section class="panelcard"><div class="row"><button class="ghostbtn" style="flex:1" onclick="openPlanSheet(\'' + esc(c.id) + '\')">' + esc(STR.addPlanBtn) + '</button><button class="ghostbtn" style="flex:1" onclick="openCalcSheet(\'' + esc(c.id) + '\')">' + esc(STR.calcBtn) + '</button></div></section>' +
-    renderSectionCard(STR.problemsLabel, renderProblemList(c), "problemInput", STR.problemPh, "addProblem", c.id, "sec-problem") +
+    renderSectionCard(STR.problemsLabel, renderProblemList(c), "problemInput", STR.problemPh, "addProblem", c.id, "sec-problem", "anc-problems") +
     (dischargeInline ? dischargePanel : '') +
-    renderSectionCard(DB.config.labels.task, renderTaskList(c), "taskInput", STR.taskPh, "addTask", c.id, "sec-task") +
-    renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id, "sec-pending") +
-    renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id, "sec-seeds") +
-    renderSectionCard(STR.notesLabel, renderNoteList(c), "noteInput", STR.notePh, "addNote", c.id, "sec-note") +
+    renderSectionCard(DB.config.labels.task, renderTaskList(c), "taskInput", STR.taskPh, "addTask", c.id, "sec-task", "anc-task") +
+    renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id, "sec-pending", "anc-pending") +
+    renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id, "sec-seeds", "anc-seeds") +
+    renderSectionCard(STR.notesLabel, renderNoteList(c), "noteInput", STR.notePh, "addNote", c.id, "sec-note", "anc-notes") +
     renderAiPanel(c) +
     '<section class="panelcard"><button class="ghostbtn" style="width:100%" onclick="openChartDaySheet(\'' + esc(c.id) + '\')">' + esc(STR.chartDayBtn) + '</button></section>' +
     renderChartPanel(c) +
@@ -5706,6 +5799,7 @@ renderSheet = function(){
   if (!el) return;
   var renderers = {
     admission:renderAdmissionSheet, stage:renderStageSheet, sync:renderSyncSheet,
+    menu:renderMenuSheet,
     data:renderDataSheet, settings:renderSettingsSheet, weekCell:renderWeekCellSheet,
     chartItem:renderChartItemSheet, chartValue:renderChartValueSheet, chartEventCell:renderChartEventCellSheet,
     chartDay:renderChartDaySheet,
