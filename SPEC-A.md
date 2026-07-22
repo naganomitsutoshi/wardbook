@@ -57,7 +57,11 @@ Case = {
   label,                 // anonymous label, e.g. "haien" (pneumonia). NEVER patient name/ID
   ageBand,               // "" | one of the age band strings (see string table)
   sex,                   // "" | "M" | "F"  (display strings in table)
-  bio: {                 // renal calculator inputs (2026-07-22). Latest value only, no history.
+  bio: {                 // shared calculator inputs. Latest value only, no history.
+                         // Keys are declared in CALC_FIELDS with store:"case"; every tool
+                         // reads the same bag, so a value entered once is reused everywhere.
+                         // Unknown keys are preserved verbatim by normalizeCase so a newer
+                         // device's field is not deleted on sync.
     age,                 // integer years | null. EXACT age, unlike ageBand. DOB stays forbidden.
     weightKg,            // number | null
     cr,                  // number | null  (serum creatinine, mg/dL)
@@ -269,5 +273,17 @@ expected.
   revised accordingly on 2026-07-22 and must be re-shown by any new free-text field.
 - **AI boundary is unaffected**: `aiFeedbackPayload` stays the two-key allowlist (`adm`, `notes`).
   `bio` must never enter it — pinned by a leak test in `tests/smoke-render.js`.
+- **Calculators are data, not code** (2026-07-22 CEO decision to keep adding scores): a tool is one
+  entry in `CALC_TOOLS`, its inputs are keys in `CALC_FIELDS`. Rules enforced by test:
+  every tool declares `sourceKey`, every result declares `useKey` ("what it is for"), and each
+  tool has exactly one `main` result rendered larger than the rest. An unlabelled number is the
+  dangerous part — the CCr / eGFR distinction must survive a hurried glance.
+  Interpretation text (score → what to consider) is quoted verbatim from the 1_MKM answer and is
+  never summarised or reworded in code; with no source, the score ships without interpretation.
+- `store:"none"` fields (the moment's state — consciousness, respiratory rate) are never persisted:
+  a three-day-old value that still looks current is the failure mode a bedside score must avoid.
+- **The calculator tab is the one exception to 局面ファースト** (2026-07-22 CEO decision). It lives
+  in the topbar, never beside the ボード／今日／週間予定 chips, and holds its inputs in
+  `CALC_SCRATCH` — not persisted, not synced, cleared on every open.
 - Keep total index.html reasonably compact; prefer clarity over cleverness.
 - Comments in code: English is fine.

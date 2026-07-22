@@ -345,6 +345,26 @@ vm.runInContext("updateCaseBio('c1','age','70'); updateCaseBio('c1','cr','0');",
 if (!vm.runInContext("renderCalcSheet()", sandbox).includes(vm.runInContext("STR.calcNeedInput", sandbox))) fail("out-of-range Cr must not produce a result");
 // Restore the fixture: later checks assume no calculator state.
 vm.runInContext("updateCaseBio('c1','age',''); updateCaseBio('c1','weightKg',''); updateCaseBio('c1','cr',''); closeSheet();", sandbox);
+// Calculator tab (patient-less). It sits in the topbar, not beside the board
+// view chips, so the board keeps the lead role.
+if (!vm.runInContext("renderTopbar()", sandbox).includes("openCalcTab()")) fail("topbar missing calculator tab");
+vm.runInContext("openCalcTab();", sandbox);
+if (vm.runInContext("SHEET.name", sandbox) !== "calc") fail("calc tab did not open the sheet");
+if (vm.runInContext("VIEW.calcFor", sandbox) !== "") fail("calc tab must not be bound to a case");
+const calcTabEmpty = vm.runInContext("renderCalcSheet()", sandbox);
+if (!calcTabEmpty.includes(vm.runInContext("STR.calcNoCase", sandbox))) fail("patient-less sheet must say inputs are not saved");
+if (!calcTabEmpty.includes("updateCaseBio('','cr'")) fail("patient-less sheet missing Cr input");
+// The same numbers must come out, and nothing may reach a case.
+vm.runInContext("updateCaseBio('','age','70'); updateCaseBio('','weightKg','60'); updateCaseBio('','cr','1.0'); updateCaseBio('','sex','M');", sandbox);
+const calcTabFilled = vm.runInContext("renderCalcSheet()", sandbox);
+if (!calcTabFilled.includes("58.3")) fail("patient-less CCr missing");
+if (!calcTabFilled.includes("57.3")) fail("patient-less eGFR missing");
+const untouched = JSON.parse(vm.runInContext("JSON.stringify(DB.cases.find(c=>c.id==='c1').bio)", sandbox));
+if (untouched.age !== null || untouched.weightKg !== null || untouched.cr !== null) fail("patient-less calculation leaked into a case: " + JSON.stringify(untouched));
+// Reopening starts clean: scratch values must not linger between patients.
+vm.runInContext("closeSheet(); openCalcTab();", sandbox);
+if (!vm.runInContext("renderCalcSheet()", sandbox).includes(vm.runInContext("STR.calcNeedInput", sandbox))) fail("calc tab must reopen empty");
+vm.runInContext("closeSheet();", sandbox);
 // The PII warning must name the widened boundary (age/sex/weight now allowed).
 if (!vm.runInContext("STR.piiWarning", sandbox).includes("年齢")) fail("piiWarning not revised for the new boundary");
 // Meta editor carries the ward/room input.

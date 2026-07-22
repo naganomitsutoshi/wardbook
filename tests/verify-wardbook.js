@@ -1093,5 +1093,61 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(junkBio.bio.weightKg, null, "negative weight drops to null");
   assert.strictEqual(junkBio.bio.cr, null, "non-numeric cr drops to null");
 
+  // Unknown keys inside bio must survive. A device on a newer build may store a
+  // field this build predates; silently dropping it here would delete that
+  // patient's data on the next sync.
+  const bioFuture = L.normalizeCase({ id:"bio4", label:"w", bio:{ age:"70", futureScoreInput:3 } }, "2026-07-22T00:00:00.000Z", "2026-07-22");
+  assert.strictEqual(bioFuture.bio.futureScoreInput, 3, "unknown bio keys survive normalisation");
+  assert.strictEqual(bioFuture.bio.age, 70, "known bio keys still normalise alongside unknown ones");
+
+  // ---- calculator registry contract ---------------------------------------
+  // These are the rules that let a new score be added as data. Above all: no
+  // tool without a stated source, no result without a stated use. The CCr /
+  // eGFR mix-up showed the unlabelled number is the dangerous part.
+  assert.ok(Array.isArray(L.CALC_TOOLS) && L.CALC_TOOLS.length >= 1, "at least one calculator registered");
+  const toolIds = new Set();
+  for (const tool of L.CALC_TOOLS) {
+    assert.ok(tool.id && !toolIds.has(tool.id), "tool ids are unique: " + tool.id);
+    toolIds.add(tool.id);
+    assert.ok(tool.nameKey, tool.id + ": needs a name");
+    assert.ok(tool.sourceKey, tool.id + ": a calculator with no stated source must not ship");
+    assert.ok(tool.disclaimerKey, tool.id + ": needs a disclaimer");
+    assert.ok(tool.results.length >= 1, tool.id + ": needs at least one result");
+    for (const r of tool.results) {
+      assert.ok(r.labelKey && r.unitKey, tool.id + "/" + r.key + ": needs label and unit");
+      assert.ok(r.useKey, tool.id + "/" + r.key + ": a result with no stated use must not ship");
+      assert.strictEqual(typeof r.run, "function", tool.id + "/" + r.key + ": needs a run()");
+    }
+    assert.strictEqual(tool.results.filter((r) => r.main).length, 1, tool.id + ": exactly one main result");
+    for (const key of tool.fields) {
+      assert.ok(Object.prototype.hasOwnProperty.call(L.CALC_FIELDS, key), tool.id + ": undeclared field " + key);
+    }
+  }
+  // Field declarations are the only allowlist that reaches storage.
+  for (const key of Object.keys(L.CALC_FIELDS)) {
+    const def = L.CALC_FIELDS[key];
+    assert.ok(["int", "num", "date", "sex", "bool"].includes(def.type), key + ": unknown field type " + def.type);
+    assert.ok(["case", "none"].includes(def.store), key + ": unknown store " + def.store);
+    assert.ok(def.labelKey, key + ": needs a label");
+  }
+  // Bounds stay tied to CALC_LIMITS so the guards can never drift apart.
+  assert.strictEqual(L.CALC_FIELDS.age.min, L.CALC_LIMITS.ageMin, "age bounds share one source");
+  assert.strictEqual(L.CALC_FIELDS.cr.max, L.CALC_LIMITS.crMax, "cr bounds share one source");
+
+  // The generic path must produce the same numbers the hand-written sheet did.
+  const kidney = L.calcToolById("kidney");
+  assert.ok(kidney, "kidney tool resolves by id");
+  assert.strictEqual(L.calcToolById("nope"), null, "unknown tool id resolves to null");
+  // JSON compare, not deepStrictEqual: arrays built inside the vm sandbox have
+  // a different Array prototype and would fail a strict prototype check.
+  const kidneyOut = L.calcCollect(kidney, { age:70, sex:"M", weightKg:60, cr:1.0 });
+  assert.strictEqual(JSON.stringify(kidneyOut.map((r) => [r.key, r.value])), '[["ccr",58.3],["egfr",57.3]]', "registry path reproduces the 1_MKM values");
+  assert.strictEqual(kidneyOut[0].main, true, "CCr is the main (large) result");
+  assert.strictEqual(kidneyOut[1].main, false, "eGFR is the secondary (small) result");
+  assert.strictEqual(JSON.stringify(L.calcCollect(kidney, {}).map((r) => r.value)), "[null,null]", "empty input yields no numbers");
+  assert.strictEqual(JSON.stringify(L.calcWarnKeys(kidney, { age:70, sex:"M" })), "[]", "adult with sex set warns about nothing");
+  assert.strictEqual(JSON.stringify(L.calcWarnKeys(kidney, { age:10, sex:"M" })), '["calcPedWarn"]', "under-18 warns");
+  assert.strictEqual(JSON.stringify(L.calcWarnKeys(kidney, { age:70, sex:"" })), '["calcSexWarn"]', "unset sex warns");
+
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));

@@ -915,21 +915,22 @@ function normalizeCase(raw, nowIso, todayIso){
   // it, so nothing is destroyed on the way back.
   out.bio = (function(){
     var bioSrc = isObj(src.bio) ? src.bio : {};
-    function bioNum(value){
-      if (typeof value === "number") return isFinite(value) && value >= 0 ? value : null;
-      var text = String(value == null ? "" : value).trim();
-      if (!text) return null;
-      var n = Number(text);
-      return isFinite(n) && n >= 0 ? n : null;
+    var bio = {};
+    // Unknown keys survive untouched. A device on a newer build may store a
+    // field this build has never heard of; dropping it here would delete that
+    // patient's data on the next sync (same rule as mergeEntries' id union).
+    for (var raw in bioSrc) if (Object.prototype.hasOwnProperty.call(bioSrc, raw)) bio[raw] = bioSrc[raw];
+    for (var key in CALC_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(CALC_FIELDS, key)) continue;
+      var def = CALC_FIELDS[key];
+      if (def.store !== "case" || def.type === "sex") continue; // sex lives on out.sex, never duplicated
+      if (def.type === "date") { bio[key] = safeDate(bioSrc[key], "") || ""; continue; }
+      if (def.type === "bool") { bio[key] = bioSrc[key] === true; continue; }
+      var n = calcNum(bioSrc[key]);
+      if (n === null || n < 0) { bio[key] = null; continue; }
+      bio[key] = def.type === "int" ? Math.round(n) : n;
     }
-    var bioAge = bioNum(bioSrc.age);
-    return {
-      age:bioAge === null ? null : Math.round(bioAge),
-      weightKg:bioNum(bioSrc.weightKg),
-      cr:bioNum(bioSrc.cr),
-      crDate:safeDate(bioSrc.crDate, "") || "",
-      weightDate:safeDate(bioSrc.weightDate, "") || ""
-    };
+    return bio;
   })();
   // Admission record collapsed to one free-text field (2026-07-21 CEO
   // decision). Legacy 4-field payloads (trigger/pmh/adl/note) merge into text
@@ -1878,6 +1879,76 @@ function calcRound1(value){
   return value === null ? null : Math.round(value * 10) / 10;
 }
 
+// ---- calculator registry --------------------------------------------------
+// Adding a calculator has to stay a DATA change, not a code change: one entry
+// in CALC_TOOLS (plus any missing key in CALC_FIELDS) is the whole job. The
+// sheet, the storage, the range guards and the patient-less tab are generic.
+//
+// store:"case" -> kept on the case, so every tool reuses the same numbers
+//   (enter the weight once, CCr and Child-Pugh both have it). This is the only
+//   reason to calculate inside Wardbook at all rather than on a web page.
+// store:"none" -> the moment's state (consciousness, respiratory rate). Never
+//   stored: a three-day-old respiratory rate that still looks current is the
+//   exact failure mode a bedside score must not have.
+//
+// Bounds come from CALC_LIMITS above and are typo guards, not medical cut-offs.
+var CALC_FIELDS = {
+  age:        { type:"int",  store:"case", labelKey:"calcAge",        min:CALC_LIMITS.ageMin,    max:CALC_LIMITS.ageMax },
+  sex:        { type:"sex",  store:"case", labelKey:"editMeta" },
+  weightKg:   { type:"num",  store:"case", labelKey:"calcWeight",     min:CALC_LIMITS.weightMin, max:CALC_LIMITS.weightMax, noteKey:"calcWeightNote" },
+  weightDate: { type:"date", store:"case", labelKey:"calcWeightDate" },
+  cr:         { type:"num",  store:"case", labelKey:"calcCr",         min:CALC_LIMITS.crMin,     max:CALC_LIMITS.crMax },
+  crDate:     { type:"date", store:"case", labelKey:"calcCrDate",     emptyNoteKey:"calcDateMissing" }
+};
+
+// Every tool must carry sourceKey and every result a useKey ("what it is for").
+// A test enforces both: the CCr/eGFR mix-up showed that an unlabelled number is
+// the dangerous part, so a calculator with no stated source or no stated use
+// cannot be shipped at all.
+var CALC_TOOLS = [{
+  id:"kidney",
+  nameKey:"calcTitle",
+  fields:["age", "sex", "weightKg", "weightDate", "cr", "crDate"],
+  results:[
+    { key:"ccr",  main:true,  labelKey:"calcCcrLabel",  unitKey:"calcUnitCcr",  useKey:"calcCcrUse",  formulaKey:"calcFormulaCcr",
+      run:function(v){ return calcCcr(v.age, v.sex, v.weightKg, v.cr); } },
+    { key:"egfr", main:false, labelKey:"calcEgfrLabel", unitKey:"calcUnitEgfr", useKey:"calcEgfrUse", formulaKey:"calcFormulaEgfr",
+      run:function(v){ return calcEgfr(v.age, v.sex, v.cr); } }
+  ],
+  warns:[
+    { key:"ped", msgKey:"calcPedWarn", when:function(v){ var a = calcNum(v.age); return a !== null && a < CALC_ADULT_MIN_AGE; } },
+    { key:"sex", msgKey:"calcSexWarn", when:function(v){ return !v.sex; } }
+  ],
+  needKey:"calcNeedInput",
+  rangeKey:"calcRangeNote",
+  disclaimerKey:"calcDisclaimer",
+  sourceKey:"calcSourceNote"
+}];
+
+function calcToolById(id){
+  for (var i = 0; i < CALC_TOOLS.length; i++) if (CALC_TOOLS[i].id === id) return CALC_TOOLS[i];
+  return null;
+}
+
+// Results are always derived from the values in hand — nothing is cached and
+// nothing is saved, so a stale input can never leave a stale-looking answer.
+function calcCollect(tool, values){
+  var vals = values || {};
+  return tool.results.map(function(r){
+    return {
+      key:r.key, main:!!r.main, labelKey:r.labelKey, unitKey:r.unitKey,
+      useKey:r.useKey, formulaKey:r.formulaKey, value:calcRound1(r.run(vals))
+    };
+  });
+}
+
+function calcWarnKeys(tool, values){
+  var vals = values || {};
+  var out = [];
+  (tool.warns || []).forEach(function(w){ if (w.when(vals)) out.push(w.msgKey); });
+  return out;
+}
+
 function todayISOFallback(){
   return "2000-01-01";
 }
@@ -1890,7 +1961,12 @@ if (typeof module !== "undefined") {
     calcCcr:calcCcr,
     calcEgfr:calcEgfr,
     calcRound1:calcRound1,
+    calcToolById:calcToolById,
+    calcCollect:calcCollect,
+    calcWarnKeys:calcWarnKeys,
     CALC_LIMITS:CALC_LIMITS,
+    CALC_FIELDS:CALC_FIELDS,
+    CALC_TOOLS:CALC_TOOLS,
     CALC_ADULT_MIN_AGE:CALC_ADULT_MIN_AGE,
     normalizeState:normalizeState,
     normalizeCase:normalizeCase,
@@ -1995,6 +2071,9 @@ const STR = {
   calcFormulaCcr:"式：（140−年齢）× 体重 ÷（72 × Cr）／女性 ×0.85",
   calcFormulaEgfr:"式：194 × Cr^−1.094 × 年齢^−0.287／女性 ×0.739",
   calcSourceNote:"出典：腎疾患マニュアル 第2版（1_MKM 検証済 2026-07-22）",
+  calcPickTitle:"計算を選ぶ",
+  calcNoCase:"患者に紐づけない計算です。入力は保存されません",
+  calcBackToList:"一覧へ",
   unset:"未設定",
   addDxTag:"＋病名タグ",
   dxTagPh:"病名タグ（確定病名で検索用）",
@@ -2140,6 +2219,8 @@ Object.assign(STR, {
 let DB = normalizeState(null);
 let VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:"board", dayDate:todayISO(), searchQuery:"", searchMonth:"", searchStageId:"", weekPast:0, weekFuture:7 };
 let SHEET = { name:"", draft:{}, syncBusy:false };
+// Patient-less calculator inputs. Deliberately not persisted and not synced.
+let CALC_SCRATCH = {};
 let DND = { activeId:"", hoverIndex:-1 };
 let NAV = { stack:[], ignore:0 };
 let REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
@@ -3234,11 +3315,41 @@ function openStagePicker(caseId){
   renderSheet();
 }
 
+// One rule for both entry points: with a single tool registered there is no
+// list worth showing, so open it directly. Once a second tool lands, both the
+// case button and the tab show the list.
+function calcOnlyToolId(){
+  return CALC_TOOLS.length === 1 ? CALC_TOOLS[0].id : "";
+}
+
 function openCalcSheet(caseId){
   navNoteSheetOpen();
   VIEW.calcFor = caseId;
+  VIEW.calcTool = calcOnlyToolId();
   SHEET.name = "calc";
   SHEET.draft = {};
+  renderSheet();
+}
+
+// Patient-less calculation (topbar). Values live in CALC_SCRATCH only: nothing
+// is written to a case, nothing is synced, nothing survives closing the sheet.
+function openCalcTab(){
+  navNoteSheetOpen();
+  CALC_SCRATCH = {};
+  VIEW.calcFor = "";
+  VIEW.calcTool = calcOnlyToolId();
+  SHEET.name = "calc";
+  SHEET.draft = {};
+  renderSheet();
+}
+
+function openCalcTool(id){
+  VIEW.calcTool = calcToolById(id) ? id : "";
+  renderSheet();
+}
+
+function backToCalcList(){
+  VIEW.calcTool = "";
   renderSheet();
 }
 
@@ -3434,16 +3545,30 @@ function updateCaseAdm(caseId, value){
 // Calculator inputs persist on the case so the next round only needs the new
 // Cr. Bound to onchange (not oninput): mutateCase re-renders, and a re-render
 // per keystroke would steal focus mid-number.
-function updateCaseBio(caseId, key, value){
-  if (["age", "weightKg", "cr", "crDate", "weightDate"].indexOf(key) < 0) return;
+// undefined = "leave the stored value alone" (garbage typed into a number box
+// must not silently blank a value the user entered earlier).
+function calcFieldValue(def, value){
   var raw = String(value == null ? "" : value).trim();
+  if (def.type === "date" || def.type === "sex") return raw;
+  if (def.type === "bool") return value === true || raw === "true";
+  if (!raw) return null;
+  var n = Number(raw);
+  if (!isFinite(n) || n < 0) return undefined;
+  return def.type === "int" ? Math.round(n) : n;
+}
+
+// The allowlist is CALC_FIELDS itself, so a new field is declared in exactly
+// one place and can never reach storage without a declared type and bounds.
+function updateCaseBio(caseId, key, value){
+  var def = Object.prototype.hasOwnProperty.call(CALC_FIELDS, key) ? CALC_FIELDS[key] : null;
+  if (!def || def.store !== "case") return;
+  if (def.type === "sex") { if (caseId) updateCaseSex(caseId, String(value == null ? "" : value)); else { CALC_SCRATCH.sex = String(value == null ? "" : value); renderSheet(); } return; }
+  var next = calcFieldValue(def, value);
+  if (next === undefined) return;
+  if (!caseId) { CALC_SCRATCH[key] = next; renderSheet(); return; }
   mutateCase(caseId, function(c){
     if (!isObj(c.bio)) c.bio = {};
-    if (key === "crDate" || key === "weightDate") { c.bio[key] = raw; return; }
-    if (!raw) { c.bio[key] = null; return; }
-    var n = Number(raw);
-    if (!isFinite(n) || n < 0) return;
-    c.bio[key] = key === "age" ? Math.round(n) : n;
+    c.bio[key] = next;
   });
 }
 
@@ -4486,7 +4611,11 @@ function cancelDrag(){
 function renderTopbar(){
   return '<div class="topbar"><div class="toprow">' +
     (VIEW.name === "detail" ? '<button class="ghostbtn smallbtn" onclick="openBoard()">' + esc(STR.back) + '</button>' : '') +
-    '<div class="title">Wardbook</div><div class="grow"></div></div></div>';
+    '<div class="title">Wardbook</div><div class="grow"></div>' +
+    // Calculator tab: a tool, not a view of cases, so it sits here rather than
+    // beside ボード／今日／週間予定 — the board keeps the lead role.
+    '<button class="ghostbtn smallbtn" onclick="openCalcTab()">' + esc(STR.calcBtn) + '</button>' +
+    '</div></div>';
 }
 
 // Card task order: actionable-today first (timed ones in clock order), then
@@ -5232,50 +5361,88 @@ function renderAdmissionSheet(){
 // because it is the value you dose from, eGFR sits below at half the weight
 // with its "not for dosing" caption attached (1_MKM answer B-1). Never present
 // the two as equals.
-function renderCalcSheet(){
-  var c = DB.cases.find(function(item){ return item.id === VIEW.calcFor; });
-  if (!c) return '';
-  var b = isObj(c.bio) ? c.bio : {};
-  var ccr = calcRound1(calcCcr(b.age, c.sex, b.weightKg, b.cr));
-  var egfr = calcRound1(calcEgfr(b.age, c.sex, b.cr));
-  var warn = '';
-  if (b.age !== null && b.age !== undefined && b.age < CALC_ADULT_MIN_AGE) warn += '<div class="note warn">' + esc(STR.calcPedWarn) + '</div>';
-  if (!c.sex) warn += '<div class="note warn">' + esc(STR.calcSexWarn) + '</div>';
-  function bigResult(label, value, unit, use){
-    var shown = value === null ? '—' : String(value);
-    return '<div class="calcresult"><div class="fieldlabel">' + esc(label) + '</div>' +
-      '<div class="calcvalue">' + esc(shown) + ' <span class="calcunit">' + esc(unit) + '</span></div>' +
-      '<div class="faint">' + esc(use) + '</div></div>';
+// Values for the tool in hand. With a case they come from (and go back to) the
+// case; without one they come from CALC_SCRATCH and are thrown away on close.
+function calcValuesFor(caseId){
+  if (!caseId) {
+    var scratch = {};
+    for (var k in CALC_SCRATCH) if (Object.prototype.hasOwnProperty.call(CALC_SCRATCH, k)) scratch[k] = CALC_SCRATCH[k];
+    return scratch;
   }
-  function field(label, key, value, type, extra){
-    return '<div class="field"><div class="fieldlabel">' + esc(label) + '</div>' +
-      '<input class="' + (type === "date" ? "date" : "input") + '" type="' + esc(type) + '"' +
+  var c = DB.cases.find(function(item){ return item.id === caseId; });
+  if (!c) return null;
+  var bio = isObj(c.bio) ? c.bio : {};
+  var vals = {};
+  for (var key in bio) if (Object.prototype.hasOwnProperty.call(bio, key)) vals[key] = bio[key];
+  vals.sex = c.sex || "";
+  return vals;
+}
+
+function renderCalcListSheet(){
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.calcPickTitle) + '</div><div class="stack">' +
+    (VIEW.calcFor ? '' : '<div class="note">' + esc(STR.calcNoCase) + '</div>') +
+    CALC_TOOLS.map(function(tool){
+      return '<button class="lineitem" style="width:100%;text-align:left" onclick="openCalcTool(\'' + esc(tool.id) + '\')"><span class="text">' + esc(STR[tool.nameKey] || tool.id) + '</span></button>';
+    }).join('') +
+    '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
+}
+
+function renderCalcSheet(){
+  var tool = calcToolById(VIEW.calcTool);
+  if (!tool) return renderCalcListSheet();
+  var caseId = VIEW.calcFor || "";
+  var values = calcValuesFor(caseId);
+  if (values === null) return '';
+  var results = calcCollect(tool, values);
+  var anyResult = results.some(function(r){ return r.value !== null; });
+  function bigResult(r){
+    var shown = r.value === null ? '—' : String(r.value);
+    return '<div class="calcresult"><div class="fieldlabel">' + esc(STR[r.labelKey]) + '</div>' +
+      '<div class="calcvalue">' + esc(shown) + ' <span class="calcunit">' + esc(STR[r.unitKey]) + '</span></div>' +
+      '<div class="faint">' + esc(STR[r.useKey]) + '</div></div>';
+  }
+  // main:false renders smaller inside .calcsub. The size gap is the safety
+  // feature: CCr (dosing) must not read as interchangeable with eGFR (staging)
+  // at a glance, so the difference is structural, not just wording.
+  function resultBlock(r){
+    var inner = bigResult(r) + (r.formulaKey ? '<div class="faint">' + esc(STR[r.formulaKey]) + '</div>' : '');
+    return r.main ? inner : '<div class="calcsub">' + inner + '</div>';
+  }
+  function field(key){
+    var def = CALC_FIELDS[key];
+    if (!def) return '';
+    var label = esc(STR[def.labelKey] || key);
+    var value = values[key];
+    if (def.type === "sex") {
+      var cur = values.sex || "";
+      function sexChip(code, text){
+        return '<button class="chipbtn' + (cur === code ? ' on' : '') + '" onclick="updateCaseBio(\'' + esc(caseId) + '\',\'sex\',\'' + esc(code) + '\')">' + esc(text) + '</button>';
+      }
+      return '<div class="field"><div class="fieldlabel">' + label + '</div><div class="chips">' +
+        sexChip("", STR.unset) + sexChip("M", STR.sexM) + sexChip("F", STR.sexF) + '</div></div>';
+    }
+    var type = def.type === "date" ? "date" : "number";
+    var note = def.noteKey ? STR[def.noteKey] : "";
+    if (!note && def.emptyNoteKey && !value) note = STR[def.emptyNoteKey];
+    return '<div class="field"><div class="fieldlabel">' + label + '</div>' +
+      '<input class="' + (type === "date" ? "date" : "input") + '" type="' + type + '"' +
       (type === "number" ? ' inputmode="decimal" step="any" min="0"' : '') +
       ' value="' + esc(value === null || value === undefined ? "" : String(value)) + '"' +
-      ' onchange="updateCaseBio(\'' + esc(c.id) + '\',\'' + esc(key) + '\',this.value)">' +
-      (extra ? '<div class="faint">' + esc(extra) + '</div>' : '') + '</div>';
+      ' onchange="updateCaseBio(\'' + esc(caseId) + '\',\'' + esc(key) + '\',this.value)">' +
+      (note ? '<div class="faint">' + esc(note) + '</div>' : '') + '</div>';
   }
-  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.calcTitle) + '</div><div class="stack">' +
-    (ccr === null && egfr === null ? '<div class="note">' + esc(STR.calcNeedInput) + '</div>' : '') +
-    warn +
-    bigResult(STR.calcCcrLabel, ccr, STR.calcUnitCcr, STR.calcCcrUse) +
-    '<div class="faint">' + esc(STR.calcFormulaCcr) + '</div>' +
-    '<div class="calcsub">' + bigResult(STR.calcEgfrLabel, egfr, STR.calcUnitEgfr, STR.calcEgfrUse) +
-    '<div class="faint">' + esc(STR.calcFormulaEgfr) + '</div></div>' +
-    field(STR.calcAge, "age", b.age, "number", "") +
-    '<div class="field"><div class="fieldlabel">' + esc(STR.editMeta) + '</div><div class="chips">' +
-      '<button class="chipbtn' + (!c.sex ? ' on' : '') + '" onclick="updateCaseSex(\'' + esc(c.id) + '\',\'\')">' + esc(STR.unset) + '</button>' +
-      '<button class="chipbtn' + (c.sex === "M" ? ' on' : '') + '" onclick="updateCaseSex(\'' + esc(c.id) + '\',\'M\')">' + esc(STR.sexM) + '</button>' +
-      '<button class="chipbtn' + (c.sex === "F" ? ' on' : '') + '" onclick="updateCaseSex(\'' + esc(c.id) + '\',\'F\')">' + esc(STR.sexF) + '</button>' +
-    '</div></div>' +
-    field(STR.calcWeight, "weightKg", b.weightKg, "number", STR.calcWeightNote) +
-    field(STR.calcWeightDate, "weightDate", b.weightDate, "date", "") +
-    field(STR.calcCr, "cr", b.cr, "number", "") +
-    field(STR.calcCrDate, "crDate", b.crDate, "date", b.crDate ? "" : STR.calcDateMissing) +
-    '<div class="note">' + esc(STR.calcRangeNote) + '</div>' +
-    '<div class="note warn">' + esc(STR.calcDisclaimer) + '</div>' +
-    '<div class="faint">' + esc(STR.calcSourceNote) + '</div>' +
-    '<div class="row"><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div>' +
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR[tool.nameKey]) + '</div><div class="stack">' +
+    (caseId ? '' : '<div class="note">' + esc(STR.calcNoCase) + '</div>') +
+    (anyResult ? '' : '<div class="note">' + esc(STR[tool.needKey]) + '</div>') +
+    calcWarnKeys(tool, values).map(function(msgKey){ return '<div class="note warn">' + esc(STR[msgKey]) + '</div>'; }).join('') +
+    results.map(resultBlock).join('') +
+    tool.fields.map(field).join('') +
+    (tool.rangeKey ? '<div class="note">' + esc(STR[tool.rangeKey]) + '</div>' : '') +
+    '<div class="note warn">' + esc(STR[tool.disclaimerKey]) + '</div>' +
+    '<div class="faint">' + esc(STR[tool.sourceKey]) + '</div>' +
+    '<div class="row">' +
+    (CALC_TOOLS.length > 1 ? '<button class="ghostbtn" onclick="backToCalcList()">' + esc(STR.calcBackToList) + '</button>' : '') +
+    '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div>' +
   '</div></div>';
 }
 
