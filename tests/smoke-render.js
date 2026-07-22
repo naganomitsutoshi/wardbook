@@ -317,6 +317,10 @@ vm.runInContext("DB.cases.find(c=>c.id==='c1').discharge.plannedOn='2026-07-10';
 if (!detailHtml.includes("openCalcSheet('c1')")) fail("detail missing calc button");
 vm.runInContext("openCalcSheet('c1');", sandbox);
 if (vm.runInContext("SHEET.name", sandbox) !== "calc") fail("calc sheet did not open");
+// With more than one tool registered the sheet opens on the picker first.
+if (!vm.runInContext("renderCalcSheet()", sandbox).includes("openCalcTool('kidney')")) fail("calc picker missing the kidney tool");
+if (!vm.runInContext("renderCalcSheet()", sandbox).includes("openCalcTool('adrop')")) fail("calc picker missing the A-DROP tool");
+vm.runInContext("openCalcTool('kidney');", sandbox);
 const calcEmpty = vm.runInContext("renderCalcSheet()", sandbox);
 if (!calcEmpty.includes(vm.runInContext("STR.calcNeedInput", sandbox))) fail("empty calc sheet must ask for input, not show a number");
 if (!calcEmpty.includes("updateCaseBio('c1','cr'")) fail("calc sheet missing Cr input");
@@ -345,10 +349,39 @@ vm.runInContext("updateCaseBio('c1','age','70'); updateCaseBio('c1','cr','0');",
 if (!vm.runInContext("renderCalcSheet()", sandbox).includes(vm.runInContext("STR.calcNeedInput", sandbox))) fail("out-of-range Cr must not produce a result");
 // Restore the fixture: later checks assume no calculator state.
 vm.runInContext("updateCaseBio('c1','age',''); updateCaseBio('c1','weightKg',''); updateCaseBio('c1','cr',''); closeSheet();", sandbox);
+// A-DROP sheet (Phase B, 1_MKM-verified 2026-07-22). The moment's state is
+// never persisted, and the score refuses to compute from an unanswered item.
+vm.runInContext("openCalcSheet('c1'); openCalcTool('adrop');", sandbox);
+const adropEmpty = vm.runInContext("renderCalcSheet()", sandbox);
+if (!adropEmpty.includes(vm.runInContext("STR.calcAdropNeed", sandbox))) fail("empty A-DROP sheet must ask for input");
+if (!adropEmpty.includes(vm.runInContext("STR.calcAdropScope", sandbox))) fail("A-DROP sheet must always state it is for CAP, not HAP");
+for (const key of ["spo2", "sbp", "bun"]) {
+  if (!adropEmpty.includes(`updateCaseBio('c1','${key}'`)) fail("A-DROP sheet missing input " + key);
+}
+for (const key of ["orientation", "dehydration", "shock"]) {
+  if (!adropEmpty.includes(`updateCaseBio('c1','${key}','true'`)) fail("A-DROP sheet missing yes/no chips for " + key);
+}
+// 1_MKM fixture 3: 72yo woman, every item on its boundary -> 4 points, 超重症.
+vm.runInContext("updateCaseBio('c1','age','72'); updateCaseSex('c1','F'); updateCaseBio('c1','bun','21'); updateCaseBio('c1','spo2','90'); updateCaseBio('c1','sbp','90'); updateCaseBio('c1','orientation','true'); updateCaseBio('c1','dehydration','false'); updateCaseBio('c1','shock','false');", sandbox);
+const adropFilled = vm.runInContext("renderCalcSheet()", sandbox);
+if (!adropFilled.includes(vm.runInContext("STR.calcAdropB4", sandbox))) fail("A-DROP must render 超重症 for the MKM fixture");
+if (adropFilled.includes(vm.runInContext("STR.calcAdropNeed", sandbox))) fail("A-DROP still asking for input when fully answered");
+// The moment's state must not have reached the case.
+const adropBio = JSON.parse(vm.runInContext("JSON.stringify(DB.cases.find(c=>c.id==='c1').bio)", sandbox));
+if (adropBio.spo2 !== undefined || adropBio.sbp !== undefined || adropBio.orientation !== undefined || adropBio.shock !== undefined) {
+  fail("store:'none' values leaked onto the case: " + JSON.stringify(adropBio));
+}
+if (adropBio.bun !== 21) fail("BUN is a lab value and must persist: " + JSON.stringify(adropBio));
+// Reopening clears the moment's state but keeps the lab value.
+vm.runInContext("closeSheet(); openCalcSheet('c1'); openCalcTool('adrop');", sandbox);
+const adropReopen = vm.runInContext("renderCalcSheet()", sandbox);
+if (!adropReopen.includes(vm.runInContext("STR.calcAdropNeed", sandbox))) fail("reopening must clear SpO2/BP and refuse to score");
+// Restore the fixture for later checks.
+vm.runInContext("updateCaseBio('c1','age',''); updateCaseSex('c1',''); updateCaseBio('c1','bun',''); closeSheet();", sandbox);
 // Calculator tab (patient-less). It sits in the topbar, not beside the board
 // view chips, so the board keeps the lead role.
 if (!vm.runInContext("renderTopbar()", sandbox).includes("openCalcTab()")) fail("topbar missing calculator tab");
-vm.runInContext("openCalcTab();", sandbox);
+vm.runInContext("openCalcTab(); openCalcTool('kidney');", sandbox);
 if (vm.runInContext("SHEET.name", sandbox) !== "calc") fail("calc tab did not open the sheet");
 if (vm.runInContext("VIEW.calcFor", sandbox) !== "") fail("calc tab must not be bound to a case");
 const calcTabEmpty = vm.runInContext("renderCalcSheet()", sandbox);
@@ -362,7 +395,7 @@ if (!calcTabFilled.includes("57.3")) fail("patient-less eGFR missing");
 const untouched = JSON.parse(vm.runInContext("JSON.stringify(DB.cases.find(c=>c.id==='c1').bio)", sandbox));
 if (untouched.age !== null || untouched.weightKg !== null || untouched.cr !== null) fail("patient-less calculation leaked into a case: " + JSON.stringify(untouched));
 // Reopening starts clean: scratch values must not linger between patients.
-vm.runInContext("closeSheet(); openCalcTab();", sandbox);
+vm.runInContext("closeSheet(); openCalcTab(); openCalcTool('kidney');", sandbox);
 if (!vm.runInContext("renderCalcSheet()", sandbox).includes(vm.runInContext("STR.calcNeedInput", sandbox))) fail("calc tab must reopen empty");
 vm.runInContext("closeSheet();", sandbox);
 // The PII warning must name the widened boundary (age/sex/weight now allowed).

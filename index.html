@@ -254,6 +254,7 @@
   .calcunit{font-size:13px;font-weight:400;color:var(--muted)}
   .calcsub .calcvalue{font-size:22px}
   .calcsub{opacity:.85}
+  .calcband{font-size:18px;font-weight:600;margin-top:2px}
   .dropzone{
     height:10px;border-radius:999px;transition:background .12s ease;
   }
@@ -1838,7 +1839,10 @@ function chartDayParse(text, items){
 // The bounds below are input-typo guards, NOT medical thresholds: 1_MKM stated
 // no established cut-offs exist (answer B-3). Ages under CALC_ADULT_MIN_AGE
 // still compute — CEO decided 2026-07-22 to warn rather than refuse.
-var CALC_LIMITS = { ageMin:1, ageMax:120, weightMin:20, weightMax:200, crMin:0.1, crMax:20 };
+var CALC_LIMITS = {
+  ageMin:1, ageMax:120, weightMin:20, weightMax:200, crMin:0.1, crMax:20,
+  bunMin:1, bunMax:200, spo2Min:50, spo2Max:100, sbpMin:40, sbpMax:300
+};
 var CALC_ADULT_MIN_AGE = 18;
 
 function calcNum(value){
@@ -1879,6 +1883,59 @@ function calcRound1(value){
   return value === null ? null : Math.round(value * 10) / 10;
 }
 
+// ---- A-DROP (community-acquired pneumonia severity) -----------------------
+// 1_MKM-verified 2026-07-22 against 成人肺炎診療ガイドライン2024 p.31 表1.
+// Every cut-off below is "or more / or less" — the boundary value COUNTS, which
+// is the opposite of CURB-65's systolic rule. CURB-65 was ruled out by 1_MKM
+// (no primary source for a BUN mg/dL threshold, no Japanese band definition),
+// so the two are never shown side by side and cannot be confused.
+//
+// Nothing is scored from a blank: every one of the five items must be
+// determinable or the whole score returns null. A missing SpO2 silently
+// counting as "normal" would under-score a patient who is in fact severe.
+function calcAdropItems(v){
+  var vals = v || {};
+  var sex = vals.sex || "";
+  var age = calcNum(vals.age), sbp = calcNum(vals.sbp), spo2 = calcNum(vals.spo2), bun = calcNum(vals.bun);
+  var dehydration = vals.dehydration, orientation = vals.orientation, shock = vals.shock;
+  if (!sex) return null;
+  if (!calcInRange(age, CALC_LIMITS.ageMin, CALC_LIMITS.ageMax)) return null;
+  if (!calcInRange(sbp, CALC_LIMITS.sbpMin, CALC_LIMITS.sbpMax)) return null;
+  if (!calcInRange(spo2, CALC_LIMITS.spo2Min, CALC_LIMITS.spo2Max)) return null;
+  if (orientation !== true && orientation !== false) return null;
+  if (shock !== true && shock !== false) return null;          // 1_MKM: this input is mandatory
+  if (dehydration !== true && dehydration !== false) return null;
+  // D は「BUN 21 mg/dL 以上 または 脱水あり」。脱水ありなら BUN は不要。
+  if (dehydration !== true && !calcInRange(bun, CALC_LIMITS.bunMin, CALC_LIMITS.bunMax)) return null;
+  return {
+    a:(sex === "M" && age >= 70) || (sex === "F" && age >= 75) ? 1 : 0,
+    d:(dehydration === true || (bun !== null && bun >= 21)) ? 1 : 0,
+    r:spo2 <= 90 ? 1 : 0,
+    o:orientation === true ? 1 : 0,
+    p:sbp <= 90 ? 1 : 0
+  };
+}
+
+function calcAdrop(v){
+  var items = calcAdropItems(v);
+  if (!items) return null;
+  return items.a + items.d + items.r + items.o + items.p;
+}
+
+// GL2024 逐語:「ただし，敗血症性ショックがあれば１項目のみでも超重症とする」。
+// The guideline defines the exception for 1 or more items; it says nothing
+// about septic shock with zero items, so nothing is invented for that case —
+// the shock note is shown on screen either way.
+function calcAdropBandKey(v){
+  var n = calcAdrop(v);
+  if (n === null) return "";
+  if ((v || {}).shock === true && n >= 1) return "calcAdropB4";
+  if (n === 0) return "calcAdropB1";
+  if (n <= 2) return "calcAdropB2";
+  if (n === 3) return "calcAdropB3";
+  return "calcAdropB4";
+}
+
 // ---- calculator registry --------------------------------------------------
 // Adding a calculator has to stay a DATA change, not a code change: one entry
 // in CALC_TOOLS (plus any missing key in CALC_FIELDS) is the whole job. The
@@ -1898,7 +1955,15 @@ var CALC_FIELDS = {
   weightKg:   { type:"num",  store:"case", labelKey:"calcWeight",     min:CALC_LIMITS.weightMin, max:CALC_LIMITS.weightMax, noteKey:"calcWeightNote" },
   weightDate: { type:"date", store:"case", labelKey:"calcWeightDate" },
   cr:         { type:"num",  store:"case", labelKey:"calcCr",         min:CALC_LIMITS.crMin,     max:CALC_LIMITS.crMax },
-  crDate:     { type:"date", store:"case", labelKey:"calcCrDate",     emptyNoteKey:"calcDateMissing" }
+  crDate:     { type:"date", store:"case", labelKey:"calcCrDate",     emptyNoteKey:"calcDateMissing" },
+  bun:        { type:"num",  store:"case", labelKey:"calcBun",        min:CALC_LIMITS.bunMin,    max:CALC_LIMITS.bunMax },
+  bunDate:    { type:"date", store:"case", labelKey:"calcBunDate",    emptyNoteKey:"calcDateMissing" },
+  // store:"none" — the moment's state. Cleared every time the sheet opens.
+  spo2:        { type:"num",  store:"none", labelKey:"calcSpo2", min:CALC_LIMITS.spo2Min, max:CALC_LIMITS.spo2Max, noteKey:"calcNotSaved" },
+  sbp:         { type:"num",  store:"none", labelKey:"calcSbp",  min:CALC_LIMITS.sbpMin,  max:CALC_LIMITS.sbpMax,  noteKey:"calcNotSaved" },
+  orientation: { type:"bool3", store:"none", labelKey:"calcOrientation", noteKey:"calcNotSaved" },
+  dehydration: { type:"bool3", store:"none", labelKey:"calcDehydration", noteKey:"calcDehydNote" },
+  shock:       { type:"bool3", store:"none", labelKey:"calcShock", noteKey:"calcNotSaved" }
 };
 
 // Every tool must carry sourceKey and every result a useKey ("what it is for").
@@ -1923,6 +1988,23 @@ var CALC_TOOLS = [{
   rangeKey:"calcRangeNote",
   disclaimerKey:"calcDisclaimer",
   sourceKey:"calcSourceNote"
+}, {
+  id:"adrop",
+  nameKey:"calcAdropTitle",
+  fields:["sex", "age", "bun", "bunDate", "dehydration", "spo2", "orientation", "sbp", "shock"],
+  results:[
+    { key:"adrop", main:true, labelKey:"calcAdropLabel", unitKey:"calcAdropUnit", useKey:"calcAdropUse", formulaKey:"calcAdropFormula",
+      run:calcAdrop, band:calcAdropBandKey }
+  ],
+  warns:[
+    { key:"ped",   msgKey:"calcPedWarn",         when:function(v){ var a = calcNum(v.age); return a !== null && a < CALC_ADULT_MIN_AGE; } },
+    { key:"shock", msgKey:"calcAdropShockWarn",  when:function(v){ return v.shock === true; } },
+    { key:"scope", msgKey:"calcAdropScope",      when:function(){ return true; } }
+  ],
+  needKey:"calcAdropNeed",
+  rangeKey:"calcAdropRange",
+  disclaimerKey:"calcAdropCaution",
+  sourceKey:"calcAdropSource"
 }];
 
 function calcToolById(id){
@@ -1937,7 +2019,8 @@ function calcCollect(tool, values){
   return tool.results.map(function(r){
     return {
       key:r.key, main:!!r.main, labelKey:r.labelKey, unitKey:r.unitKey,
-      useKey:r.useKey, formulaKey:r.formulaKey, value:calcRound1(r.run(vals))
+      useKey:r.useKey, formulaKey:r.formulaKey, value:calcRound1(r.run(vals)),
+      bandKey:r.band ? r.band(vals) : ""
     };
   });
 }
@@ -1961,6 +2044,9 @@ if (typeof module !== "undefined") {
     calcCcr:calcCcr,
     calcEgfr:calcEgfr,
     calcRound1:calcRound1,
+    calcAdrop:calcAdrop,
+    calcAdropItems:calcAdropItems,
+    calcAdropBandKey:calcAdropBandKey,
     calcToolById:calcToolById,
     calcCollect:calcCollect,
     calcWarnKeys:calcWarnKeys,
@@ -2071,6 +2157,32 @@ const STR = {
   calcFormulaCcr:"式：（140−年齢）× 体重 ÷（72 × Cr）／女性 ×0.85",
   calcFormulaEgfr:"式：194 × Cr^−1.094 × 年齢^−0.287／女性 ×0.739",
   calcSourceNote:"出典：腎疾患マニュアル 第2版（1_MKM 検証済 2026-07-22）",
+  calcBun:"BUN（mg/dL）",
+  calcBunDate:"BUN 測定日",
+  calcSpo2:"SpO2（％）",
+  calcSbp:"収縮期血圧（mmHg）",
+  calcOrientation:"意識変容",
+  calcDehydration:"脱水",
+  calcShock:"敗血症性ショック",
+  calcYes:"あり",
+  calcNo:"なし",
+  calcNotSaved:"保存しません（毎回入力）",
+  calcDehydNote:"保存しません。脱水の判定基準はガイドラインに定義がなく臨床判断による",
+  calcAdropTitle:"A-DROP（市中肺炎の重症度）",
+  calcAdropLabel:"A-DROP",
+  calcAdropUnit:"項目",
+  calcAdropUse:"市中肺炎（CAP）の重症度評価に用いる",
+  calcAdropFormula:"該当項目数：A 男70歳以上・女75歳以上／D BUN 21mg/dL以上または脱水あり／R SpO2 90％以下／O 意識変容あり／P 収縮期90mmHg以下",
+  calcAdropB1:"軽症（いずれも満たさない）",
+  calcAdropB2:"中等症（1つまたは2つ）",
+  calcAdropB3:"重症（3つ）",
+  calcAdropB4:"超重症（4つまたは5つ）",
+  calcAdropShockWarn:"⚠ 敗血症性ショックがあれば1項目のみでも超重症とする（GL2024）",
+  calcAdropScope:"市中肺炎（CAP）用。院内肺炎（HAP）には用いない（I-ROAD を用いる）。医療・介護関連肺炎（NHCAP）では重症度評価の適用に限界がある（GL2024 p.52）",
+  calcAdropNeed:"性別・年齢・BUN／脱水・SpO2・意識変容・収縮期血圧・敗血症性ショックをすべて入れると判定します（未入力のまま点数は出しません）",
+  calcAdropRange:"入力できる範囲：年齢 1〜120歳／BUN 1〜200mg/dL／SpO2 50〜100％／収縮期血圧 40〜300mmHg",
+  calcAdropCaution:"死亡率とは良好な相関を示すが、肺炎の進行（増悪）の予測には不向き（GL2024 p.31）。療養の場（外来／一般病棟／ICU）はガイドライン上バンドが重なっており点数から一意に決まらないため表示しない。",
+  calcAdropSource:"出典：成人肺炎診療ガイドライン2024 p.31 表1（1_MKM 監修済 2026-07-22）。市中肺炎に対する A-DROP は弱く推奨（エビデンスの確実性 C）",
   calcPickTitle:"計算を選ぶ",
   calcNoCase:"患者に紐づけない計算です。入力は保存されません",
   calcBackToList:"一覧へ",
@@ -3324,6 +3436,7 @@ function calcOnlyToolId(){
 
 function openCalcSheet(caseId){
   navNoteSheetOpen();
+  CALC_SCRATCH = {};
   VIEW.calcFor = caseId;
   VIEW.calcTool = calcOnlyToolId();
   SHEET.name = "calc";
@@ -3551,6 +3664,9 @@ function calcFieldValue(def, value){
   var raw = String(value == null ? "" : value).trim();
   if (def.type === "date" || def.type === "sex") return raw;
   if (def.type === "bool") return value === true || raw === "true";
+  // Three states on purpose: "" (not assessed) is not the same as "no". A score
+  // must refuse to compute from an unanswered item rather than assume normal.
+  if (def.type === "bool3") return raw === "true" ? true : raw === "false" ? false : "";
   if (!raw) return null;
   var n = Number(raw);
   if (!isFinite(n) || n < 0) return undefined;
@@ -3561,11 +3677,12 @@ function calcFieldValue(def, value){
 // one place and can never reach storage without a declared type and bounds.
 function updateCaseBio(caseId, key, value){
   var def = Object.prototype.hasOwnProperty.call(CALC_FIELDS, key) ? CALC_FIELDS[key] : null;
-  if (!def || def.store !== "case") return;
+  if (!def) return;
   if (def.type === "sex") { if (caseId) updateCaseSex(caseId, String(value == null ? "" : value)); else { CALC_SCRATCH.sex = String(value == null ? "" : value); renderSheet(); } return; }
   var next = calcFieldValue(def, value);
   if (next === undefined) return;
-  if (!caseId) { CALC_SCRATCH[key] = next; renderSheet(); return; }
+  // store:"none" never reaches a case, even when one is open.
+  if (!caseId || def.store === "none") { CALC_SCRATCH[key] = next; renderSheet(); return; }
   mutateCase(caseId, function(c){
     if (!isObj(c.bio)) c.bio = {};
     c.bio[key] = next;
@@ -5364,17 +5481,18 @@ function renderAdmissionSheet(){
 // Values for the tool in hand. With a case they come from (and go back to) the
 // case; without one they come from CALC_SCRATCH and are thrown away on close.
 function calcValuesFor(caseId){
-  if (!caseId) {
-    var scratch = {};
-    for (var k in CALC_SCRATCH) if (Object.prototype.hasOwnProperty.call(CALC_SCRATCH, k)) scratch[k] = CALC_SCRATCH[k];
-    return scratch;
-  }
-  var c = DB.cases.find(function(item){ return item.id === caseId; });
-  if (!c) return null;
-  var bio = isObj(c.bio) ? c.bio : {};
   var vals = {};
-  for (var key in bio) if (Object.prototype.hasOwnProperty.call(bio, key)) vals[key] = bio[key];
-  vals.sex = c.sex || "";
+  if (caseId) {
+    var c = DB.cases.find(function(item){ return item.id === caseId; });
+    if (!c) return null;
+    var bio = isObj(c.bio) ? c.bio : {};
+    for (var key in bio) if (Object.prototype.hasOwnProperty.call(bio, key)) vals[key] = bio[key];
+    vals.sex = c.sex || "";
+  }
+  // store:"none" values always come from scratch — with a case open or not.
+  // The sheet clears scratch on every open, so yesterday's SpO2 can never sit
+  // in today's score looking current.
+  for (var k in CALC_SCRATCH) if (Object.prototype.hasOwnProperty.call(CALC_SCRATCH, k)) vals[k] = CALC_SCRATCH[k];
   return vals;
 }
 
@@ -5397,9 +5515,10 @@ function renderCalcSheet(){
   var anyResult = results.some(function(r){ return r.value !== null; });
   function bigResult(r){
     var shown = r.value === null ? '—' : String(r.value);
+    var band = r.bandKey && STR[r.bandKey] ? '<div class="calcband">' + esc(STR[r.bandKey]) + '</div>' : '';
     return '<div class="calcresult"><div class="fieldlabel">' + esc(STR[r.labelKey]) + '</div>' +
       '<div class="calcvalue">' + esc(shown) + ' <span class="calcunit">' + esc(STR[r.unitKey]) + '</span></div>' +
-      '<div class="faint">' + esc(STR[r.useKey]) + '</div></div>';
+      band + '<div class="faint">' + esc(STR[r.useKey]) + '</div></div>';
   }
   // main:false renders smaller inside .calcsub. The size gap is the safety
   // feature: CCr (dosing) must not read as interchangeable with eGFR (staging)
@@ -5420,6 +5539,15 @@ function renderCalcSheet(){
       }
       return '<div class="field"><div class="fieldlabel">' + label + '</div><div class="chips">' +
         sexChip("", STR.unset) + sexChip("M", STR.sexM) + sexChip("F", STR.sexF) + '</div></div>';
+    }
+    if (def.type === "bool3") {
+      var cur3 = value === true ? "true" : value === false ? "false" : "";
+      function triChip(code, text){
+        return '<button class="chipbtn' + (cur3 === code ? ' on' : '') + '" onclick="updateCaseBio(\'' + esc(caseId) + '\',\'' + esc(key) + '\',\'' + code + '\')">' + esc(text) + '</button>';
+      }
+      return '<div class="field"><div class="fieldlabel">' + label + '</div><div class="chips">' +
+        triChip("", STR.unset) + triChip("true", STR.calcYes) + triChip("false", STR.calcNo) + '</div>' +
+        (def.noteKey ? '<div class="faint">' + esc(STR[def.noteKey]) + '</div>' : '') + '</div>';
     }
     var type = def.type === "date" ? "date" : "number";
     var note = def.noteKey ? STR[def.noteKey] : "";

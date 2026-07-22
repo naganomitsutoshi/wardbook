@@ -66,7 +66,12 @@ Case = {
     weightKg,            // number | null
     cr,                  // number | null  (serum creatinine, mg/dL)
     crDate,              // "YYYY-MM-DD" | ""  (always displayed next to the result)
-    weightDate           // "YYYY-MM-DD" | ""
+    weightDate,          // "YYYY-MM-DD" | ""
+    bun,                 // number | null  (mg/dL, A-DROP)
+    bunDate              // "YYYY-MM-DD" | ""
+                         // NOT here: SpO2, systolic BP, consciousness, dehydration, septic
+                         // shock. Those are CALC_FIELDS store:"none" — held in CALC_SCRATCH,
+                         // cleared on every sheet open, never persisted or synced.
   },
   dxTags: [],            // diagnosis tags (strings, for later search)
   status,                // "active" | "discharged"  (Phase A creates only "active")

@@ -1126,7 +1126,7 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   // Field declarations are the only allowlist that reaches storage.
   for (const key of Object.keys(L.CALC_FIELDS)) {
     const def = L.CALC_FIELDS[key];
-    assert.ok(["int", "num", "date", "sex", "bool"].includes(def.type), key + ": unknown field type " + def.type);
+    assert.ok(["int", "num", "date", "sex", "bool", "bool3"].includes(def.type), key + ": unknown field type " + def.type);
     assert.ok(["case", "none"].includes(def.store), key + ": unknown store " + def.store);
     assert.ok(def.labelKey, key + ": needs a label");
   }
@@ -1148,6 +1148,57 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(JSON.stringify(L.calcWarnKeys(kidney, { age:70, sex:"M" })), "[]", "adult with sex set warns about nothing");
   assert.strictEqual(JSON.stringify(L.calcWarnKeys(kidney, { age:10, sex:"M" })), '["calcPedWarn"]', "under-18 warns");
   assert.strictEqual(JSON.stringify(L.calcWarnKeys(kidney, { age:70, sex:"" })), '["calcSexWarn"]', "unset sex warns");
+
+  // ---- A-DROP (1_MKM-verified 2026-07-22, 成人肺炎診療GL2024 p.31 表1) ------
+  // The three fixtures below are the ones 1_MKM handed over verbatim.
+  const adropTool = L.calcToolById("adrop");
+  assert.ok(adropTool, "A-DROP tool registered");
+  const ADROP_BASE = { sex:"M", age:68, bun:15, dehydration:false, spo2:96, orientation:false, sbp:130, shock:false };
+  const adropOf = (over) => L.calcAdrop(Object.assign({}, ADROP_BASE, over));
+  const bandOf = (over) => L.calcAdropBandKey(Object.assign({}, ADROP_BASE, over));
+  assert.strictEqual(adropOf({}), 0, "MKM case 1: 68yo man, all negative -> 0");
+  assert.strictEqual(bandOf({}), "calcAdropB1", "MKM case 1 band: 軽症");
+  assert.strictEqual(adropOf({ age:72, bun:25, spo2:88, sbp:120 }), 3, "MKM case 2: 72yo man -> 3");
+  assert.strictEqual(bandOf({ age:72, bun:25, spo2:88, sbp:120 }), "calcAdropB3", "MKM case 2 band: 重症");
+  // Case 3 is the important one: same age as case 2 but female, so A does NOT
+  // count, while every other item sits exactly on its boundary and DOES count.
+  const c3 = { sex:"F", age:72, bun:21, spo2:90, orientation:true, sbp:90 };
+  assert.strictEqual(adropOf(c3), 4, "MKM case 3: 72yo woman on every boundary -> 4");
+  assert.strictEqual(bandOf(c3), "calcAdropB4", "MKM case 3 band: 超重症");
+  // Boundaries count ("or more" / "or less") — the opposite of CURB-65's <90.
+  assert.strictEqual(adropOf({ age:70 }), 1, "male 70 exactly counts");
+  assert.strictEqual(adropOf({ age:69 }), 0, "male 69 does not");
+  assert.strictEqual(adropOf({ sex:"F", age:74 }), 0, "female 74 does not count");
+  assert.strictEqual(adropOf({ sex:"F", age:75 }), 1, "female 75 exactly counts");
+  assert.strictEqual(adropOf({ bun:21 }), 1, "BUN 21 exactly counts");
+  assert.strictEqual(adropOf({ bun:20.9 }), 0, "BUN 20.9 does not");
+  assert.strictEqual(adropOf({ spo2:90 }), 1, "SpO2 90 exactly counts");
+  assert.strictEqual(adropOf({ spo2:91 }), 0, "SpO2 91 does not");
+  assert.strictEqual(adropOf({ sbp:90 }), 1, "systolic 90 exactly counts");
+  assert.strictEqual(adropOf({ sbp:91 }), 0, "systolic 91 does not");
+  // D fires on either limb, and "dehydration: yes" alone is enough (no BUN).
+  assert.strictEqual(adropOf({ bun:null, dehydration:true }), 1, "dehydration alone scores D without a BUN");
+  assert.strictEqual(adropOf({ bun:25, dehydration:false }), 1, "BUN alone scores D");
+  // The septic-shock exception. If this is ever dropped, the score still looks
+  // plausible — which is exactly why it is pinned.
+  assert.strictEqual(bandOf({ age:72, shock:true }), "calcAdropB4", "septic shock with a single item -> 超重症");
+  assert.strictEqual(adropOf({ age:72, shock:true }), 1, "the exception changes the band, not the item count");
+  assert.strictEqual(bandOf({ shock:true }), "calcAdropB1", "GL defines the exception for 1+ items; zero items is not invented");
+  // Nothing is scored from a blank: an unanswered item must refuse to compute
+  // rather than quietly count as normal.
+  for (const missing of [{ sex:"" }, { age:null }, { spo2:null }, { sbp:null }, { orientation:"" }, { shock:"" }, { dehydration:"" }, { bun:null, dehydration:false }]) {
+    assert.strictEqual(adropOf(missing), null, "unanswered item must not score: " + JSON.stringify(missing));
+    assert.strictEqual(bandOf(missing), "", "no band without a score: " + JSON.stringify(missing));
+  }
+  // Out-of-guard values are rejected too (typo guards, not medical thresholds).
+  assert.strictEqual(adropOf({ spo2:0 }), null, "SpO2 0 is out of guard");
+  assert.strictEqual(adropOf({ sbp:5 }), null, "systolic 5 is out of guard");
+  assert.strictEqual(adropOf({ bun:0.5, dehydration:false }), null, "BUN 0.5 is out of guard");
+  // store:"none" — the moment's state must never be declared as case storage.
+  for (const key of ["spo2", "sbp", "orientation", "dehydration", "shock"]) {
+    assert.strictEqual(L.CALC_FIELDS[key].store, "none", key + " must never be persisted on a case");
+  }
+  assert.strictEqual(L.CALC_FIELDS.bun.store, "case", "BUN is a lab value and is kept with its date");
 
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));
