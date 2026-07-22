@@ -1113,7 +1113,8 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
     assert.ok(tab.labelKey, tab.id + ": needs a label");
     assert.strictEqual(L.viewTabById(tab.id), tab, tab.id + ": resolves by id");
   }
-  assert.strictEqual(L.VIEW_TABS.filter((t) => t.density).length, 1, "the density toggle belongs to exactly one tab");
+  // Density modes were dropped (CEO 2026-07-22): no tab may re-grow the toggle.
+  assert.strictEqual(L.VIEW_TABS.filter((t) => t.density).length, 0, "no density toggle on any tab");
   assert.ok(tabIds.has("calc"), "the calculator is a tab of its own (CEO 2026-07-22)");
   assert.strictEqual(L.viewTabById("gone"), null, "unknown tab id resolves to null");
   // A tab id that no longer exists (older device, dropped tab) must land on the

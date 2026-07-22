@@ -140,7 +140,7 @@ vm.runInContext(`
 [
   "copyDischargeExport", "copyDayExport", "openWeekCell",
   "startDragCase", "dragMove", "dragEnd", "nearestDropIndex",
-  "handlePopState", "navPush", "navUnwindAll", "toggleDensity",
+  "handlePopState", "navPush", "navUnwindAll",
   "openDayView", "shiftDayDate",
   "addTask", "taskToPending", "updateTodoDue", "updateTodoTime",
   "runAiFeedback", "aiFeedbackPayload", "deleteAiLog",
@@ -214,19 +214,18 @@ if (!boardHtml.includes("haien")) fail("board missing case");
 if (!boardHtml.includes("stale1") && !boardHtml.includes("stale2")) fail("board missing staleness class");
 if (!boardHtml.includes('data-drop-index="0"')) fail("board missing dropzone index");
 if (boardHtml.includes("onpointerenter")) fail("board dropzone still uses inline pointer handlers");
-if (!boardHtml.includes("toggleDensity()")) fail("board missing density toggle");
+// Density modes were dropped (CEO 2026-07-22): one board rendering, no toggle.
+if (boardHtml.includes("toggleDensity()")) fail("board still renders density toggle");
 // Ward/room shows in the card meta; the four sections carry their color classes.
 if (!boardHtml.includes("3E-305")) fail("board missing ward/room in meta");
 ["sec-phase", "sec-task", "sec-pending", "sec-seeds"].forEach((cls) => {
   if (!boardHtml.includes(cls)) fail("board missing section color class " + cls);
 });
 
-// Normal mode shows ALL task items (no 2-item cap). Density defaults to
-// compact (B-3, 2026-07-22), so switch to normal explicitly for this check.
+// The board shows ALL task items (no 2-item cap).
 vm.runInContext(`
   (function(){
     var t = todayISO();
-    SETTINGS.density = "normal";
     DB.cases[0].todos.push({ id:"n3", text:"task-three", done:false, createdOn:t });
     DB.cases[0].todos.push({ id:"n4", text:"task-four", done:false, createdOn:t });
     DB.cases[0].todos.push({ id:"t2", text:"todo-two", done:false, createdOn:t });
@@ -239,18 +238,8 @@ if (!fullBoardHtml.includes("task-three") || !fullBoardHtml.includes("task-four"
 if (!fullBoardHtml.includes("todo-three")) fail("normal board caps task items (todo)");
 // Reorder is drag-handle only (2026-07-15): no up/down arrow buttons on cards.
 if (fullBoardHtml.includes("moveCaseDirection(")) fail("normal card still renders reorder buttons");
-
-// Compact mode: summary line, no checkboxes/reorder buttons, urgency badge survives.
-vm.runInContext("SETTINGS.density='compact'", sandbox);
-const compactHtml = vm.runInContext("renderBoard()", sandbox);
-if (!compactHtml.includes("list compact")) fail("compact board missing list class");
-if (compactHtml.includes("toggleTodo(")) fail("compact card still renders checkboxes");
-if (compactHtml.includes("moveCaseDirection(")) fail("compact card still renders reorder buttons");
-if (!compactHtml.includes("startDragCase(")) fail("compact card missing drag handle");
-if (!compactHtml.includes(vm.runInContext("STR.backTodayBadge", sandbox))) fail("compact card missing back-today badge");
-if (!compactHtml.includes(vm.runInContext("STR.countTask", sandbox) + "6")) fail("compact card missing task count");
-if (!compactHtml.includes("compactline")) fail("compact card missing summary line");
-vm.runInContext("SETTINGS.density='normal'", sandbox);
+if (!fullBoardHtml.includes("startDragCase(")) fail("board card missing drag handle");
+if (!fullBoardHtml.includes(vm.runInContext("STR.backTodayBadge", sandbox))) fail("board card missing back-today badge");
 
 vm.runInContext("VIEW.boardMode='week'", sandbox);
 const weekHtml = vm.runInContext("renderBoard()", sandbox);
@@ -279,7 +268,6 @@ if (!dayHtml.includes("haien")) fail("day view missing case group");
 if (!dayHtml.includes("toggleTodo('c1'")) fail("day view missing todo checkbox");
 if (!dayHtml.includes("cx-back")) fail("day view missing pending due today");
 if (!dayHtml.includes("openWeekCell('c1'")) fail("day view missing add button");
-if (dayHtml.includes("toggleDensity()")) fail("density toggle leaked into day view");
 if (!dayHtml.includes("overdueblock")) fail("day view missing overdue block");
 if (!dayHtml.includes("toggleEventDone('c1'")) fail("day view missing event resolve");
 if (!dayHtml.includes("cancelValuePlan('c1'")) fail("day view missing value-plan cancel");

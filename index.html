@@ -40,6 +40,8 @@
     --sec-task:#1d4ed8;
     --sec-pending:#b45309;
     --sec-seeds:#be185d;
+    --sec-problem:#0f766e;
+    --scrim:rgba(15,23,42,.45);
   }
   :root[data-theme="dark"]{
     color-scheme:dark;
@@ -66,6 +68,8 @@
     --sec-task:#93c5fd;
     --sec-pending:#fbbf6e;
     --sec-seeds:#f9a8d4;
+    --sec-problem:#5eead4;
+    --scrim:rgba(0,0,0,.6);
   }
   *{box-sizing:border-box}
   html{-webkit-text-size-adjust:100%}
@@ -145,10 +149,10 @@
   .sec-task{--sec:var(--sec-task)}
   .sec-pending{--sec:var(--sec-pending)}
   .sec-seeds{--sec:var(--sec-seeds)}
+  .sec-problem{--sec:var(--sec-problem)}
   .sectiontitle{font-size:11px;font-weight:700;color:var(--sec,var(--soft));text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
   .phase.sec-phase{border-left:3px solid var(--sec-phase);padding-left:8px}
   .panelcard>.one{color:var(--sec,inherit)}
-  .compactcounts span{color:var(--sec,inherit)}
   .plain{display:flex;flex-direction:column;gap:4px}
   .lineitem{
     display:flex;gap:8px;align-items:flex-start;
@@ -164,15 +168,9 @@
     background:var(--badge);border-radius:999px;font-size:11px;font-weight:700;
   }
   .seedcount{color:var(--sec,var(--muted));font-size:12px}
-  .list.compact{gap:6px}
-  .card.compact{padding:6px 8px}
-  .card.compact .caseid{font-size:14px}
-  .card.compact .handle{min-height:28px;width:28px;min-width:28px}
-  .card.compact .phase{margin-top:2px;font-size:12px}
   .oneline{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .compactline{display:flex;gap:6px;align-items:baseline;min-width:0;margin-top:2px;font-size:12px}
   .compactline .text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
-  .compactcounts{color:var(--muted);white-space:nowrap;font-size:11px}
   .empty{
     border:1px dashed var(--line);
     border-radius:14px;
@@ -196,10 +194,15 @@
   .panelcard{
     background:var(--card);
     border:1px solid var(--line);
+    border-left:4px solid var(--line);
     border-radius:14px;
     padding:12px;
     box-shadow:var(--shadow);
   }
+  /* Detail sections carry the same left-band grammar as board cards: the band
+     color = the section color, so 局面/Task/待ち/種/問題 read apart at a glance.
+     Sections without a --sec (notes, AI, chart) keep the neutral line. */
+  .panelcard[class*="sec-"]{border-left-color:var(--sec,var(--line))}
   .row{align-items:center}
   .row.wrap,.inline,.chips{flex-wrap:wrap}
   .field{flex-direction:column}
@@ -229,7 +232,8 @@
   }
   .sheet{
     position:fixed;inset:0;z-index:40;
-    background:rgba(15,23,42,.28);
+    background:var(--scrim);
+    backdrop-filter:blur(2px);
     display:none;
     align-items:flex-end;
     justify-content:center;
@@ -241,11 +245,21 @@
     max-height:88vh;
     overflow:auto;
     background:var(--card);
+    border:1px solid var(--line);
+    border-bottom:0;
     border-radius:18px 18px 0 0;
     padding:14px;
-    box-shadow:0 18px 48px rgba(0,0,0,.18);
+    box-shadow:0 18px 48px rgba(0,0,0,.32);
   }
-  .sheettitle{font-size:16px;font-weight:700;margin-bottom:12px}
+  /* Bottom-sheet grabber: the visual cue that this is a layer over the screen,
+     not part of it (CEO 2026-07-22: popups blended into the background). */
+  .sheetcard::before{
+    content:"";display:block;
+    width:36px;height:4px;border-radius:2px;
+    background:var(--line);
+    margin:0 auto 10px;
+  }
+  .sheettitle{font-size:16px;font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
   .note{font-size:12px;color:var(--muted)}
   .note.warn{color:var(--danger, #b3261e);font-weight:600}
   /* CCr renders at full size, eGFR inside .calcsub at 70%. The size gap is the
@@ -284,7 +298,6 @@
      tab list outgrows the phone width instead of overflowing sideways. */
   .seg{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
   .seg button{flex:1}
-  .seg .densitytoggle{flex:0 0 auto;margin-left:auto}
   .searchbar,.filters{display:flex;gap:8px;flex-wrap:wrap}
   .searchbar input,.filters select{flex:1}
   .weekwrap,.chartwrap{overflow:auto}
@@ -2054,10 +2067,9 @@ function calcWarnKeys(tool, values){
 // only place that knows which tabs exist and in what order. The chip row, the
 // body dispatch (TAB_BODY) and the on-enter hooks (TAB_ENTER) all read from it,
 // so adding a screen is a data change plus one render function.
-//   density:true  = the compact/normal toggle belongs on this tab
 //   scratch:true  = entering the tab throws away the previous session's inputs
 var VIEW_TABS = [
-  { id:"board", labelKey:"boardView", density:true },
+  { id:"board", labelKey:"boardView" },
   { id:"day",   labelKey:"dayView" },
   { id:"week",  labelKey:"weekView" },
   { id:"calc",  labelKey:"calcBtn", scratch:true }
@@ -2334,10 +2346,6 @@ Object.assign(STR, {
   endLabel:"\u7d42\u4e86",
   dateLabel:"\u65e5\u4ed8",
   deleteRow:"\u524a\u9664",
-  densityCompact:"\u30b3\u30f3\u30d1\u30af\u30c8",
-  countTask:"Task",
-  countPending:"\u5f85",
-  countSeeds:"\u7a2e",
   dayView:"\u4eca\u65e5",
   dayEmpty:"\u3053\u306e\u65e5\u306e\u4e88\u5b9a\u306f\u3042\u308a\u307e\u305b\u3093",
   dayToToday:"\u4eca\u65e5\u3078",
@@ -2481,8 +2489,7 @@ function defaultSettings(){
   return {
     cardSections:["phase", "task", "pending", "seeds"],
     cardHidden:[],
-    chartHidden:[],
-    density:"compact"
+    chartHidden:[]
   };
 }
 
@@ -2510,10 +2517,8 @@ function loadSettings(){
   base.cardSections = normalizeCardSections(cloneArr(src.cardSections).filter(Boolean));
   base.cardHidden = cloneArr(src.cardHidden).filter(Boolean);
   base.chartHidden = cloneArr(src.chartHidden).filter(Boolean);
-  // Compact is the default (B-3, CEO 2026-07-22); an explicit stored "normal"
-  // (a device where the toggle was used) is respected, everything else lands
-  // on compact — including settings saved before the key existed.
-  base.density = src.density === "normal" ? "normal" : "compact";
+  // density (compact/normal, dropped 2026-07-22): a stored value is ignored and
+  // no longer written back, so old settings blobs need no migration.
   return base;
 }
 
@@ -4253,16 +4258,6 @@ function updateLabelName(key, value){
   configChanged();
 }
 
-function boardDensityCompact(){
-  return (SETTINGS || defaultSettings()).density === "compact";
-}
-
-function toggleDensity(){
-  SETTINGS = SETTINGS || defaultSettings();
-  SETTINGS.density = SETTINGS.density === "compact" ? "normal" : "compact";
-  saveLocalPrefs();
-}
-
 function toggleHiddenPref(field, key, checked){
   SETTINGS = SETTINGS || defaultSettings();
   SETTINGS[field] = cloneArr(SETTINGS[field]).filter(function(item){ return item !== key; });
@@ -4875,7 +4870,6 @@ function renderBoardCard(c){
   var stageStyle = 'border-left-color:' + esc(stage.color);
   var stale = stalenessLevel(c.lastTouchedAt, nowISO());
   var staleClass = stale === 2 ? ' stale2' : stale === 1 ? ' stale1' : '';
-  if (boardDensityCompact()) return renderBoardCardCompact(c, stage, undone, stageStyle, staleClass);
   var sectionHtml = {
     phase:c.phaseNote ? '<div class="phase sec-phase">' + esc(c.phaseNote) + '</div>' : '',
     task:(undone.length || tasks.later.length) ? '<div class="section sec-task"><div class="sectiontitle">' + esc(DB.config.labels.task) + ' ' + undone.length + '</div><div class="plain">' + undone.map(function(item){
@@ -4899,32 +4893,6 @@ function renderBoardCard(c){
         (compactMeta(c) ? '<div class="meta">' + esc(compactMeta(c)) + '</div>' : '') +
         '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div>' + aiCardBadge(c) + '</div>' +
         orderedSections +
-      '</div>' +
-    '</div>' +
-  '</article>';
-}
-
-function renderBoardCardCompact(c, stage, undone, stageStyle, staleClass){
-  var hasBack = c.pendings.some(function(item){ return item.backOn && item.backOn <= todayISO(); });
-  var counts = [];
-  if (undone.length) counts.push('<span class="sec-task">' + esc(STR.countTask + undone.length) + '</span>');
-  if (c.pendings.length) counts.push('<span class="sec-pending">' + esc(STR.countPending + c.pendings.length) + '</span>');
-  if (c.seeds.length) counts.push('<span class="sec-seeds">' + esc(STR.countSeeds + c.seeds.length) + '</span>');
-  var firstTask = undone.length ? String(undone[0].text || "") : "";
-  var summary = (firstTask || counts.length) ? '<div class="compactline">' +
-    (firstTask ? '<div class="text">' + esc(firstTask) + '</div>' : '') +
-    (counts.length ? '<span class="compactcounts">' + counts.join(' ') + '</span>' : '') +
-  '</div>' : '';
-  return '<article class="card compact' + staleClass + (DND.activeId === c.id ? ' dragging' : '') + '" style="' + stageStyle + '" onclick="openDetail(\'' + esc(c.id) + '\')">' +
-    '<div class="cardhead">' +
-      '<button class="handle" onpointerdown="startDragCase(event,\'' + esc(c.id) + '\')" onclick="event.stopPropagation()">≡</button>' +
-      '<div class="linegrow">' +
-        '<div class="labelrow"><div class="caseid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, todayISO()) + '</div>' +
-        (compactMeta(c) ? '<div class="meta">' + esc(compactMeta(c)) + '</div>' : '') +
-        '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div>' +
-        (hasBack ? '<span class="badge">' + esc(STR.backTodayBadge) + '</span>' : '') + aiCardBadge(c) + '</div>' +
-        (c.phaseNote ? '<div class="phase oneline sec-phase">' + esc(c.phaseNote) + '</div>' : '') +
-        summary +
       '</div>' +
     '</div>' +
   '</article>';
@@ -5782,7 +5750,7 @@ function renderDataSheet(){
 function renderCaseListView(){
   var cases = boardCases();
   if (!cases.length) return '<div class="empty">' + esc(STR.emptyBoard) + '</div>';
-  return '<div class="list' + (boardDensityCompact() ? ' compact' : '') + '">' +
+  return '<div class="list">' +
     cases.map(function(c, idx){
       return '<div class="dropzone" data-drop-index="' + idx + '"></div>' + renderBoardCard(c);
     }).join('') +
@@ -5827,12 +5795,9 @@ var TAB_BODY = {
 };
 
 function renderTabBar(mode){
-  var tab = viewTabById(mode) || {};
   return '<div class="seg">' + VIEW_TABS.map(function(t){
     return '<button class="chipbtn' + (t.id === mode ? ' on' : '') + '" onclick="setBoardMode(\'' + esc(t.id) + '\')">' + esc(STR[t.labelKey] || t.id) + '</button>';
-  }).join('') +
-  (tab.density ? '<button class="chipbtn densitytoggle' + (boardDensityCompact() ? ' on' : '') + '" onclick="toggleDensity()">' + esc(STR.densityCompact) + '</button>' : '') +
-  '</div>';
+  }).join('') + '</div>';
 }
 
 renderBoard = function(){
