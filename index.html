@@ -2247,6 +2247,8 @@ const STR = {
   taskEditBtn:"編集",
   taskEditClose:"閉じる",
   menuRow:"その他",
+  vaultHtmlRow:"早見表（vault-html）",
+  calcVaultLink:"換算表・早見表（vault-html）を開く",
   backOnLabel:"戻り日（不明なら空欄）",
   editMeta:"年代・性別",
   review:"夕の棚卸し",
@@ -3487,6 +3489,7 @@ function renderMenuSheet(){
     row(STR.dataRow, 'openDataSheet()') +
     row(STR.searchRow, 'closeSheet();openSearch()') +
     row(STR.settingsRow, 'openSettingsSheet()') +
+    row(STR.vaultHtmlRow, 'openVaultHtml()', '<span class="faint">↗</span>') +
     '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
@@ -5413,6 +5416,14 @@ function renderNoteList(c){
 // NEVER fed back into aiFeedbackPayload and NEVER included in exports.
 // The instruction text ("sys") is user-editable in settings — see aiPromptText.
 var AI_URL = "https://wardbook-ai.naganomitsutoshi.workers.dev";
+
+// Quick-reference tables (dose tables, conversions, qSOFA) live on vault-html,
+// not in Wardbook (CEO 2026-07-21: patient-independent content is published
+// there). This only opens the index page in a new tab — nothing is sent.
+var VAULT_HTML_URL = "https://vault-html.naganomitsutoshi.workers.dev/";
+function openVaultHtml(){
+  window.open(VAULT_HTML_URL, "_blank", "noopener");
+}
 var AI = { caseId:"", status:"", text:"" };
 
 function aiToken(){
@@ -5627,7 +5638,8 @@ function calcListBody(){
   return (VIEW.calcFor ? '' : '<div class="note">' + esc(STR.calcNoCase) + '</div>') +
     CALC_TOOLS.map(function(tool){
       return '<button class="lineitem" style="width:100%;text-align:left" onclick="openCalcTool(\'' + esc(tool.id) + '\')"><span class="text">' + esc(STR[tool.nameKey] || tool.id) + '</span></button>';
-    }).join('');
+    }).join('') +
+    '<button class="lineitem" style="width:100%;text-align:left" onclick="openVaultHtml()"><span class="text" style="flex:1">' + esc(STR.calcVaultLink) + '</span><span class="faint">↗</span></button>';
 }
 
 function renderCalcListSheet(){
