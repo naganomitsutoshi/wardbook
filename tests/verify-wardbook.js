@@ -39,12 +39,12 @@ const L = sandbox.module.exports;
 
 [
   "defaultStages", "defaultChartCats", "normalizeState", "normalizeCase", "computeDay", "rolloverTodos",
-  "hasPendingHold", "boardOrder", "stalenessLevel", "needsReview", "reviewQueue",
-  "unsentSeeds", "countSeedsOn", "formatSeedExport", "missSeedText", "makeSeed",
+  "hasPendingHold", "boardOrder", "stalenessLevel",
+  "unsentSeeds",
   "moveIdInList", "dcChecklistItems", "stageOn",
   "normalizeChart", "chartDates", "bandOnDate", "chartColMarks", "chartRowsForCase",
   "chartExportLines", "fmtMonthDay",
-  "buildWeekGrid", "buildDayPlan", "searchCases", "reviewStreak", "syncDiffFields",
+  "buildWeekGrid", "buildDayPlan", "searchCases", "syncDiffFields",
   "syncMergeCase", "syncEmptyState", "syncMarkRestored", "syncNoteLocalChanges", "syncReconcile",
   "syncClearDirty", "syncDeriveKey", "syncEncryptJson", "syncDecryptJson",
   "syncRandomSaltB64", "statsSummary", "buildOutboxBatch"
@@ -92,21 +92,8 @@ assert.strictEqual(L.stalenessLevel("2026-07-05T01:00:00.000Z", "2026-07-07T00:0
 assert.strictEqual(L.stalenessLevel("2026-07-05T00:00:00.000Z", "2026-07-07T00:00:00.000Z"), 2);
 assert.strictEqual(L.stalenessLevel("bad", "2026-07-07T00:00:00.000Z"), 0);
 
-assert.strictEqual(L.needsReview({ lastTouchedAt:"2026-07-07T08:00:00+09:00" }, "2026-07-07"), false);
-assert.strictEqual(L.needsReview({ lastTouchedAt:"2026-07-06T23:00:00+09:00" }, "2026-07-07"), true);
-assert.strictEqual(L.needsReview({ lastTouchedAt:"bad" }, "2026-07-07"), true);
-assert.strictEqual(
-  L.reviewQueue([
-    { id:"c1", status:"active", order:0, lastTouchedAt:"2026-07-06T01:00:00+09:00", pendings:[] },
-    { id:"c2", status:"active", order:1, lastTouchedAt:"2026-07-07T08:00:00+09:00", pendings:[] },
-    { id:"c3", status:"discharged", order:2, lastTouchedAt:"2026-07-06T01:00:00+09:00", pendings:[] }
-  ], "2026-07-07").map((x) => x.id).join(","),
-  "c1"
-);
-
-const seed = L.makeSeed("s1", "seed", "2026-07-07", { label:"haien", day:3, stageName:"acute", phaseNote:"CAP" });
-assert.strictEqual(seed.createdOn, "2026-07-07");
-assert.strictEqual(L.countSeedsOn([{ seeds:[{ createdOn:"2026-07-07" }, { createdOn:"2026-07-06" }] }], "2026-07-07"), 1);
+// Seeds/review UI was removed (2026-07-25); unsentSeeds survives because the
+// boot-time outbox flush still drains legacy unsent seeds to the collector.
 assert.strictEqual(
   L.unsentSeeds([
     { status:"active", order:1, seeds:[{ id:"s1", sentAt:null }] },
@@ -115,8 +102,6 @@ assert.strictEqual(
   ]).map((x) => x.id).join(","),
   "s2,s1,s3"
 );
-assert.ok(L.formatSeedExport([], "2026-07-07").startsWith("## 2026-07-07"));
-assert.ok(L.missSeedText("old", "why").includes("old"));
 assert.strictEqual(L.moveIdInList(["a", "b"], "b", "up").join(","), "b,a");
 assert.strictEqual(L.moveIdInList(["a", "b"], "a", "up").join(","), "a,b");
 assert.strictEqual(L.moveIdInList(["a", "b"], "b", "down").join(","), "a,b");
@@ -345,18 +330,17 @@ assert.strictEqual(dayFuture[0].items.map((x) => x.type).join(","), "pending");
 const dayEmpty = L.buildDayPlan(dayCases, "2026-07-30", "2026-07-08");
 assert.strictEqual(dayEmpty.length, 0);
 
+// Search covers daily notes now (they replaced seeds as the free-text body,
+// 2026-07-25); seeds text no longer matches.
 const searchCases = [
-  { id:"a", label:"haien", admittedAt:"2026-07-01", stageId:"adm", phaseNote:"CAP", dxTags:["pna"], todos:[{ text:"abx" }], pendings:[], seeds:[], status:"active" },
-  { id:"b", label:"uti", admittedAt:"2026-06-01", stageId:"dc", phaseNote:"", dxTags:[], todos:[{ text:"culture" }], pendings:[], seeds:[{ text:"seed" }], status:"discharged" }
+  { id:"a", label:"haien", admittedAt:"2026-07-01", stageId:"adm", phaseNote:"CAP", dxTags:["pna"], todos:[{ text:"abx" }], pendings:[], notes:[{ text:"afebrile" }], seeds:[], status:"active" },
+  { id:"b", label:"uti", admittedAt:"2026-06-01", stageId:"dc", phaseNote:"", dxTags:[], todos:[{ text:"culture" }], pendings:[], notes:[], seeds:[{ text:"seedonly" }], status:"discharged" }
 ];
 assert.strictEqual(L.searchCases(searchCases, "cap", {}).map((x) => x.case.id).join(","), "a");
 assert.strictEqual(L.searchCases(searchCases, "CULTURE", {}).map((x) => x.case.id).join(","), "b");
+assert.strictEqual(L.searchCases(searchCases, "afebrile", {}).map((x) => x.case.id).join(","), "a");
+assert.strictEqual(L.searchCases(searchCases, "seedonly", {}).length, 0);
 assert.strictEqual(L.searchCases(searchCases, "", { month:"2026-06", stageId:"dc" }).map((x) => x.case.id).join(","), "b");
-
-assert.strictEqual(L.reviewStreak({}, "2026-07-08"), 0);
-assert.strictEqual(L.reviewStreak({ "2026-07-08":true }, "2026-07-08"), 1);
-assert.strictEqual(L.reviewStreak({ "2026-07-07":true, "2026-07-06":true }, "2026-07-08"), 2);
-assert.strictEqual(L.reviewStreak({ "2026-07-08":true, "2026-07-06":true }, "2026-07-08"), 1);
 
 const normalized = L.normalizeCase({
   admittedAt:"2026-07-07",

@@ -138,7 +138,8 @@ vm.runInContext(`
 `, sandbox);
 
 [
-  "copyDischargeExport", "copyDayExport", "openWeekCell",
+  "copyDischargeExport", "openWeekCell",
+  "openAdmEditSheet", "openNoteEditSheet", "saveBigEditSheet", "renderBigEditSheet",
   "startDragCase", "dragMove", "dragEnd", "nearestDropIndex",
   "handlePopState", "navPush", "navUnwindAll",
   "openDayView", "shiftDayDate",
@@ -160,7 +161,16 @@ vm.runInContext(`
   "renderApptCellSheet", "renderApptSection", "chartGroupHidden", "toggleChartGroupPref",
   "toggleChartDateMode",
   "addNext", "updateNextText", "updateNextDue", "deleteNext",
-  "renderNextList", "renderTodoList", "addTodo", "hasBackToday"
+  "renderNextList", "renderTodoList", "addTodo", "hasBackToday",
+  // 2026-07-25 removals: evening review, seeds UI, problems UI, day export,
+  // miss-prompt hook. Data layer (entries kinds seed/problem) stays.
+  "openReview", "exitReview", "reviewAdvance", "reviewNoChange", "renderReview",
+  "renderReviewCard", "renderReviewDone", "copyReviewExport", "shareReviewExport",
+  "startReviewStageEdit", "setReviewStage", "saveReviewNote", "patchOutboxStatus",
+  "addSeed", "deleteSeed", "renderSeedList", "countSeedsOn", "formatSeedExport",
+  "addProblem", "deleteProblem", "toggleProblemStatus", "updateProblemText", "renderProblemList",
+  "dayExportText", "copyDayExport",
+  "renderMissPrompt", "commitMissSeed", "expandMissPrompt", "dismissMissPrompt", "clearMiss"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "undefined") fail("removed fn still defined: " + name);
 });
@@ -216,11 +226,17 @@ if (!boardHtml.includes('data-drop-index="0"')) fail("board missing dropzone ind
 if (boardHtml.includes("onpointerenter")) fail("board dropzone still uses inline pointer handlers");
 // Density modes were dropped (CEO 2026-07-22): one board rendering, no toggle.
 if (boardHtml.includes("toggleDensity()")) fail("board still renders density toggle");
-// Ward/room shows in the card meta; the four sections carry their color classes.
+// Ward/room shows in the card meta; the three sections carry their color classes.
 if (!boardHtml.includes("3E-305")) fail("board missing ward/room in meta");
-["sec-phase", "sec-task", "sec-pending", "sec-seeds"].forEach((cls) => {
+["sec-phase", "sec-task", "sec-pending"].forEach((cls) => {
   if (!boardHtml.includes(cls)) fail("board missing section color class " + cls);
 });
+// Seeds section is gone from cards (2026-07-25) even when legacy seed data exists.
+if (boardHtml.includes("sec-seeds")) fail("board still renders seeds section");
+// Dx tags show on the card (CEO 2026-07-25) — the fixture c1 carries "cap".
+if (!boardHtml.includes('class="dxline"') || !boardHtml.includes("cap")) fail("board card missing dx tag line");
+// The evening review is gone from the bottom bar.
+if (boardHtml.includes("openReview()")) fail("board still offers the evening review");
 
 // The board shows ALL task items (no 2-item cap).
 vm.runInContext(`
@@ -280,9 +296,11 @@ vm.runInContext("setBoardMode('board')", sandbox);
 
 vm.runInContext("VIEW={ name:'detail', caseId:'c1', editingMeta:false, editingLabel:false, stagePickerFor:'', nowDay:todayISO() }", sandbox);
 const detailHtml = vm.runInContext("renderDetail('c1')", sandbox);
-if (!detailHtml.includes("seed-one")) fail("detail missing seed");
+// Legacy seed data stays on the case but never renders (UI removed 2026-07-25).
+if (detailHtml.includes("seed-one")) fail("detail still renders seeds");
+if (detailHtml.includes("sec-seeds")) fail("detail still renders seeds section");
 if (!detailHtml.includes("3E-305")) fail("detail missing ward/room in meta");
-["sec-phase", "sec-task", "sec-pending", "sec-seeds"].forEach((cls) => {
+["sec-phase", "sec-task", "sec-pending"].forEach((cls) => {
   if (!detailHtml.includes(cls)) fail("detail missing section color class " + cls);
 });
 // Task rows collapse by default (B-1, 2026-07-22): the closed row offers the
@@ -508,39 +526,59 @@ if (!chartNarrow.includes("expandChartFuture()")) fail("narrow chart missing fut
 if (!chartNarrow.includes("expandChartPast()")) fail("narrow chart missing past (◀) button");
 vm.runInContext("window.innerWidth = 1000; VIEW.chartOpen = false;", sandbox);
 
-// Admission record panel + problem section (2026-07-11).
+// Admission record panel (problems UI removed 2026-07-25; legacy problem data
+// stays on the case but never renders).
 if (!detailHtml.includes("toggleAdmPanel()")) fail("detail missing admission panel");
-if (!detailHtml.includes("CHF")) fail("detail missing active problem");
-if (!detailHtml.includes("toggleProblemStatus('c1'")) fail("problem missing status toggle");
-if (!detailHtml.includes("addProblem('c1'")) fail("problem section missing add-input");
-// The admission panel opens to reveal the single free-text field + PII warning.
-// c1 carries the legacy 4-field payload, so the migrated text must be visible
-// (2026-07-21: one-field collapse; normalizeCase merges trigger/pmh/adl/note).
+if (detailHtml.includes("CHF") || detailHtml.includes("AKI")) fail("detail still renders problems");
+if (detailHtml.includes("sec-problem")) fail("detail still renders problem section");
+// The admission panel opens to a read-only preview that launches the
+// full-screen edit sheet (2026-07-25). c1 carries the legacy 4-field payload,
+// so the migrated text must be visible in the preview.
 vm.runInContext("VIEW.admOpen = true;", sandbox);
 const admOpenHtml = vm.runInContext("renderDetail('c1')", sandbox);
-if (!admOpenHtml.includes("updateCaseAdm('c1'")) fail("open admission panel missing text field");
-if (admOpenHtml.includes("addAdmPmh")) fail("admission panel still renders legacy pmh add");
+if (!admOpenHtml.includes("openAdmEditSheet('c1')")) fail("open admission panel missing edit-sheet entry");
+if (admOpenHtml.includes("updateCaseAdm('c1'")) fail("admission panel still renders the inline textarea");
 if (!admOpenHtml.includes("dyspnea")) fail("open admission panel missing migrated trigger text");
 if (!admOpenHtml.includes("adm-note")) fail("open admission panel missing migrated note text");
 if (!admOpenHtml.includes(vm.runInContext("STR.piiWarning", sandbox))) fail("admission note missing PII warning");
+// Full-screen adm edit sheet: opens with the current text, saves through
+// updateCaseAdm (multi-line survives the round trip).
+vm.runInContext("openAdmEditSheet('c1');", sandbox);
+if (vm.runInContext("SHEET.name", sandbox) !== "admEdit") fail("adm edit sheet did not open");
+const admSheetHtml = vm.runInContext("renderBigEditSheet()", sandbox);
+if (!admSheetHtml.includes("bigedit")) fail("adm edit sheet missing big textarea");
+if (!admSheetHtml.includes("dyspnea")) fail("adm edit sheet missing current text");
+if (!admSheetHtml.includes(vm.runInContext("STR.piiWarning", sandbox))) fail("adm edit sheet missing PII warning");
+vm.runInContext("SHEET.draft.text='line-one\\nline-two'; saveBigEditSheet();", sandbox);
+if (vm.runInContext("SHEET.name", sandbox) !== "") fail("adm edit sheet did not close on save");
+if (vm.runInContext("DB.cases.find(c=>c.id==='c1').adm.text", sandbox) !== "line-one\nline-two") fail("adm edit sheet did not save multi-line text");
+const admSaved = vm.runInContext("renderDetail('c1')", sandbox);
+if (!admSaved.includes("notebody")) fail("adm preview not rendering pre-wrap text");
 vm.runInContext("VIEW.admOpen = false;", sandbox);
-// Design invariant: problems carry no date, so they must never leak into the
-// week schedule projection (rendered above from c1 which has CHF/AKI problems).
-if (weekHtml.includes("CHF") || weekHtml.includes("AKI")) fail("problem leaked into week projection");
-// Resolved problems render with the resolved tag (greyed "sent" style).
-if (!detailHtml.includes(vm.runInContext("STR.problemResolvedTag", sandbox))) fail("resolved problem missing resolved tag");
-// Daily notes section (2026-07-21): date-stamped free text on the detail only —
-// like problems it must never leak into the week projection (局面ファースト).
+// Daily notes section: date-stamped free text on the detail only — it must
+// never leak into the week projection (局面ファースト). Rows open the edit
+// sheet; the add button opens an empty one.
 if (!detailHtml.includes("afebrile-day")) fail("detail missing daily note");
-if (!detailHtml.includes("addNote('c1'")) fail("notes section missing add-input");
+if (!detailHtml.includes("openNoteEditSheet('c1','note-one')")) fail("note row missing edit-sheet entry");
+if (!detailHtml.includes("openNoteEditSheet('c1','')")) fail("notes section missing add button");
+if (detailHtml.includes("addNote('c1'")) fail("notes section still renders the inline add-input");
 if (!detailHtml.includes("deleteNote('c1'")) fail("daily note missing delete");
 if (weekHtml.includes("afebrile-day")) fail("daily note leaked into week projection");
-// Exports carry the admission text + daily notes (AI feedback source).
-const dayExportSmoke = vm.runInContext("dayExportText('c1')", sandbox);
-if (!dayExportSmoke.includes("Admission note") || !dayExportSmoke.includes("dyspnea")) fail("day export missing admission text");
-if (!dayExportSmoke.includes("2026-07-06 afebrile-day")) fail("day export missing daily note");
+// Note edit sheet round trip: existing note loads, edit saves, add creates.
+vm.runInContext("openNoteEditSheet('c1','note-one');", sandbox);
+if (vm.runInContext("SHEET.name", sandbox) !== "noteEdit") fail("note edit sheet did not open");
+if (!vm.runInContext("renderBigEditSheet()", sandbox).includes("afebrile-day")) fail("note edit sheet missing current text");
+vm.runInContext("SHEET.draft.text='afebrile-day\\nate-well'; saveBigEditSheet();", sandbox);
+if (vm.runInContext("DB.cases.find(c=>c.id==='c1').notes.find(n=>n.id==='note-one').text", sandbox) !== "afebrile-day\nate-well") fail("note edit did not save multi-line text");
+vm.runInContext("openNoteEditSheet('c1',''); SHEET.draft.text='new-note-today'; saveBigEditSheet();", sandbox);
+if (!vm.runInContext("DB.cases.find(c=>c.id==='c1').notes.some(n=>n.text==='new-note-today')", sandbox)) fail("note add sheet did not create a note");
+// Restore fixture text for later export/AI checks.
+vm.runInContext("(function(){ var c=DB.cases.find(x=>x.id==='c1'); updateNoteText('c1','note-one','afebrile-day'); var extra=c.notes.find(n=>n.text==='new-note-today'); if(extra) deleteNote('c1',extra.id); updateCaseAdm('c1','dyspnea PMH:DM ADL:indep adm-note'); })();", sandbox);
+// Exports: the day export is gone (2026-07-25); the discharge export still
+// carries the admission text + daily notes but no Seeds section.
 const dcExportSmoke = vm.runInContext("dischargeExportText('c1')", sandbox);
 if (!dcExportSmoke.includes("Admission note") || !dcExportSmoke.includes("afebrile-day")) fail("discharge export missing admission/notes");
+if (dcExportSmoke.includes("## Seeds") || dcExportSmoke.includes("seed-one")) fail("discharge export still carries seeds");
 
 // AI feedback panel (Phase 2, 2026-07-21): button on the detail, and the relay
 // payload allowlist IS the PII boundary — adm text + dated note bodies only.
@@ -574,7 +612,6 @@ const detailAiOpen = vm.runInContext("toggleAiLog('ai-one'); renderDetail('c1')"
 if (!detailAiOpen.includes("ai-fb-second-line")) fail("expanded AI feedback missing full text");
 if (!detailAiOpen.includes(vm.runInContext("STR.aiUnreviewed", sandbox))) fail("expanded AI feedback missing unreviewed mark");
 vm.runInContext("toggleAiLog('ai-one')", sandbox);
-if (dayExportSmoke.includes("ai-fb-keep")) fail("AI feedback leaked into day export");
 if (dcExportSmoke.includes("ai-fb-keep")) fail("AI feedback leaked into discharge export");
 
 // Background fetch visibility (2026-07-22): the fetch keeps running after
@@ -608,7 +645,7 @@ const dischargeIx = detailHtml.indexOf('id="anc-dc"');
 const taskIx = detailHtml.indexOf('id="anc-task"');
 if (dischargeIx < 0) fail("detail missing discharge panel");
 if (taskIx < 0 || dischargeIx > taskIx) fail("dc-stage discharge panel not before task section");
-if (!detailHtml.includes("copyDayExport('c1')")) fail("detail missing day export");
+if (detailHtml.includes("copyDayExport")) fail("detail still renders the day export");
 
 // Week cell sheet on a FUTURE date lists the due-dated task with its time.
 vm.runInContext(`
@@ -676,38 +713,15 @@ if (aiReqBody.sys !== "custom-ai-style") fail("AI request not carrying the custo
 vm.runInContext("AI={caseId:'',status:'',text:''}; saveAiPrompt('')", sandbox);
 if (vm.runInContext("aiPromptText()===STR.aiPromptDefault", sandbox) !== true) fail("AI prompt reset did not restore default");
 
-vm.runInContext("REVIEW = { ids:['c1'], index:0, mode:'done', empty:false, noteDraft:'', copied:false, outboxStatus:'status-line' }", sandbox);
-const reviewDone = vm.runInContext("renderReviewDone()", sandbox);
-if (!reviewDone.includes("data-outbox-status")) fail("review missing outbox status");
-if (!reviewDone.includes(vm.runInContext("STR.streakLine", sandbox))) fail("review missing streak line");
-
-// Review flow end-to-end (QA P1-7): stale cases -> queue -> advance each -> done.
-vm.runInContext(`
-  DB.cases = DB.cases.map(function(c){
-    if (c.status !== "active") return c;
-    return Object.assign({}, c, { lastTouchedAt:"2026-07-01T00:00:00.000Z" });
-  });
-  openReview();
-`, sandbox);
-if (vm.runInContext("REVIEW.mode", sandbox) !== "actions") fail("review queue empty despite stale cases");
-const reviewQueueLen = vm.runInContext("REVIEW.ids.length", sandbox);
-if (reviewQueueLen < 2) fail("review queue missing stale cases");
-const midReviewHtml = vm.runInContext("render(); renderReview()", sandbox);
-if (!midReviewHtml.includes("reviewNoChange(")) fail("review screen missing no-change action");
-// Third entry to the day sheet: the evening review walks the patients anyway,
-// so the numbers can be typed without leaving that flow.
-if (!midReviewHtml.includes("openChartDaySheet(")) fail("review card missing day-entry button");
-for (let i = 0; i < reviewQueueLen; i += 1) {
-  vm.runInContext("reviewNoChange(REVIEW.ids[REVIEW.index])", sandbox);
-}
-if (vm.runInContext("REVIEW.mode", sandbox) !== "done") fail("review flow did not reach done");
-const reviewFlowDone = vm.runInContext("renderReview()", sandbox);
-if (!reviewFlowDone.includes(vm.runInContext("STR.reviewDone", sandbox))) fail("review flow missing done title");
-vm.runInContext("copyReviewExport()", sandbox);
+// Evening review removed (2026-07-25): a stale VIEW.name of "review" (e.g. a
+// restored nav snapshot from an old session) must fall back to the board, not
+// crash the render dispatch.
+vm.runInContext("VIEW.name='review';", sandbox);
+if (!vm.runInContext("render()", sandbox)) fail("render crashed on legacy review view name");
 vm.runInContext("openBoard()", sandbox);
 
-// Blur without an actual edit must not touch the case (it would silently drop
-// the patient from the evening review queue and reset staleness).
+// Blur without an actual edit must not touch the case (staleness fading on the
+// board still keys off lastTouchedAt).
 if (vm.runInContext("DB.cases.length", sandbox) > 0) {
   const beforeTouch = vm.runInContext("DB.cases[0].lastTouchedAt", sandbox);
   vm.runInContext("updateCasePhase(DB.cases[0].id, DB.cases[0].phaseNote)", sandbox);

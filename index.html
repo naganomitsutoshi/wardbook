@@ -39,8 +39,6 @@
     --sec-phase:#6d28d9;
     --sec-task:#1d4ed8;
     --sec-pending:#b45309;
-    --sec-seeds:#be185d;
-    --sec-problem:#0f766e;
     --scrim:rgba(15,23,42,.45);
   }
   :root[data-theme="dark"]{
@@ -67,8 +65,6 @@
     --sec-phase:#c4b5fd;
     --sec-task:#93c5fd;
     --sec-pending:#fbbf6e;
-    --sec-seeds:#f9a8d4;
-    --sec-problem:#5eead4;
     --scrim:rgba(0,0,0,.6);
   }
   *{box-sizing:border-box}
@@ -148,8 +144,6 @@
   .sec-phase{--sec:var(--sec-phase)}
   .sec-task{--sec:var(--sec-task)}
   .sec-pending{--sec:var(--sec-pending)}
-  .sec-seeds{--sec:var(--sec-seeds)}
-  .sec-problem{--sec:var(--sec-problem)}
   .sectiontitle{font-size:11px;font-weight:700;color:var(--sec,var(--soft));text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
   .phase.sec-phase{border-left:3px solid var(--sec-phase);padding-left:8px}
   .panelcard>.one{color:var(--sec,inherit)}
@@ -167,7 +161,7 @@
     min-height:22px;padding:0 8px;border:1px solid var(--badge-line);
     background:var(--badge);border-radius:999px;font-size:11px;font-weight:700;
   }
-  .seedcount{color:var(--sec,var(--muted));font-size:12px}
+  .dxline{font-size:13px;color:var(--muted);margin-top:2px}
   .oneline{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .compactline{display:flex;gap:6px;align-items:baseline;min-width:0;margin-top:2px;font-size:12px}
   .compactline .text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
@@ -286,13 +280,10 @@
   .card.stale2{filter:saturate(.2);opacity:.82}
   .bottomrow{display:flex;gap:8px}
   .bottomrow > *{flex:1;min-height:44px;white-space:nowrap}
-  .reviewhead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
-  .reviewprogress{font-size:12px;color:var(--muted)}
-  .reviewactions,.reviewstack{display:flex;flex-direction:column;gap:8px}
-  .reviewactions button,.reviewstack button{width:100%;min-height:44px}
   .reviewtextarea{width:100%;min-height:160px;border:1px solid var(--line);border-radius:10px;background:var(--btn);color:var(--text);padding:10px;resize:vertical}
-  .missrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
-  .missrow .input{flex:1 1 180px}
+  /* Full-screen edit sheet textarea (adm record / daily note, 2026-07-25). */
+  .bigedit{width:100%;min-height:56vh;border:1px solid var(--line);border-radius:10px;background:var(--btn);color:var(--text);padding:10px;font:inherit;resize:vertical}
+  .notebody{white-space:pre-wrap;word-break:break-word}
   .hidden{display:none!important}
   /* Tab chips never shrink (they must stay readable), so the row wraps once the
      tab list outgrows the phone width instead of overflowing sideways. */
@@ -1120,19 +1111,8 @@ function stalenessLevel(lastTouchedAt, nowIso){
   return 0;
 }
 
-function needsReview(c, todayIso){
-  var dayStart = Date.parse(String(todayIso || "") + "T00:00:00");
-  var touched = Date.parse(String(c && c.lastTouchedAt || ""));
-  if (!Number.isFinite(dayStart) || !Number.isFinite(touched)) return true;
-  return touched < dayStart;
-}
-
-function reviewQueue(cases, todayIso){
-  return boardOrder(cases, todayIso).filter(function(c){
-    return needsReview(c, todayIso);
-  });
-}
-
+// Seeds/棚卸し UI was removed (CEO 2026-07-25); unsentSeeds stays because the
+// boot-time outbox flush still drains legacy unsent seeds to the PC collector.
 function unsentSeeds(cases){
   var active = cloneArr(cases).filter(function(c){ return c && c.status === "active"; })
     .sort(function(a, b){ return toNum(a.order, 0) - toNum(b.order, 0); });
@@ -1144,49 +1124,6 @@ function unsentSeeds(cases){
     });
     return out;
   }, []);
-}
-
-function countSeedsOn(cases, todayIso){
-  return cloneArr(cases).reduce(function(total, c){
-    return total + cloneArr(c && c.seeds).filter(function(seed){
-      return seed && seed.createdOn === todayIso;
-    }).length;
-  }, 0);
-}
-
-function formatSeedExport(seeds, todayIso){
-  var header = "## " + todayIso + " の種（Wardbook 手動書き出し）";
-  if (!cloneArr(seeds).length) return header;
-  return header + "\n" + cloneArr(seeds).map(function(seed){
-    var snap = isObj(seed && seed.snapshot) ? seed.snapshot : {};
-    var parts = [
-      (typeof snap.label === "string" ? snap.label : "") + " D" + (Number.isFinite(Number(snap.day)) ? Number(snap.day) : 1),
-      typeof snap.stageName === "string" ? snap.stageName : "",
-      typeof snap.phaseNote === "string" ? snap.phaseNote : ""
-    ].filter(function(x){ return !!x; });
-    return "- [ ] " + String(seed && seed.text || "") + "\n  - 局面: " + parts.join("｜");
-  }).join("\n");
-}
-
-function missSeedText(oldText, whyText){
-  var why = String(whyText || "").trim();
-  return "予測外れ: " + String(oldText || "") + (why ? " → " + why : "");
-}
-
-function makeSeed(id, text, createdOn, snapshotFields){
-  var snap = isObj(snapshotFields) ? snapshotFields : {};
-  return {
-    id:id,
-    text:text,
-    createdOn:createdOn,
-    snapshot:{
-      label:typeof snap.label === "string" ? snap.label : "",
-      day:Number.isFinite(Number(snap.day)) ? Number(snap.day) : 1,
-      stageName:typeof snap.stageName === "string" ? snap.stageName : "",
-      phaseNote:typeof snap.phaseNote === "string" ? snap.phaseNote : ""
-    },
-    sentAt:null
-  };
 }
 
 function normalizeStageLog(raw, admittedAt, stageId){
@@ -1337,36 +1274,16 @@ function searchCases(cases, query, filters){
     var fields = [c.label, c.room, (c.dxTags || []).join(" "), c.phaseNote]
       .concat(cloneArr(c.todos).map(function(x){ return x.text; }))
       .concat(cloneArr(c.pendings).map(function(x){ return x.text; }))
-      .concat(cloneArr(c.seeds).map(function(x){ return x.text; }));
+      .concat(cloneArr(c.notes).map(function(x){ return x.text; }));
     return fields.some(function(text){ return String(text || "").toLowerCase().indexOf(q) >= 0; });
   }).map(function(c){
     var fields = [c.label, c.room, (c.dxTags || []).join(" "), c.phaseNote]
       .concat(cloneArr(c.todos).map(function(x){ return x.text; }))
       .concat(cloneArr(c.pendings).map(function(x){ return x.text; }))
-      .concat(cloneArr(c.seeds).map(function(x){ return x.text; }));
+      .concat(cloneArr(c.notes).map(function(x){ return x.text; }));
     var hint = q ? (fields.find(function(text){ return String(text || "").toLowerCase().indexOf(q) >= 0; }) || "") : "";
     return { case:c, hint:hint };
   });
-}
-
-function reviewStreak(reviewDates, todayIso){
-  var days = isObj(reviewDates) ? reviewDates : {};
-  var start = todayIso;
-  if (!days[start]) {
-    var prev = new Date(Date.parse(todayIso + "T00:00:00") - 86400000);
-    start = prev.getFullYear() + "-" + String(prev.getMonth() + 1).padStart(2, "0") + "-" + String(prev.getDate()).padStart(2, "0");
-    if (!days[start]) return 0;
-  }
-  var count = 0;
-  var cur = Date.parse(start + "T00:00:00");
-  while (Number.isFinite(cur)) {
-    var d = new Date(cur);
-    var iso = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-    if (!days[iso]) break;
-    count += 1;
-    cur -= 86400000;
-  }
-  return count;
 }
 
 function moveIdInList(ids, id, direction){
@@ -1751,6 +1668,8 @@ function fmtMonthDay(date){
 // 経過表 (temperature board) as AI-readable text: a compact 項目 x 日付 table
 // for entered values, plus one line each for bands (periods) and events (dated).
 // Pure: caller passes the category list and today's ISO date.
+// No in-app caller since the day export was removed (2026-07-25); kept (with
+// its tests) because 経過表 Phase 2 feeds this into the AI feedback payload.
 function chartExportLines(c, cats, today){
   var groups = chartRowsForCase(c, cats).filter(function(g){ return g.items.length; });
   if (!groups.length) return [];
@@ -2128,20 +2047,13 @@ if (typeof module !== "undefined") {
     hasPendingHold:hasPendingHold,
     boardOrder:boardOrder,
     stalenessLevel:stalenessLevel,
-    needsReview:needsReview,
-    reviewQueue:reviewQueue,
     unsentSeeds:unsentSeeds,
-    countSeedsOn:countSeedsOn,
-    formatSeedExport:formatSeedExport,
-    missSeedText:missSeedText,
-    makeSeed:makeSeed,
     moveIdInList:moveIdInList,
     dcChecklistItems:dcChecklistItems,
     stageOn:stageOn,
     buildWeekGrid:buildWeekGrid,
     buildDayPlan:buildDayPlan,
     searchCases:searchCases,
-    reviewStreak:reviewStreak,
     syncDiffFields:syncDiffFields,
     syncMergeCase:syncMergeCase,
     syncEmptyState:syncEmptyState,
@@ -2248,7 +2160,6 @@ const STR = {
   dxTagPh:"病名タグ（確定病名で検索用）",
   taskPh:"タスクを追加（指定日・時刻は任意）",
   pendingPh:"待ちを追加（培養・コンサル返事など）",
-  seedPh:"種を追加（引っかかり・疑問）",
   backTodayBadge:"戻り予定",
   emptyBoard:"入院患者がいません。「＋ 入院を登録」から始めます。",
   deleteCase:"この症例を削除",
@@ -2263,27 +2174,9 @@ const STR = {
   calcVaultLink:"換算表・早見表（clover-pages）を開く",
   backOnLabel:"戻り日（不明なら空欄）",
   editMeta:"年代・性別",
-  review:"夕の棚卸し",
-  exitReview:"中断",
-  noChange:"変化なし",
-  changeStage:"ステージ変更",
-  editNote:"一言更新",
   confirm:"確定",
-  reviewDone:"棚卸し完了",
-  reviewEmpty:"全員きょう確認済みです",
-  seedsToday:"今日の種",
-  noUnsentSeeds:"未送信の種はありません",
-  copyExport:"書き出しをコピー",
-  shareExport:"共有",
-  copied:"コピーしました",
-  backToBoard:"一覧へ戻る",
-  missPrompt:"予測が外れた？ 種にする",
-  missWhyPh:"なぜ外れた？（1行）",
   syncRow:"同期",
   dataRow:"データ",
-  sendOk:"Vault へ送信しました ✈",
-  sendFailed:"未送信・次回自動再送します",
-  sendOff:"（同期未設定・コピーで書き出せます）",
   backupDl:"バックアップを保存（JSON）",
   backupRestore:"バックアップから復元",
   restoreConfirm:"端末内のデータを置き換えます。よろしいですか？"
@@ -2309,15 +2202,12 @@ Object.assign(STR, {
   dischargeConfirm:"この症例を退院にします（一覧から外れ、検索と退院済み一覧に残ります）。よろしいですか？",
   dischargedAtLine:"\u9000\u9662\u6e08\u307f",
   dcExport:"\u9000\u9662\u66f8\u304d\u51fa\u3057",
-  dayExport:"\u65e5\u6b21\u66f8\u304d\u51fa\u3057",
   markDone:"\u6e08",
   overdueTitle:"\u671f\u9650\u8d85\u904e",
   planBadge:"\u4e88\u5b9a",
   valueEnterPh:"\u5024\u3092\u5165\u529b\u3067\u6d88\u3057\u8fbc\u307f",
-  streakLine:"\u9023\u7d9a\u68da\u5378\u3057",
-  seedsTotal:"種 通算",
   stageEditor:"\u30b9\u30c6\u30fc\u30b8\u7de8\u96c6",
-  labelEditor:"4\u8981\u7d20\u30e9\u30d9\u30eb\u540d",
+  labelEditor:"3\u8981\u7d20\u30e9\u30d9\u30eb\u540d",
   cardPrefs:"\u30ab\u30fc\u30c9\u8868\u793a",
   themePrefs:"\u30c6\u30fc\u30de",
   themeOs:"OS準拠",
@@ -2360,15 +2250,11 @@ Object.assign(STR, {
   wardRoom:"\u75c5\u68df\u30fb\u75c5\u5ba4",
   wardRoomPh:"\u4f8b\uff1a3\u6771 305",
   problemsLabel:"\u30d7\u30ed\u30d6\u30ec\u30e0",
-  problemPh:"\u30d7\u30ed\u30d6\u30ec\u30e0\u3092\u8ffd\u52a0\uff08\u4f8b\uff1a\u5fc3\u4e0d\u5168\u30fbAKI\uff09",
-  problemResolveBtn:"\u89e3\u6c7a",
-  problemReopenBtn:"\u518d\u958b",
-  problemResolvedTag:"\u89e3\u6c7a\u6e08\u307f",
-  problemEmpty:"\u30d7\u30ed\u30d6\u30ec\u30e0\u306f\u672a\u767b\u9332\u3067\u3059",
   admPanel:"\u5165\u9662\u6642\u8a18\u9332",
   admTextPh:"\u5165\u9662\u5951\u6a5f\u30fb\u4e3b\u8981\u65e2\u5f80\u30fbADL\u306a\u3069\u3092\u81ea\u7531\u306b\u8a18\u8f09",
   notesLabel:"\u65e5\u3005\u306e\u8a18\u9332",
-  notePh:"\u4eca\u65e5\u306e\u8a18\u9332\u3092\u8ffd\u52a0\uff08\u4f8b\uff1a\u89e3\u71b1\u30fb\u98df\u4e8b\u518d\u958b\uff09",
+  noteAddBtn:"\uff0b\u4eca\u65e5\u306e\u8a18\u9332\u3092\u66f8\u304f",
+  editOpenHint:"\u30bf\u30c3\u30d7\u3067\u5168\u753b\u9762\u7de8\u96c6",
   aiPanel:"\u6307\u5c0e\u533bAI",
   aiRun:"\u30d5\u30a3\u30fc\u30c9\u30d0\u30c3\u30af\u3092\u53d6\u5f97\uff08\u7d045\u5186/\u56de\uff09",
   aiLoading:"\u554f\u3044\u5408\u308f\u305b\u4e2d\u2026\uff08\u6700\u59271\u5206\u307b\u3069\uff09",
@@ -2393,8 +2279,6 @@ let SHEET = { name:"", draft:{}, syncBusy:false };
 let CALC_SCRATCH = {};
 let DND = { activeId:"", hoverIndex:-1 };
 let NAV = { stack:[], ignore:0 };
-let REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
-let MISS = null;
 let PENDING_FOCUS = null;
 let WEEK_SCROLL_RT = { busy:false, pendingLeftAdjust:0, initPending:false, lastLeft:0 };
 let LAST_WIN_WIDTH = 0;
@@ -2487,7 +2371,7 @@ function weekHeaderClass(date, today){
 
 function defaultSettings(){
   return {
-    cardSections:["phase", "task", "pending", "seeds"],
+    cardSections:["phase", "task", "pending"],
     cardHidden:[],
     chartHidden:[]
   };
@@ -2746,13 +2630,6 @@ function setSyncStatus(kind){
   }
 }
 
-function patchOutboxStatus(text){
-  REVIEW.outboxStatus = text || "";
-  if (typeof document !== "undefined" && document.querySelectorAll) {
-    document.querySelectorAll("[data-outbox-status]").forEach(function(el){ el.textContent = REVIEW.outboxStatus; });
-  }
-}
-
 async function syncSdk(){
   if (SYNC_RT.fb) return SYNC_RT.fb;
   var base = "https://www.gstatic.com/firebasejs/10.14.1/";
@@ -2868,23 +2745,15 @@ function queueSync(){
 }
 
 async function syncSendOutboxIfNeeded(source){
-  if (!SYNC || !SYNC.enabled) {
-    if (source === "review") patchOutboxStatus(STR.sendOff);
-    return false;
-  }
+  if (!SYNC || !SYNC.enabled) return false;
   var payload = buildOutboxBatch(DB.cases, todayISO(), uid(), STATS);
-  if (!payload.seeds.length) {
-    if (source === "review") patchOutboxStatus("");
-    return false;
-  }
+  if (!payload.seeds.length) return false;
   if (OUTBOX_SENDING) return false;
   OUTBOX_SENDING = true;
-  if (source === "review") patchOutboxStatus("送信中…");
   try {
     var fb = await syncApp();
     var user = await syncCurrentUser(fb);
     if (!user) {
-      if (source === "review") patchOutboxStatus(STR.sendFailed);
       setSyncStatus("reauth");
       return false;
     }
@@ -2917,10 +2786,8 @@ async function syncSendOutboxIfNeeded(source){
     });
     saveState();
     syncAfterSave();
-    if (source === "review") patchOutboxStatus(STR.sendOk);
     return true;
   } catch (e) {
-    if (source === "review") patchOutboxStatus(STR.sendFailed);
     return false;
   } finally {
     OUTBOX_SENDING = false;
@@ -2967,8 +2834,8 @@ async function syncNow(opts){
     SYNC.lastSyncAt = nowISO();
     saveSync();
     setSyncStatus("ok");
-    // Seeds are sent only on review completion and at boot (SPEC-C section 2);
-    // sending from every sync made the review-screen fallback meaningless.
+    // Legacy seeds are sent only at boot (SPEC-C section 2; the review screen
+    // that also triggered sends was removed 2026-07-25). Not on every sync.
   } catch (e) {
     saveSync();
     var msg = String((e && e.message) || e);
@@ -3250,10 +3117,6 @@ function updateCaseAdmittedAt(caseId, value){
   });
 }
 
-function clearMiss(){
-  MISS = null;
-}
-
 function queueFocusTarget(id, shouldSelect){
   PENDING_FOCUS = { id:id, select:!!shouldSelect };
 }
@@ -3272,11 +3135,6 @@ function persist(){
   saveState();
   render();
   syncAfterSave();
-}
-
-function currentReviewCase(){
-  var caseId = REVIEW.ids[REVIEW.index] || "";
-  return DB.cases.find(function(c){ return c.id === caseId; }) || null;
 }
 
 function applyDailyRollover(force){
@@ -3337,7 +3195,7 @@ function boardCases(){
   return boardOrder(DB.cases, todayISO());
 }
 
-// Android back-button support. Every deepening step (board -> search/review/detail,
+// Android back-button support. Every deepening step (board -> search/detail,
 // or opening a bottom sheet) pushes one history entry plus a restore snapshot on
 // NAV.stack. popstate pops the snapshot and restores it. UI-initiated closes must
 // consume their history entry too (NAV.ignore skips the resulting popstate), or
@@ -3381,7 +3239,6 @@ function handlePopState(ev){
   }
   SHEET.name = "";
   SHEET.draft = {};
-  clearMiss();
   VIEW = entry.view;
   if (VIEW.name === "board" && VIEW.boardMode === "week") WEEK_SCROLL_RT.initPending = true;
   render();
@@ -3389,8 +3246,6 @@ function handlePopState(ev){
 
 function openBoard(){
   navUnwindAll();
-  clearMiss();
-  REVIEW = { ids:[], index:0, mode:"actions", empty:false, noteDraft:"", copied:false, outboxStatus:"" };
   if ((VIEW.boardMode || "board") === "week") WEEK_SCROLL_RT.initPending = true;
   VIEW = { name:"board", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", dayDate:VIEW.dayDate || todayISO(), searchQuery:"", searchMonth:"", searchStageId:"", weekPast:Number(VIEW.weekPast) || 0, weekFuture:Number(VIEW.weekFuture) || weekDefaultFuture() };
   render();
@@ -3398,7 +3253,6 @@ function openBoard(){
 
 function openDetail(caseId){
   if (VIEW.name !== "detail") navPush(navSnapshotView());
-  clearMiss();
   if (VIEW.boardMode === "week") resetWeekRange();
   VIEW.name = "detail";
   VIEW.caseId = caseId;
@@ -3414,57 +3268,10 @@ function openDetail(caseId){
   render();
 }
 
-function openReview(){
-  if (VIEW.name !== "review") navPush(navSnapshotView());
-  clearMiss();
-  if (VIEW.boardMode === "week") resetWeekRange();
-  var queue = reviewQueue(DB.cases, todayISO());
-  var ids = queue.map(function(c){ return c.id; });
-  REVIEW = {
-    ids:ids,
-    index:0,
-    mode:ids.length ? "actions" : "done",
-    empty:ids.length === 0,
-    noteDraft:"",
-    copied:false,
-    outboxStatus:""
-  };
-  VIEW = { name:"review", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", dayDate:VIEW.dayDate || todayISO(), searchQuery:"", searchMonth:"", searchStageId:"", weekPast:0, weekFuture:7 };
-  render();
-  if (!ids.length) {
-    patchOutboxStatus("");
-  }
-}
-
 function openSearch(){
   if (VIEW.name !== "search") navPush(navSnapshotView());
-  clearMiss();
   if (VIEW.boardMode === "week") resetWeekRange();
   VIEW = { name:"search", caseId:"", editingMeta:false, editingLabel:false, stagePickerFor:"", nowDay:todayISO(), boardMode:VIEW.boardMode || "board", dayDate:VIEW.dayDate || todayISO(), searchQuery:VIEW.searchQuery || "", searchMonth:VIEW.searchMonth || "", searchStageId:VIEW.searchStageId || "", weekPast:0, weekFuture:7 };
-  render();
-}
-
-function exitReview(){
-  openBoard();
-}
-
-function reviewAdvance(){
-  REVIEW.noteDraft = "";
-  if (REVIEW.index + 1 >= REVIEW.ids.length) {
-    REVIEW.mode = "done";
-    REVIEW.index = REVIEW.ids.length ? REVIEW.ids.length - 1 : 0;
-    if (REVIEW.ids.length) {
-      bumpStat("reviewsDone", 1);
-      STATS.reviewDates = isObj(STATS.reviewDates) ? STATS.reviewDates : {};
-      STATS.reviewDates[todayISO()] = true;
-      saveStats();
-    }
-    // syncSendOutboxIfNeeded itself shows the sync-off hint (STR.sendOff).
-    setTimeout(function(){ syncSendOutboxIfNeeded("review"); }, 0);
-  } else {
-    REVIEW.index += 1;
-    REVIEW.mode = "actions";
-  }
   render();
 }
 
@@ -3819,7 +3626,7 @@ function addDxTag(caseId, value){
   });
 }
 
-// ---- shared per-case list CRUD (next / todos / pendings / seeds) -----------
+// ---- shared per-case list CRUD (todos / pendings / notes) ------------------
 // All side effects (touch, rollover, entries absorption, persist) come from
 // mutateCase, so these three cover the whole family identically. Queuing the
 // focus BEFORE the re-render keeps the add-input focused for rapid entry.
@@ -3856,28 +3663,11 @@ function addTask(caseId, value){
   addListItem("todos", caseId, value, "taskInput", function(text){ return { id:uid(), text:text, done:false, createdOn:todayISO(), due:null, time:null }; });
 }
 
-// Problem list: a projection of the entries store (kind:"problem"), reusing the
-// shared list CRUD so entriesReconcileLocal absorbs it exactly like pending.
-function addProblem(caseId, value){
-  return addListItem("problems", caseId, value, "problemInput", function(text){ return { id:uid(), text:text, status:"active" }; });
-}
-
-function updateProblemText(caseId, itemId, value){
-  patchListItem("problems", caseId, itemId, function(item){ item.text = String(value || ""); });
-}
-
-function toggleProblemStatus(caseId, itemId){
-  patchListItem("problems", caseId, itemId, function(item){ item.status = item.status === "resolved" ? "active" : "resolved"; });
-}
-
-function deleteProblem(caseId, itemId){
-  deleteListItem("problems", "problem", caseId, itemId);
-}
-
-// Daily notes: a projection of the entries store (kind:"note"), same CRUD
-// family as problems. The date is stamped at creation and never edited.
+// Daily notes: a projection of the entries store (kind:"note"). The date is
+// stamped at creation and never edited. Text may span multiple lines (the
+// full-screen edit sheet, 2026-07-25).
 function addNote(caseId, value){
-  return addListItem("notes", caseId, value, "noteInput", function(text){ return { id:uid(), text:text, date:todayISO() }; });
+  return addListItem("notes", caseId, value, "", function(text){ return { id:uid(), text:text, date:todayISO() }; });
 }
 
 function updateNoteText(caseId, itemId, value){
@@ -3892,19 +3682,8 @@ function toggleTodo(caseId, itemId){
   patchListItem("todos", caseId, itemId, function(item){ item.done = !item.done; });
 }
 
-// The miss-prompt hook (rewritten prediction -> seed) moved here when Next
-// merged into Task: any meaningful rewrite of a task text can be a missed call.
 function updateTodoText(caseId, itemId, value){
-  var newText = String(value || "");
-  var newTrim = newText.trim();
-  var oldTrim = "";
-  var before = DB.cases.find(function(c){ return c.id === caseId; });
-  if (before) {
-    var existing = before.todos.find(function(x){ return x.id === itemId; });
-    oldTrim = existing ? String(existing.text || "").trim() : "";
-  }
-  MISS = oldTrim && newTrim && oldTrim !== newTrim ? { caseId:caseId, itemId:itemId, oldText:oldTrim, expanded:false, why:"" } : null;
-  patchListItem("todos", caseId, itemId, function(item){ item.text = newText; });
+  patchListItem("todos", caseId, itemId, function(item){ item.text = String(value || ""); });
 }
 
 function updateTodoDue(caseId, itemId, value){
@@ -3944,84 +3723,6 @@ function updatePendingBackOn(caseId, itemId, value){
 
 function deletePending(caseId, itemId){
   deleteListItem("pendings", "pending", caseId, itemId);
-}
-
-function addSeed(caseId, value){
-  var added = addListItem("seeds", caseId, value, "seedInput", function(text, c){
-    var stage = stageById(c.stageId);
-    return makeSeed(uid(), text, todayISO(), {
-      label:c.label,
-      day:computeDay(c.admittedAt, todayISO()),
-      stageName:stage ? stage.name : "",
-      phaseNote:c.phaseNote
-    });
-  });
-  if (added) bumpStat("seedsCaptured", 1);
-}
-
-function deleteSeed(caseId, itemId){
-  deleteListItem("seeds", "seed", caseId, itemId);
-}
-
-function reviewNoChange(caseId){
-  mutateCase(caseId, function(){});
-  reviewAdvance();
-}
-
-function startReviewStageEdit(){
-  REVIEW.mode = "stage";
-  render();
-}
-
-function cancelReviewStageEdit(){
-  REVIEW.mode = "actions";
-  render();
-}
-
-function setReviewStage(caseId, stageId){
-  mutateCase(caseId, function(c){ appendStageLog(c, stageId, todayISO()); });
-  reviewAdvance();
-}
-
-function startReviewNoteEdit(){
-  var c = currentReviewCase();
-  REVIEW.mode = "note";
-  REVIEW.noteDraft = c ? c.phaseNote || "" : "";
-  queueFocusTarget("reviewNoteInput", false);
-  render();
-}
-
-function trackReviewNoteDraft(value){
-  REVIEW.noteDraft = value;
-}
-
-function saveReviewNote(caseId, value){
-  mutateCase(caseId, function(c){ c.phaseNote = String(value || "").trim(); });
-  reviewAdvance();
-}
-
-function copyReviewExport(){
-  var text = formatSeedExport(unsentSeeds(DB.cases), todayISO());
-  var done = function(){
-    bumpStat("exportsDone", 1);
-    REVIEW.copied = true;
-    render();
-    setTimeout(function(){ REVIEW.copied = false; render(); }, 1500);
-  };
-  var fallback = function(){
-    var box = document.getElementById("reviewExportText");
-    if (box) {
-      if (box.focus) box.focus();
-      if (box.select) box.select();
-    }
-  };
-  try {
-    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(text).then(done, fallback);
-      return;
-    }
-  } catch (e) {}
-  fallback();
 }
 
 function copyTextWithFallback(text, boxId){
@@ -4630,15 +4331,6 @@ function aiFeedbackPayload(c){
   };
 }
 
-function formatSeedSnapshot(seed){
-  var snap = isObj(seed && seed.snapshot) ? seed.snapshot : {};
-  var parts = [];
-  if (snap.label) parts.push(String(snap.label) + " D" + (Number.isFinite(Number(snap.day)) ? Number(snap.day) : 1));
-  if (snap.stageName) parts.push(String(snap.stageName));
-  if (snap.phaseNote) parts.push(String(snap.phaseNote));
-  return parts.join(" / ");
-}
-
 function dischargeExportText(caseId){
   var c = DB.cases.find(function(item){ return item.id === caseId; });
   if (!c) return "";
@@ -4660,69 +4352,11 @@ function dischargeExportText(caseId){
   pushSection(lines, "Daily notes", notesChrono(c), fmtNoteLine);
   pushSection(lines, "Remaining Task", cloneArr(c.todos).filter(function(item){ return item && !item.done; }), fmtTaskLine);
   pushSection(lines, "Pending", cloneArr(c.pendings), fmtPendingLine);
-  pushSection(lines, "Seeds", cloneArr(c.seeds), function(seed){
-    return ["- " + seed.text, "  - " + formatSeedSnapshot(seed)];
-  });
   return lines.join("\n");
 }
 
 function copyDischargeExport(caseId){
   copyTextWithFallback(dischargeExportText(caseId), "dcExportText");
-}
-
-function dayExportText(caseId){
-  var c = DB.cases.find(function(item){ return item.id === caseId; });
-  if (!c) return "";
-  var lines = [
-    "# " + c.label,
-    "- D" + computeDay(c.admittedAt, todayISO()),
-    "- Stage: " + stageNameFor(c.stageId),
-    "- Phase: " + (c.phaseNote || "-")
-  ];
-  lines.push("", "## Admission note", admOf(c).text || "-");
-  pushSection(lines, "Daily notes", notesChrono(c), fmtNoteLine);
-  pushSection(lines, "Task", cloneArr(c.todos), fmtTaskLine);
-  pushSection(lines, "Pending", cloneArr(c.pendings), fmtPendingLine);
-  pushSection(lines, "Seeds", cloneArr(c.seeds), function(seed){ return "- " + seed.text; });
-  chartExportLines(c, DB.config.chartCats, todayISO()).forEach(function(line){ lines.push(line); });
-  return lines.join("\n");
-}
-
-function copyDayExport(caseId){
-  copyTextWithFallback(dayExportText(caseId), "dayExportText");
-}
-
-function shareReviewExport(){
-  var text = formatSeedExport(unsentSeeds(DB.cases), todayISO());
-  try {
-    if (typeof navigator !== "undefined" && navigator.share) {
-      navigator.share({ text:text }).then(function(){ bumpStat("exportsDone", 1); }).catch(function(){});
-    }
-  } catch (e) {}
-}
-
-function dismissMissPrompt(){
-  clearMiss();
-  render();
-}
-
-function expandMissPrompt(){
-  if (!MISS) return;
-  MISS.expanded = true;
-  queueFocusTarget("missWhyInput", false);
-  render();
-}
-
-function trackMissWhyDraft(value){
-  if (MISS) MISS.why = value;
-}
-
-function commitMissSeed(){
-  if (!MISS) return;
-  var caseId = MISS.caseId;
-  var text = missSeedText(MISS.oldText, MISS.why || "");
-  clearMiss();
-  addSeed(caseId, text);
 }
 
 function dischargeCase(caseId){
@@ -4881,8 +4515,7 @@ function renderBoardCard(c){
     pending:showPendings ? '<div class="section sec-pending"><div class="sectiontitle">' + esc(DB.config.labels.pending) + '</div><div class="plain">' + c.pendings.map(function(item){
       var urgent = item.backOn && item.backOn <= todayISO();
       return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + (item.backOn ? '<div class="faint">' + esc(item.backOn) + '</div>' : '') + '</div>' + (urgent ? '<span class="badge">' + esc(STR.backTodayBadge) + '</span>' : '') + '</div>';
-    }).join('') + '</div></div>' : '',
-    seeds:c.seeds.length ? '<div class="section seedcount sec-seeds">' + esc(DB.config.labels.seeds) + ' ' + c.seeds.length + '</div>' : ''
+    }).join('') + '</div></div>' : ''
   };
   var orderedSections = cardSectionsVisible().map(function(name){ return sectionHtml[name] || ""; }).join('');
   return '<article class="card' + staleClass + (DND.activeId === c.id ? ' dragging' : '') + '" style="' + stageStyle + '" onclick="openDetail(\'' + esc(c.id) + '\')">' +
@@ -4892,6 +4525,7 @@ function renderBoardCard(c){
         '<div class="labelrow"><div class="caseid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, todayISO()) + '</div>' +
         (compactMeta(c) ? '<div class="meta">' + esc(compactMeta(c)) + '</div>' : '') +
         '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div>' + aiCardBadge(c) + '</div>' +
+        (c.dxTags.length ? '<div class="dxline">' + esc(c.dxTags.join('・')) + '</div>' : '') +
         orderedSections +
       '</div>' +
     '</div>' +
@@ -5246,7 +4880,7 @@ function renderSettingsSheet(){
         return '<button class="chipbtn' + (cat.color === color ? ' on' : '') + '" style="background:' + esc(color) + ';color:#fff;border-color:' + esc(color) + '" onclick="setChartCatColor(' + index + ',\'' + esc(color) + '\')">' + (cat.color === color ? '✓' : '&nbsp;') + '</button>';
       }).join('') + '</div><div class="row wrap"><button class="smallbtn" onclick="moveChartCat(' + index + ',\'up\')">↑</button><button class="smallbtn" onclick="moveChartCat(' + index + ',\'down\')">↓</button><button class="smallbtn danger" onclick="deleteChartCat(' + index + ')">' + esc(STR.deleteRow) + '</button><span class="note">' + esc(STR.stageInUse) + ' ' + useCount + '</span></div></div>';
     }).join('') + '<div class="row wrap"><button class="ghostbtn" onclick="addChartCat(\'value\')">＋' + esc(STR.kindValue) + '</button><button class="ghostbtn" onclick="addChartCat(\'band\')">＋' + esc(STR.kindBand) + '</button><button class="ghostbtn" onclick="addChartCat(\'event\')">＋' + esc(STR.kindEvent) + '</button></div></div></section>' +
-    '<section class="settingssec"><div class="one">' + esc(STR.labelEditor) + '</div><div class="stack">' + ["phase", "task", "pending", "seeds"].map(function(key){
+    '<section class="settingssec"><div class="one">' + esc(STR.labelEditor) + '</div><div class="stack">' + ["phase", "task", "pending"].map(function(key){
       return '<input class="input" value="' + esc(DB.config.labels[key] || "") + '" onchange="updateLabelName(\'' + key + '\',this.value)">';
     }).join('') + '</div></section>' +
     '<section class="settingssec"><div class="one">' + esc(STR.cardPrefs) + '</div><div class="stack">' + cardSettings.cardSections.map(function(name){
@@ -5288,14 +4922,6 @@ function renderMetaEditor(c){
     '</div></div>';
 }
 
-function renderMissPrompt(item){
-  if (!MISS || MISS.caseId !== VIEW.caseId || MISS.itemId !== item.id) return '';
-  if (!MISS.expanded) {
-    return '<div class="missrow"><button class="smallbtn" onclick="expandMissPrompt()">' + esc(STR.missPrompt) + '</button><button class="iconbtn" onclick="dismissMissPrompt()">&times;</button></div>';
-  }
-  return '<div class="missrow"><input id="missWhyInput" class="input" value="' + esc(MISS.why || '') + '" placeholder="' + esc(STR.missWhyPh) + '" oninput="trackMissWhyDraft(this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){commitMissSeed()}"><button class="ghostbtn" onclick="commitMissSeed()">' + esc(STR.confirm) + '</button></div>';
-}
-
 // Unified Task rows (Next+Today merged): checkbox / text / scheduled date
 // (optional) / time (optional) / done->pending shortcut / delete.
 // Task rows collapse to one line by default (B-1, CEO 2026-07-22): the always-
@@ -5310,7 +4936,6 @@ function renderTaskList(c){
       var when = (item.due ? item.due.slice(5) : '') + (item.time ? ' ' + item.time : '');
       return '<div class="lineitem">' + check +
         '<div class="linegrow"><div class="compactline" onclick="openTaskEditor(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="text' + (item.done ? ' faint' : '') + '">' + esc(item.text) + '</div>' + (when ? '<span class="datechip">' + esc(when) + '</span>' : '') + '</div>' +
-        renderMissPrompt(item) +
       '</div><button class="smallbtn" onclick="openTaskEditor(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' + esc(STR.taskEditBtn) + '</button></div>';
     }
     return '<div class="lineitem">' + check +
@@ -5319,7 +4944,6 @@ function renderTaskList(c){
       '<span class="fieldlabel">' + esc(STR.timeLabel) + '</span><input class="date" type="time" value="' + esc(item.time || '') + '" onchange="updateTodoTime(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
       (item.done ? '' : '<button class="smallbtn" onclick="taskToPending(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' + esc(STR.toPendingBtn) + '</button>') +
       '<button class="smallbtn" onclick="closeTaskEditor()">' + esc(STR.taskEditClose) + '</button></div>' +
-      renderMissPrompt(item) +
     '</div><button class="iconbtn" onclick="deleteTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
   }).join('');
 }
@@ -5334,47 +4958,72 @@ function renderPendingList(c){
   }).join('');
 }
 
-function renderSeedList(c){
-  return c.seeds.map(function(item){
-    return '<div class="lineitem' + (item.sentAt ? ' sent' : '') + '"><div class="linegrow"><div class="text">' + esc(item.text) + '</div><div class="faint">D' + esc(item.snapshot.day) + ' ・ ' + esc(item.snapshot.stageName) + (item.snapshot.phaseNote ? ' ・ ' + esc(item.snapshot.phaseNote) : '') + '</div></div><button class="iconbtn" onclick="deleteSeed(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
-  }).join('');
-}
-
-// Problem list: active problems render normally, resolved ones reuse the "sent"
-// greyed style. Reuses renderSectionCard for the add-input (addProblem).
-function renderProblemList(c){
-  return cloneArr(c.problems).map(function(item){
-    var resolved = item.status === "resolved";
-    return '<div class="lineitem' + (resolved ? ' sent' : '') + '"><div class="linegrow"><input class="input subedit" value="' + esc(item.text) + '" onchange="updateProblemText(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
-      (resolved ? '<div class="faint">' + esc(STR.problemResolvedTag) + '</div>' : '') +
-    '</div><button class="smallbtn" onclick="toggleProblemStatus(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' + esc(resolved ? STR.problemReopenBtn : STR.problemResolveBtn) + '</button><button class="iconbtn" onclick="deleteProblem(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
-  }).join('');
-}
-
 // Admission record: collapsible panel at the top of the detail (day-0 context).
 // One free-text field (2026-07-21, was half-structured 4 fields) — also the AI
 // feedback source, so piiWarning stays attached. Photos remain out of scope.
+// Editing happens in a full-screen sheet (2026-07-25): the inline 5-row
+// textarea was too cramped to read or write in.
 function renderAdmissionPanel(c){
   var a = admOf(c);
   var open = !!VIEW.admOpen;
   var head = '<div class="collapsehead" onclick="toggleAdmPanel()"><div class="one">' + esc(STR.admPanel) + '</div><div class="meta">' + (open ? '-' : '+') + '</div></div>';
   if (!open) return '<section class="panelcard anchor" id="anc-adm">' + head + '</section>';
   var body = '<div class="stack" style="margin-top:10px">' +
-    '<div class="field"><textarea class="input" rows="5" placeholder="' + esc(STR.admTextPh) + '" onblur="updateCaseAdm(\'' + esc(c.id) + '\',this.value)">' + esc(a.text || '') + '</textarea><div class="note">' + esc(STR.piiWarning) + '</div></div>' +
+    '<div class="lineitem" onclick="openAdmEditSheet(\'' + esc(c.id) + '\')"><div class="linegrow">' +
+      (a.text ? '<div class="text notebody">' + esc(a.text) + '</div>' : '<div class="faint">' + esc(STR.admTextPh) + '</div>') +
+      '<div class="faint">' + esc(STR.editOpenHint) + '</div></div></div>' +
+    '<div class="note">' + esc(STR.piiWarning) + '</div>' +
   '</div>';
   return '<section class="panelcard anchor" id="anc-adm">' + head + body + '</section>';
 }
 
-// Daily notes: date-stamped free text, newest first. Text stays editable
-// inline; the date is fixed at creation. Never projected into week/day views
-// (局面ファースト — schedule stays Task/Pending only).
+// Daily notes: date-stamped free text, newest first; the date is fixed at
+// creation. Never projected into week/day views (局面ファースト — schedule
+// stays Task/Pending only). Rows render read-only multi-line text; tapping a
+// row (or the add button) opens the full-screen edit sheet (2026-07-25).
 function renderNoteList(c){
   return cloneArr(c.notes).sort(function(a, b){
     if (a.date !== b.date) return a.date < b.date ? 1 : -1;
     return a.id < b.id ? 1 : -1;
   }).map(function(item){
-    return '<div class="lineitem"><div class="linegrow"><input class="input subedit" value="' + esc(item.text) + '" onchange="updateNoteText(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)"><div class="faint">' + esc(item.date) + '</div></div><button class="iconbtn" onclick="deleteNote(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
+    return '<div class="lineitem"><div class="linegrow" onclick="openNoteEditSheet(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="text notebody">' + esc(item.text) + '</div><div class="faint">' + esc(item.date) + '</div></div><button class="iconbtn" onclick="deleteNote(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
   }).join('');
+}
+
+// Full-screen edit sheets (CEO 2026-07-25): one big textarea instead of the
+// cramped inline inputs (adm was 5 fixed rows, notes a single-line input that
+// could not even hold a line break). Saves go through updateCaseAdm /
+// addNote / updateNoteText so entries absorption and sync ride the usual path.
+function openAdmEditSheet(caseId){
+  var c = DB.cases.find(function(row){ return row.id === caseId; });
+  if (!c) return;
+  openSheetWithDraft("admEdit", { caseId:caseId, text:admOf(c).text || "" }, "bigEditArea", false);
+}
+
+function openNoteEditSheet(caseId, itemId){
+  var c = DB.cases.find(function(row){ return row.id === caseId; });
+  if (!c) return;
+  var item = itemId ? cloneArr(c.notes).find(function(x){ return x.id === itemId; }) : null;
+  openSheetWithDraft("noteEdit", { caseId:caseId, itemId:item ? item.id : "", date:item ? item.date : todayISO(), text:item ? item.text : "" }, "bigEditArea", false);
+}
+
+function saveBigEditSheet(){
+  var d = SHEET.draft || {};
+  var wasAdm = SHEET.name === "admEdit";
+  closeSheet();
+  if (wasAdm) { updateCaseAdm(d.caseId, d.text || ""); return; }
+  if (d.itemId) updateNoteText(d.caseId, d.itemId, d.text || "");
+  else addNote(d.caseId, d.text || "");
+}
+
+function renderBigEditSheet(){
+  var d = SHEET.draft || {};
+  var adm = SHEET.name === "admEdit";
+  var title = adm ? STR.admPanel : STR.notesLabel + ' ' + (d.date || "");
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(title) + '</div><div class="stack">' +
+    '<textarea id="bigEditArea" class="bigedit" placeholder="' + esc(adm ? STR.admTextPh : "") + '" oninput="sheetDraftValue(\'text\',this.value)">' + esc(d.text || "") + '</textarea>' +
+    '<div class="note">' + esc(STR.piiWarning) + '</div>' +
+    '<div class="row wrap"><button class="primary" onclick="saveBigEditSheet()">' + esc(STR.confirm) + '</button><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div></div>';
 }
 
 // AI feedback (Phase 2): the app never holds the API key — the request goes
@@ -5531,36 +5180,6 @@ function renderSectionCard(title, body, addId, placeholder, addFn, caseId, secCl
     (body || '<div class="faint">-</div>') +
     (addId ? '<div class="row"><input id="' + esc(addId) + '" class="input" placeholder="' + esc(placeholder) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){' + addFn + '(\'' + esc(caseId) + '\',this.value);this.value=\'\';}"><button class="ghostbtn" onclick="' + addFn + '(\'' + esc(caseId) + '\',document.getElementById(\'' + esc(addId) + '\').value);document.getElementById(\'' + esc(addId) + '\').value=\'\'">＋</button></div>' : '') +
   '</div></section>';
-}
-
-function renderReviewCard(c){
-  var stage = stageById(c.stageId);
-  var firstNext = boardCardTasks(c).now[0] || null;
-  return '<section class="panelcard"><div class="labelrow"><div class="caseid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, todayISO()) + '</div>' +
-    (compactMeta(c) ? '<div class="meta">' + esc(compactMeta(c)) + '</div>' : '') +
-    '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div></div>' +
-    (c.phaseNote ? '<div class="phase sec-phase">' + esc(c.phaseNote) + '</div>' : '') +
-    (firstNext ? '<div class="section sec-task"><div class="sectiontitle">' + esc(DB.config.labels.task) + '</div><div class="lineitem"><div class="linegrow"><div class="text">' + esc(firstNext.text) + '</div>' + taskMetaLine(firstNext, true) + '</div></div></div>' : '') +
-    '<div class="row wrap" style="margin-top:8px"><button class="ghostbtn" onclick="openChartDaySheet(\'' + esc(c.id) + '\')">' + esc(STR.chartDayBtn) + '</button></div>' +
-  '</section>';
-}
-
-// renderReviewDone is assigned later (see the render assignments near the end
-// of this script); an older duplicate declaration here was dead code.
-function renderReview(){
-  if (REVIEW.mode === "done") return renderReviewDone();
-  var c = currentReviewCase();
-  if (!c) return renderReviewDone();
-  var body = '<div class="reviewactions"><button class="primary" onclick="reviewNoChange(\'' + esc(c.id) + '\')">' + esc(STR.noChange) + '</button><button class="ghostbtn" onclick="startReviewStageEdit()">' + esc(STR.changeStage) + '</button><button class="ghostbtn" onclick="startReviewNoteEdit()">' + esc(STR.editNote) + '</button></div>';
-  if (REVIEW.mode === "stage") {
-    body = '<div class="reviewstack">' + DB.config.stages.map(function(stage){
-      return '<button class="lineitem" style="width:100%;text-align:left;' + (stage.id === c.stageId ? 'outline:2px solid ' + esc(stage.color) + ';' : '') + '" onclick="setReviewStage(\'' + esc(c.id) + '\',\'' + esc(stage.id) + '\')"><span>' + stageDot(stage) + '</span><span class="text">' + esc(stage.name) + '</span></button>';
-    }).join('') + '<button class="ghostbtn" onclick="cancelReviewStageEdit()">' + esc(STR.back) + '</button></div>';
-  }
-  if (REVIEW.mode === "note") {
-    body = '<div class="reviewstack"><input id="reviewNoteInput" class="input" value="' + esc(REVIEW.noteDraft) + '" oninput="trackReviewNoteDraft(this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){saveReviewNote(\'' + esc(c.id) + '\',this.value)}"><button class="ghostbtn" onclick="saveReviewNote(\'' + esc(c.id) + '\',document.getElementById(\'reviewNoteInput\').value)">' + esc(STR.confirm) + '</button></div>';
-  }
-  return '<section class="screen"><div class="reviewhead"><div class="reviewprogress">' + (REVIEW.index + 1) + '/' + REVIEW.ids.length + '</div><button class="ghostbtn smallbtn" onclick="exitReview()">' + esc(STR.exitReview) + '</button></div><div class="stack">' + renderReviewCard(c) + body + '</div></section>';
 }
 
 function renderAdmissionSheet(){
@@ -5805,7 +5424,7 @@ renderBoard = function(){
   var mode = normalizeViewTab(VIEW.boardMode);
   var body = (TAB_BODY[mode] || TAB_BODY[VIEW_TABS[0].id])();
   return '<section class="screen">' + renderTabBar(mode) + body +
-  '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openReview()">' + esc(STR.review) + '</button><button class="ghostbtn" onclick="openMenuSheet()">' + esc(STR.menuRow) + '</button></div></div></div>';
+  '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openMenuSheet()">' + esc(STR.menuRow) + '</button></div></div></div>';
 };
 
 renderDetail = function(caseId){
@@ -5828,10 +5447,8 @@ renderDetail = function(caseId){
     '<div class="field" style="margin-top:10px"><div class="fieldlabel">' + esc(STR.addDxTag) + '</div>' + renderTagList(c) + '<div class="row" style="margin-top:8px"><input id="dxTagInput" class="input" placeholder="' + esc(STR.dxTagPh) + '" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){addDxTag(\'' + esc(c.id) + '\',this.value);this.value=\'\'}"><button class="ghostbtn" onclick="addDxTag(\'' + esc(c.id) + '\',document.getElementById(\'dxTagInput\').value);document.getElementById(\'dxTagInput\').value=\'\'">+</button></div></div></section>' +
     '<nav class="jumprow">' + [
       { id:"anc-adm", label:STR.admPanel },
-      { id:"anc-problems", label:STR.problemsLabel },
       { id:"anc-task", label:DB.config.labels.task },
       { id:"anc-pending", label:DB.config.labels.pending },
-      { id:"anc-seeds", label:DB.config.labels.seeds },
       { id:"anc-notes", label:STR.notesLabel },
       { id:"anc-ai", label:STR.aiPanel },
       { id:"anc-chart", label:STR.chartPanel },
@@ -5842,31 +5459,16 @@ renderDetail = function(caseId){
     renderAdmissionPanel(c) +
     '<section class="panelcard sec-phase"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
     '<section class="panelcard"><div class="row"><button class="ghostbtn" style="flex:1" onclick="openPlanSheet(\'' + esc(c.id) + '\')">' + esc(STR.addPlanBtn) + '</button><button class="ghostbtn" style="flex:1" onclick="openCalcSheet(\'' + esc(c.id) + '\')">' + esc(STR.calcBtn) + '</button></div></section>' +
-    renderSectionCard(STR.problemsLabel, renderProblemList(c), "problemInput", STR.problemPh, "addProblem", c.id, "sec-problem", "anc-problems") +
     (dischargeInline ? dischargePanel : '') +
     renderSectionCard(DB.config.labels.task, renderTaskList(c), "taskInput", STR.taskPh, "addTask", c.id, "sec-task", "anc-task") +
     renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id, "sec-pending", "anc-pending") +
-    renderSectionCard(DB.config.labels.seeds, renderSeedList(c), "seedInput", STR.seedPh, "addSeed", c.id, "sec-seeds", "anc-seeds") +
-    renderSectionCard(STR.notesLabel, renderNoteList(c), "noteInput", STR.notePh, "addNote", c.id, "sec-note", "anc-notes") +
+    renderSectionCard(STR.notesLabel, renderNoteList(c) + '<button class="ghostbtn" onclick="openNoteEditSheet(\'' + esc(c.id) + '\',\'\')">' + esc(STR.noteAddBtn) + '</button>', "", "", "", c.id, "sec-note", "anc-notes") +
     renderAiPanel(c) +
     '<section class="panelcard"><button class="ghostbtn" style="width:100%" onclick="openChartDaySheet(\'' + esc(c.id) + '\')">' + esc(STR.chartDayBtn) + '</button></section>' +
     renderChartPanel(c) +
     (!dischargeInline ? dischargePanel : '') +
-    '<section class="panelcard"><textarea id="dayExportText" class="reviewtextarea hidden" readonly>' + esc(dayExportText(c.id)) + '</textarea><button class="ghostbtn" onclick="copyDayExport(\'' + esc(c.id) + '\')">' + esc(STR.dayExport) + '</button></section>' +
     '<section class="panelcard"><button class="ghostbtn danger" onclick="deleteCase(\'' + esc(c.id) + '\')">' + esc(STR.deleteCase) + '</button></section>' +
   '</div></section>';
-};
-
-renderReviewDone = function(){
-  var count = countSeedsOn(DB.cases, todayISO());
-  var pendingSeeds = unsentSeeds(DB.cases);
-  var exportText = formatSeedExport(pendingSeeds, todayISO());
-  var streak = reviewStreak(STATS && STATS.reviewDates, todayISO());
-  return '<section class="screen"><div class="stack"><section class="panelcard"><div class="one">' + esc(STR.reviewDone) + '</div>' +
-    (REVIEW.empty ? '<div class="phase">' + esc(STR.reviewEmpty) + '</div>' : '') +
-    '<div class="phase">' + esc(STR.seedsToday) + ' ' + count + '件</div><div class="phase">' + esc(STR.streakLine) + ' ' + streak + '日 ・ ' + esc(STR.seedsTotal) + ' ' + toNum(STATS && STATS.seedsCaptured, 0) + '</div><div class="phase" data-outbox-status>' + esc(REVIEW.outboxStatus || "") + '</div>' +
-    (pendingSeeds.length ? '<div class="stack" style="margin-top:10px"><textarea id="reviewExportText" class="reviewtextarea" readonly rows="8">' + esc(exportText) + '</textarea><div class="bottomrow"><button class="ghostbtn" onclick="copyReviewExport()">' + esc(REVIEW.copied ? STR.copied : STR.copyExport) + '</button>' + ((typeof navigator !== "undefined" && navigator.share) ? '<button class="ghostbtn" onclick="shareReviewExport()">' + esc(STR.shareExport) + '</button>' : '') + '</div></div>' : '<div class="phase">' + esc(STR.noUnsentSeeds) + '</div>') +
-    '</section><button class="primary" onclick="openBoard()">' + esc(STR.backToBoard) + '</button></div></section>';
 };
 
 renderSheet = function(){
@@ -5875,6 +5477,7 @@ renderSheet = function(){
   var renderers = {
     admission:renderAdmissionSheet, stage:renderStageSheet, sync:renderSyncSheet,
     menu:renderMenuSheet,
+    admEdit:renderBigEditSheet, noteEdit:renderBigEditSheet,
     data:renderDataSheet, settings:renderSettingsSheet, weekCell:renderWeekCellSheet,
     chartItem:renderChartItemSheet, chartValue:renderChartValueSheet, chartEventCell:renderChartEventCellSheet,
     chartDay:renderChartDaySheet,
@@ -5890,7 +5493,7 @@ function render(){
   ensureToday();
   var app = document.getElementById("app");
   if (!app) return "";
-  var body = VIEW.name === "detail" ? renderDetail(VIEW.caseId) : VIEW.name === "review" ? renderReview() : VIEW.name === "search" ? renderSearch() : renderBoard();
+  var body = VIEW.name === "detail" ? renderDetail(VIEW.caseId) : VIEW.name === "search" ? renderSearch() : renderBoard();
   var html = renderTopbar() + body;
   app.innerHTML = html;
   renderSheet();
