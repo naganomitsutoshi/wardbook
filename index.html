@@ -664,10 +664,12 @@ function normalizeEntryContent(raw, ctx){
     // pong). mastered/reviewCount/lastReviewedOn are the review mechanic — the
     // user's annotations, never the AI text, and never sent back to the AI.
     var aiField = Object.prototype.hasOwnProperty.call(row, "field") ? canonOrganField(row.field) : learnFieldFromText(text);
+    var aiProvince = Object.prototype.hasOwnProperty.call(row, "province") ? canonProvince(row.province, aiField) : learnProvinceFromText(text, aiField);
+    if (aiProvince) { var pp = provinceById(aiProvince); if (pp) aiField = pp.sys; } // province implies its system
     var aiDomain = Object.prototype.hasOwnProperty.call(row, "domain") ? canonPfDomain(row.domain) : learnDomainFromText(text);
     var aiRev = isFinite(Number(row.reviewCount)) && Number(row.reviewCount) > 0 ? Math.floor(Number(row.reviewCount)) : 0;
     var aiLast = row.lastReviewedOn ? safeDate(row.lastReviewedOn, "") : "";
-    return { kind:"ai", id:id, text:text, date:aiDate, field:aiField, domain:aiDomain, mastered:row.mastered === true, reviewCount:aiRev, lastReviewedOn:aiLast };
+    return { kind:"ai", id:id, text:text, date:aiDate, field:aiField, province:aiProvince, domain:aiDomain, mastered:row.mastered === true, reviewCount:aiRev, lastReviewedOn:aiLast };
   }
   if (row.kind === "calc") {
     if (!text) return null;
@@ -774,7 +776,7 @@ function entriesFromMirrors(c, ctx){
   cloneArr(c && c.seeds).forEach(function(x){ rows.push({ kind:"seed", id:x.id, text:x.text, createdOn:x.createdOn, snapshot:x.snapshot, sentAt:x.sentAt }); });
   cloneArr(c && c.problems).forEach(function(x){ rows.push({ kind:"problem", id:x.id, text:x.text, status:x.status }); });
   cloneArr(c && c.notes).forEach(function(x){ rows.push({ kind:"note", id:x.id, text:x.text, date:x.date }); });
-  cloneArr(c && c.aiLogs).forEach(function(x){ rows.push({ kind:"ai", id:x.id, text:x.text, date:x.date, field:x.field, domain:x.domain, mastered:x.mastered, reviewCount:x.reviewCount, lastReviewedOn:x.lastReviewedOn }); });
+  cloneArr(c && c.aiLogs).forEach(function(x){ rows.push({ kind:"ai", id:x.id, text:x.text, date:x.date, field:x.field, province:x.province, domain:x.domain, mastered:x.mastered, reviewCount:x.reviewCount, lastReviewedOn:x.lastReviewedOn }); });
   cloneArr(c && c.calcLogs).forEach(function(x){ rows.push({ kind:"calc", id:x.id, text:x.text, date:x.date }); });
   cloneArr(c && c.chart && c.chart.items).forEach(function(x){
     var kind = x.kind === "band" ? "chartBand" : x.kind === "event" ? "chartEvent" : "chartValue";
@@ -801,7 +803,7 @@ function entryRebuildMirrors(c){
   });
   c.problems = live.filter(function(e){ return e.kind === "problem"; }).map(function(e){ return { id:e.id, text:e.text, status:e.status }; });
   c.notes = live.filter(function(e){ return e.kind === "note"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
-  c.aiLogs = live.filter(function(e){ return e.kind === "ai"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date, field:e.field, domain:e.domain, mastered:e.mastered, reviewCount:e.reviewCount, lastReviewedOn:e.lastReviewedOn }; });
+  c.aiLogs = live.filter(function(e){ return e.kind === "ai"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date, field:e.field, province:e.province, domain:e.domain, mastered:e.mastered, reviewCount:e.reviewCount, lastReviewedOn:e.lastReviewedOn }; });
   c.calcLogs = live.filter(function(e){ return e.kind === "calc"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
   c.chart = { items: live.filter(function(e){ return e.kind === "chartValue" || e.kind === "chartBand" || e.kind === "chartEvent"; }).map(function(e){
     if (e.kind === "chartValue") return { id:e.id, catId:e.catId, kind:"value", name:e.name, values:JSON.parse(JSON.stringify(e.values)), planned:JSON.parse(JSON.stringify(e.planned)) };
@@ -2051,6 +2053,62 @@ function learnDomainFromText(text){
   return 0;
 }
 
+// Province (disease-group) subdivision of each organ system — 素案 (2026-07-27,
+// 細粒度: CEO決定). Aligned to the J-OSLER 13領域 structure, but the authoritative
+// 疾患群 names live in the J-OSLER search master, so this is a DRAFT for the
+// doctor to confirm (design note). Data only: renaming or moving a province is a
+// one-line edit here. id = "system/name" (content-based, so reordering is safe).
+var PROVINCE_SRC = {
+  "総合内科": ["不明熱", "高齢者総合評価", "中毒・環境", "全身性・多臓器", "症候未分化"],
+  "消化器": ["食道", "胃・十二指腸", "小腸・大腸", "炎症性腸疾患", "肝臓", "胆道", "膵臓", "腹膜・腸間膜"],
+  "循環器": ["虚血性心疾患", "心不全", "不整脈", "弁膜症", "心筋・心膜疾患", "大動脈・末梢血管", "静脈血栓塞栓", "高血圧"],
+  "内分泌": ["下垂体・視床下部", "甲状腺", "副腎", "骨・カルシウム代謝"],
+  "代謝": ["糖尿病", "脂質異常症", "高尿酸血症・痛風", "栄養・肥満"],
+  "腎臓": ["急性腎障害", "慢性腎臓病", "糸球体・ネフローゼ", "水電解質・酸塩基", "透析"],
+  "呼吸器": ["呼吸器感染症", "COPD", "気管支喘息", "間質性肺疾患", "肺癌・腫瘍", "胸膜疾患", "肺循環（塞栓・肺高血圧）"],
+  "血液": ["貧血", "白血病・骨髄腫瘍", "悪性リンパ腫", "多発性骨髄腫", "出血・凝固異常"],
+  "神経": ["脳血管障害", "認知症", "パーキンソン・変性", "てんかん", "免疫性・脱髄", "末梢神経・筋", "頭痛・機能性"],
+  "アレルギー": ["アナフィラキシー・薬物", "蕁麻疹・血管性浮腫", "好酸球性疾患"],
+  "膠原病": ["関節リウマチ", "SLE", "血管炎", "全身性硬化症・筋炎", "その他自己免疫"],
+  "感染症": ["呼吸器感染", "尿路・性感染", "消化管・腹腔内感染", "血流感染・敗血症", "中枢神経感染", "骨・軟部・皮膚感染"],
+  "救急": ["ショック", "心肺停止・蘇生", "意識障害", "急性中毒", "外傷・熱傷・環境"]
+};
+var PROVINCES = (function(){
+  var out = [];
+  ORGAN_FIELDS.forEach(function(sys){
+    (PROVINCE_SRC[sys] || []).forEach(function(name){ out.push({ id:sys + "/" + name, name:name, sys:sys }); });
+  });
+  return out;
+})();
+function provincesOf(sys){ return PROVINCES.filter(function(p){ return p.sys === sys; }); }
+function provinceById(id){ for (var i = 0; i < PROVINCES.length; i++) if (PROVINCES[i].id === id) return PROVINCES[i]; return null; }
+// Match free text (the AI's 疾患群 line, or a stored id) to a province id,
+// preferring one whose system matches the hint. "" = unmatched (a system-level
+// "その他" learning). A stored id that no longer exists degrades to "".
+function canonProvince(raw, sysHint){
+  var v = String(raw == null ? "" : raw).trim();
+  if (!v) return "";
+  if (provinceById(v)) return v;
+  var hit = "";
+  for (var i = 0; i < PROVINCES.length; i++) {
+    var p = PROVINCES[i];
+    if (v.indexOf(p.name) === -1 && p.name.indexOf(v) === -1) continue;
+    if (sysHint && p.sys === sysHint) return p.id;
+    if (!hit) hit = p.id;
+  }
+  return hit;
+}
+function learnProvinceFromText(text, sysHint){
+  var m = String(text || "").match(/^\s*疾患群[:：]\s*(.+)$/m);
+  return m ? canonProvince(m[1], sysHint) : "";
+}
+// Rank grows with overall conquest %. Returns an index 0..6 (STR.learnRankN).
+function learnRank(pct){
+  var t = [0, 10, 25, 45, 65, 85, 100], r = 0;
+  for (var i = 0; i < t.length; i++) if (pct >= t[i]) r = i;
+  return r;
+}
+
 // Flatten every case's aiLogs into learning items, newest first.
 function collectLearnings(cases){
   var out = [];
@@ -2059,9 +2117,12 @@ function collectLearnings(cases){
     var label = typeof c.label === "string" ? c.label : "";
     cloneArr(c.aiLogs).forEach(function(x){
       if (!x || !x.id || typeof x.text !== "string" || !x.text) return;
+      var field = canonOrganField(x.field);
+      var province = canonProvince(x.province, field);
+      if (province) { var pp = provinceById(province); if (pp) field = pp.sys; } // province implies its continent
       out.push({
         caseId:c.id, caseLabel:label, id:x.id, text:x.text, date:x.date || "",
-        field:canonOrganField(x.field), domain:canonPfDomain(x.domain),
+        field:field, province:province, domain:canonPfDomain(x.domain),
         mastered:x.mastered === true, reviewCount:isFinite(x.reviewCount) ? x.reviewCount : 0,
         lastReviewedOn:typeof x.lastReviewedOn === "string" ? x.lastReviewedOn : ""
       });
@@ -2090,6 +2151,38 @@ function learnMapState(items, mapKey){
     var key = isField ? name : i + 1;
     var t = total[key] || 0, m = mast[key] || 0;
     return { key:key, name:name, total:t, mastered:m, state:(t === 0 ? "fog" : (m >= t ? "controlled" : "frontier")) };
+  });
+}
+
+// Hierarchical map #1: continents (13 systems) each holding province tiles.
+// A province is fog/frontier/controlled by its own learnings; an unmatched
+// learning (no province) lands in a per-continent "その他" tile that is shown
+// but never counts toward the fixed denominator. Continent conquest = controlled
+// provinces / total provinces (fixed), so "filling the map" is the long game.
+function learnConquestMap(items){
+  var provTotal = {}, provMast = {}, otherTotal = {}, otherMast = {};
+  cloneArr(items).forEach(function(it){
+    if (!it.field) return;
+    if (it.province) {
+      provTotal[it.province] = (provTotal[it.province] || 0) + 1;
+      if (it.mastered) provMast[it.province] = (provMast[it.province] || 0) + 1;
+    } else {
+      otherTotal[it.field] = (otherTotal[it.field] || 0) + 1;
+      if (it.mastered) otherMast[it.field] = (otherMast[it.field] || 0) + 1;
+    }
+  });
+  return ORGAN_FIELDS.map(function(sys){
+    var provs = provincesOf(sys).map(function(p){
+      var t = provTotal[p.id] || 0, m = provMast[p.id] || 0;
+      return { id:p.id, name:p.name, total:t, mastered:m, state:(t === 0 ? "fog" : (m >= t ? "controlled" : "frontier")), other:false };
+    });
+    var ot = otherTotal[sys] || 0;
+    if (ot > 0) provs.push({ id:sys + "/その他", name:"その他", total:ot, mastered:otherMast[sys] || 0, state:((otherMast[sys] || 0) >= ot ? "controlled" : "frontier"), other:true });
+    var real = provs.filter(function(p){ return !p.other; });
+    var controlled = real.filter(function(p){ return p.state === "controlled"; }).length;
+    var withLearning = provs.filter(function(p){ return p.total > 0; }).length;
+    var state = withLearning === 0 ? "fog" : (real.every(function(p){ return p.total === 0 || p.state === "controlled"; }) && (ot === 0 || (otherMast[sys] || 0) >= ot) ? "controlled" : "frontier");
+    return { sys:sys, name:sys, provinces:provs, controlled:controlled, totalProvinces:real.length, withLearning:withLearning, state:state };
   });
 }
 
@@ -2138,23 +2231,26 @@ function learnStats(cases, todayIso){
     if (it.mastered) masteredCount++;
     dates.push(it.date);
   });
-  var fieldMap = learnMapState(items, "field");
+  var conquest = learnConquestMap(items);
   var domainMap = learnMapState(items, "domain");
-  function controlled(map){ return map.filter(function(d){ return d.state === "controlled"; }).length; }
+  var provControlled = 0, provTotal = 0;
+  conquest.forEach(function(c){ provControlled += c.controlled; provTotal += c.totalProvinces; });
+  var domainControlled = domainMap.filter(function(d){ return d.state === "controlled"; }).length;
+  var conquestPct = provTotal ? Math.round(provControlled / provTotal * 100) : 0;
   var s = learnStreaks(dates, todayIso);
   return {
     total:items.length, caseCount:Object.keys(caseSet).length, masteredCount:masteredCount,
-    fieldMap:fieldMap, domainMap:domainMap,
-    fieldControlled:controlled(fieldMap), fieldTotal:fieldMap.length,
-    domainControlled:controlled(domainMap), domainTotal:domainMap.length,
+    conquest:conquest, domainMap:domainMap,
+    provControlled:provControlled, provTotal:provTotal, conquestPct:conquestPct, rank:learnRank(conquestPct),
+    domainControlled:domainControlled, domainTotal:domainMap.length,
     currentStreak:s.current, longestStreak:s.longest, items:items
   };
 }
 
 // Milestone tiers per metric -> earned tier + next target (badges row).
-var LEARN_TIERS = { total:[10, 25, 50, 100], cases:[5, 15, 30], streak:[3, 7, 14], controlled:[1, 5, 10, 20] };
+var LEARN_TIERS = { total:[10, 25, 50, 100], cases:[5, 15, 30], streak:[3, 7, 14], controlled:[1, 5, 10, 20, 40] };
 function learnBadges(stats){
-  var value = { total:stats.total, cases:stats.caseCount, streak:stats.longestStreak, controlled:stats.fieldControlled + stats.domainControlled };
+  var value = { total:stats.total, cases:stats.caseCount, streak:stats.longestStreak, controlled:stats.provControlled + stats.domainControlled };
   return Object.keys(LEARN_TIERS).map(function(metric){
     var v = value[metric], earned = 0, next = null;
     LEARN_TIERS[metric].forEach(function(n){ if (v >= n) earned = n; else if (next === null) next = n; });
@@ -2206,10 +2302,17 @@ if (typeof module !== "undefined") {
     PF_DOMAINS:PF_DOMAINS,
     canonOrganField:canonOrganField,
     canonPfDomain:canonPfDomain,
+    PROVINCES:PROVINCES,
+    provincesOf:provincesOf,
+    provinceById:provinceById,
+    canonProvince:canonProvince,
     learnFieldFromText:learnFieldFromText,
     learnDomainFromText:learnDomainFromText,
+    learnProvinceFromText:learnProvinceFromText,
+    learnRank:learnRank,
     collectLearnings:collectLearnings,
     learnMapState:learnMapState,
+    learnConquestMap:learnConquestMap,
     learnStreaks:learnStreaks,
     learnReviewQueue:learnReviewQueue,
     learnStats:learnStats,
@@ -2354,8 +2457,17 @@ const STR = {
   learnView:"学び",
   learnEmpty:"まだ学びがありません。症例の「指導医AI」を実行すると、ここに自動で集まります",
   learnMasteredUnit:"身についた",
-  learnFieldMap:"臓器・システム分野",
-  learnDomainMap:"到達領域（家庭医療）",
+  learnFieldMap:"征服マップ（臓器・システム）",
+  learnDomainMap:"到達領域（家庭医療16領域）",
+  learnConquer:"制覇",
+  learnProvUnit:"州",
+  learnRank0:"研修医",
+  learnRank1:"主治医見習い",
+  learnRank2:"主治医",
+  learnRank3:"病棟の要",
+  learnRank4:"総合診療の匠",
+  learnRank5:"診療科の主",
+  learnRank6:"制覇（レジェンド）",
   learnCasesUnit:"症例分",
   learnStreakUnit:"日連続",
   learnReview:"復習キュー",
@@ -2488,7 +2600,7 @@ Object.assign(STR, {
   aiPromptSection:"\u6307\u5c0e\u533bAI\u3078\u306e\u6307\u793a\u6587\uff08\u30d7\u30ed\u30f3\u30d7\u30c8\uff09",
   aiPromptNote:"\u3053\u306e\u6307\u793a\u6587\u304c\u305d\u306e\u307e\u307eAI\u306b\u9001\u3089\u308c\u307e\u3059\u3002\u3053\u3053\u3067\u89b3\u70b9\u3084\u6587\u91cf\u3092\u8abf\u6574\u3067\u304d\u307e\u3059\u3002\u3053\u306e\u7aef\u672b\u306e\u307f\u306b\u4fdd\u5b58\uff08\u4ed6\u7aef\u672b\u306b\u306f\u540c\u671f\u3055\u308c\u307e\u305b\u3093\uff09\u3002\u7a7a\u306b\u3059\u308b\u3068\u521d\u671f\u5024\u306b\u623b\u308a\u307e\u3059",
   aiPromptReset:"\u521d\u671f\u5024\u306b\u623b\u3059",
-  aiPromptDefault:"\u3042\u306a\u305f\u306f\u65e5\u672c\u306e\u7dcf\u5408\u8a3a\u7642\u79d1\u306e\u6307\u5c0e\u533b\u3067\u3059\u3002\u5c02\u653b\u533b\u304c\u66f8\u3044\u305f\u5165\u9662\u75c7\u4f8b\u306e\u8a18\u9332\uff08\u5165\u9662\u6642\u8a18\u9332\u3068\u65e5\u3005\u306e\u8a18\u9332\uff09\u3092\u8aad\u307f\u3001\u6559\u80b2\u7684\u30d5\u30a3\u30fc\u30c9\u30d0\u30c3\u30af\u3092\u8fd4\u3057\u3066\u304f\u3060\u3055\u3044\u3002\n\u524d\u63d0\uff1a\u8a18\u9332\u306f\u533f\u540d\u5316\u6e08\u307f\u3067\u3001\u6c0f\u540d\u30fbID\u7b49\u306e\u500b\u4eba\u8b58\u5225\u5b50\u306f\u542b\u307e\u308c\u307e\u305b\u3093\u3002\u8a18\u9332\u306f\u8981\u70b9\u30e1\u30e2\u3067\u3042\u308a\u3001\u30ab\u30eb\u30c6\u5168\u6587\u3067\u306f\u3042\u308a\u307e\u305b\u3093\u3002\n\u51fa\u529b\u306f\u65e5\u672c\u8a9e\u3067\u3001\u6b21\u306e4\u7bc0\u3092\u898b\u51fa\u3057\u3064\u304d\u3067\u7c21\u6f54\u306b\uff08\u5168\u4f53\u3067400\u301c600\u5b57\u76ee\u5b89\uff09\uff1a\n1. \u826f\u3044\u70b9\uff08\u8a18\u9332\u30fb\u30a2\u30bb\u30b9\u30e1\u30f3\u30c8\u3067\u8a55\u4fa1\u3067\u304d\u308b\u70b9\uff09\n2. \u691c\u8a0e\u3059\u3079\u304d\u70b9\uff08\u9451\u5225\u30fb\u8a55\u4fa1\u30fb\u30de\u30cd\u30b8\u30e1\u30f3\u30c8\u3067\u8a70\u3081\u304c\u7518\u3044\u70b9\uff09\n3. \u898b\u843d\u3068\u3057\u30ea\u30b9\u30af\uff08\u3053\u306e\u8a18\u9332\u304b\u3089\u60f3\u8d77\u3059\u3079\u304d\u5371\u967a\u306a\u898b\u843d\u3068\u3057\u30fb\u30ec\u30c3\u30c9\u30d5\u30e9\u30b0\uff09\n4. \u6b21\u306e\u4e00\u624b\uff08\u660e\u65e5\u306e\u56de\u8a3a\u3067\u78ba\u8a8d\u30fb\u5b9f\u884c\u3059\u3079\u304d\u5177\u4f53\u7684\u30a2\u30af\u30b7\u30e7\u30f3\uff09\n\u6ce8\u610f\uff1a\u8a18\u9332\u306b\u306a\u3044\u60c5\u5831\u3092\u63a8\u6e2c\u3067\u65ad\u5b9a\u3057\u306a\u3044\u3002\u4e0d\u8db3\u304c\u3042\u308c\u3070\u300c\u8a18\u9332\u306b\u301c\u306e\u8a18\u8f09\u304c\u306a\u3044\u300d\u3068\u6307\u6458\u3059\u308b\u3002\u65ad\u5b9a\u7684\u306a\u8a3a\u65ad\u306e\u5ba3\u8a00\u306f\u305b\u305a\u3001\u6559\u80b2\u7684\u306a\u554f\u3044\u304b\u3051\u3092\u4ea4\u3048\u308b\u3002\n\u307e\u305f\u3001\u5b66\u3073\u3092\u5730\u56f3\u306b\u5206\u985e\u3059\u308b\u305f\u3081\u3001\u51fa\u529b\u306e\u4e2d\u306b\u5fc5\u305a\u6b21\u306e2\u884c\u3092\u5165\u308c\u308b\u3002\u300e\u5206\u91ce: \u300f\u306b \u7dcf\u5408\u5185\u79d1/\u6d88\u5316\u5668/\u5faa\u74b0\u5668/\u5185\u5206\u6ccc/\u4ee3\u8b1d/\u814e\u81d3/\u547c\u5438\u5668/\u8840\u6db2/\u795e\u7d4c/\u30a2\u30ec\u30eb\u30ae\u30fc/\u81a0\u539f\u75c5/\u611f\u67d3\u75c7/\u6551\u6025 \u304b\u3089\u6700\u3082\u8fd1\u30441\u3064\u3002\u300e\u9818\u57df: \u300f\u306b \u672a\u5206\u5316\u306a\u5065\u5eb7\u554f\u984c/\u4e88\u9632\u533b\u5b66\u3068\u5065\u5eb7\u5897\u9032/\u6162\u6027\u75be\u60a3\u306e\u30b1\u30a2/\u9577\u671f\u7684\u306a\u5168\u4eba\u7684\u95a2\u4fc2\u306b\u57fa\u3065\u304f\u30b1\u30a2/\u60a3\u8005\u4e2d\u5fc3\u306e\u533b\u7642/\u5bb6\u65cf\u5fd7\u5411\u306e\u30b1\u30a2/\u5730\u57df\u5fd7\u5411\u306e\u30d7\u30e9\u30a4\u30de\u30ea\u30fb\u30b1\u30a2/\u969c\u5bb3\u3068\u30ea\u30cf\u30d3\u30ea\u30c6\u30fc\u30b7\u30e7\u30f3/EBM\u306e\u5b9f\u8df5/\u30e1\u30f3\u30bf\u30eb\u30d8\u30eb\u30b9/SDH\u30fb\u30a2\u30c9\u30dc\u30ab\u30b7\u30fc/\u8907\u96d1\u56f0\u96e3\u30fb\u591a\u75be\u60a3\u4f75\u5b58/\u30c1\u30fc\u30e0\u533b\u7642\u30fb\u79fb\u884c/\u30d7\u30ed\u30d5\u30a7\u30c3\u30b7\u30e7\u30ca\u30ea\u30ba\u30e0\u30fb\u502b\u7406/\u30bb\u30af\u30b7\u30e3\u30eb\u30d8\u30eb\u30b9\u30fb\u601d\u6625\u671f/\u7de9\u548c\u30fb\u4eba\u751f\u306e\u6700\u7d42\u6bb5\u968e \u306e\u3046\u3061\u8a72\u5f53\u3059\u308b1\u3064\u3001\u306a\u3051\u308c\u3070\u300e\u9818\u57df: \u306a\u3057\u300f\u3002"
+  aiPromptDefault:"\u3042\u306a\u305f\u306f\u65e5\u672c\u306e\u7dcf\u5408\u8a3a\u7642\u79d1\u306e\u6307\u5c0e\u533b\u3067\u3059\u3002\u5c02\u653b\u533b\u304c\u66f8\u3044\u305f\u5165\u9662\u75c7\u4f8b\u306e\u8a18\u9332\uff08\u5165\u9662\u6642\u8a18\u9332\u3068\u65e5\u3005\u306e\u8a18\u9332\uff09\u3092\u8aad\u307f\u3001\u6559\u80b2\u7684\u30d5\u30a3\u30fc\u30c9\u30d0\u30c3\u30af\u3092\u8fd4\u3057\u3066\u304f\u3060\u3055\u3044\u3002\n\u524d\u63d0\uff1a\u8a18\u9332\u306f\u533f\u540d\u5316\u6e08\u307f\u3067\u3001\u6c0f\u540d\u30fbID\u7b49\u306e\u500b\u4eba\u8b58\u5225\u5b50\u306f\u542b\u307e\u308c\u307e\u305b\u3093\u3002\u8a18\u9332\u306f\u8981\u70b9\u30e1\u30e2\u3067\u3042\u308a\u3001\u30ab\u30eb\u30c6\u5168\u6587\u3067\u306f\u3042\u308a\u307e\u305b\u3093\u3002\n\u51fa\u529b\u306f\u65e5\u672c\u8a9e\u3067\u3001\u6b21\u306e4\u7bc0\u3092\u898b\u51fa\u3057\u3064\u304d\u3067\u7c21\u6f54\u306b\uff08\u5168\u4f53\u3067400\u301c600\u5b57\u76ee\u5b89\uff09\uff1a\n1. \u826f\u3044\u70b9\uff08\u8a18\u9332\u30fb\u30a2\u30bb\u30b9\u30e1\u30f3\u30c8\u3067\u8a55\u4fa1\u3067\u304d\u308b\u70b9\uff09\n2. \u691c\u8a0e\u3059\u3079\u304d\u70b9\uff08\u9451\u5225\u30fb\u8a55\u4fa1\u30fb\u30de\u30cd\u30b8\u30e1\u30f3\u30c8\u3067\u8a70\u3081\u304c\u7518\u3044\u70b9\uff09\n3. \u898b\u843d\u3068\u3057\u30ea\u30b9\u30af\uff08\u3053\u306e\u8a18\u9332\u304b\u3089\u60f3\u8d77\u3059\u3079\u304d\u5371\u967a\u306a\u898b\u843d\u3068\u3057\u30fb\u30ec\u30c3\u30c9\u30d5\u30e9\u30b0\uff09\n4. \u6b21\u306e\u4e00\u624b\uff08\u660e\u65e5\u306e\u56de\u8a3a\u3067\u78ba\u8a8d\u30fb\u5b9f\u884c\u3059\u3079\u304d\u5177\u4f53\u7684\u30a2\u30af\u30b7\u30e7\u30f3\uff09\n\u6ce8\u610f\uff1a\u8a18\u9332\u306b\u306a\u3044\u60c5\u5831\u3092\u63a8\u6e2c\u3067\u65ad\u5b9a\u3057\u306a\u3044\u3002\u4e0d\u8db3\u304c\u3042\u308c\u3070\u300c\u8a18\u9332\u306b\u301c\u306e\u8a18\u8f09\u304c\u306a\u3044\u300d\u3068\u6307\u6458\u3059\u308b\u3002\u65ad\u5b9a\u7684\u306a\u8a3a\u65ad\u306e\u5ba3\u8a00\u306f\u305b\u305a\u3001\u6559\u80b2\u7684\u306a\u554f\u3044\u304b\u3051\u3092\u4ea4\u3048\u308b\u3002\n\u307e\u305f\u3001\u5b66\u3073\u3092\u5730\u56f3\u306b\u5206\u985e\u3059\u308b\u305f\u3081\u3001\u51fa\u529b\u306e\u4e2d\u306b\u5fc5\u305a\u6b21\u306e3\u884c\u3092\u5165\u308c\u308b\u3002\u300e\u5206\u91ce: \u300f\u306b \u7dcf\u5408\u5185\u79d1/\u6d88\u5316\u5668/\u5faa\u74b0\u5668/\u5185\u5206\u6ccc/\u4ee3\u8b1d/\u814e\u81d3/\u547c\u5438\u5668/\u8840\u6db2/\u795e\u7d4c/\u30a2\u30ec\u30eb\u30ae\u30fc/\u81a0\u539f\u75c5/\u611f\u67d3\u75c7/\u6551\u6025 \u304b\u3089\u6700\u3082\u8fd1\u30441\u3064\u3002\u300e\u75be\u60a3\u7fa4: \u300f\u306b\u305d\u306e\u5206\u91ce\u306e\u4e2d\u3067\u6700\u3082\u5f53\u3066\u306f\u307e\u308b\u4e3b\u8981\u306a\u75be\u60a3\u7fa4\u3092\u6570\u8a9e\u3067\uff08\u4f8b \u5fc3\u4e0d\u5168\u30fb\u5e02\u4e2d\u80ba\u708e\u30fb\u8133\u6897\u585e\u30fb\u7cd6\u5c3f\u75c5\uff09\u3002\u300e\u9818\u57df: \u300f\u306b \u672a\u5206\u5316\u306a\u5065\u5eb7\u554f\u984c/\u4e88\u9632\u533b\u5b66\u3068\u5065\u5eb7\u5897\u9032/\u6162\u6027\u75be\u60a3\u306e\u30b1\u30a2/\u9577\u671f\u7684\u306a\u5168\u4eba\u7684\u95a2\u4fc2\u306b\u57fa\u3065\u304f\u30b1\u30a2/\u60a3\u8005\u4e2d\u5fc3\u306e\u533b\u7642/\u5bb6\u65cf\u5fd7\u5411\u306e\u30b1\u30a2/\u5730\u57df\u5fd7\u5411\u306e\u30d7\u30e9\u30a4\u30de\u30ea\u30fb\u30b1\u30a2/\u969c\u5bb3\u3068\u30ea\u30cf\u30d3\u30ea\u30c6\u30fc\u30b7\u30e7\u30f3/EBM\u306e\u5b9f\u8df5/\u30e1\u30f3\u30bf\u30eb\u30d8\u30eb\u30b9/SDH\u30fb\u30a2\u30c9\u30dc\u30ab\u30b7\u30fc/\u8907\u96d1\u56f0\u96e3\u30fb\u591a\u75be\u60a3\u4f75\u5b58/\u30c1\u30fc\u30e0\u533b\u7642\u30fb\u79fb\u884c/\u30d7\u30ed\u30d5\u30a7\u30c3\u30b7\u30e7\u30ca\u30ea\u30ba\u30e0\u30fb\u502b\u7406/\u30bb\u30af\u30b7\u30e3\u30eb\u30d8\u30eb\u30b9\u30fb\u601d\u6625\u671f/\u7de9\u548c\u30fb\u4eba\u751f\u306e\u6700\u7d42\u6bb5\u968e \u306e\u3046\u3061\u8a72\u5f53\u3059\u308b1\u3064\u3001\u306a\u3051\u308c\u3070\u300e\u9818\u57df: \u306a\u3057\u300f\u3002"
 });
 
 let DB = normalizeState(null);
@@ -3886,8 +3998,10 @@ function learnMarkNotYet(caseId, itemId){
 function learnUnmaster(caseId, itemId){
   patchLearning(caseId, itemId, function(it){ it.mastered = false; });
 }
-function setLearningField(caseId, itemId, value){
-  patchLearning(caseId, itemId, function(it){ it.field = String(value || ""); });
+// Picking a province also sets its continent (system); an empty pick clears both.
+function setLearningProvince(caseId, itemId, value){
+  var p = value ? provinceById(String(value)) : null;
+  patchLearning(caseId, itemId, function(it){ it.province = p ? p.id : ""; it.field = p ? p.sys : ""; });
 }
 function setLearningDomain(caseId, itemId, value){
   patchLearning(caseId, itemId, function(it){ it.domain = Math.floor(Number(value)) || 0; });
@@ -5637,42 +5751,54 @@ function renderCalcTabBody(){
 // One state colour per territory: fog (untouched), frontier (learnings remain
 // unmastered), controlled (all mastered). Theme-independent rgba fills.
 function learnStateStyle(state){
-  if (state === "controlled") return "background:rgba(50,165,110,.28)";
-  if (state === "frontier") return "background:rgba(230,150,30,.24)";
-  return "background:rgba(127,127,127,.14)";
+  if (state === "controlled") return "background:rgba(50,165,110,.30);font-weight:600";
+  if (state === "frontier") return "background:rgba(230,150,30,.26)";
+  return "background:rgba(127,127,127,.12);color:#98a0a8";
 }
-function learnMapChips(map){
-  return '<div class="row wrap" style="gap:6px">' + map.map(function(d){
-    var mark = d.state === "controlled" ? "★" : d.state === "frontier" ? "⚔" : "・";
-    var count = d.total ? '<span class="faint"> ' + d.mastered + '/' + d.total + '</span>' : '';
-    return '<span style="display:inline-block;padding:4px 8px;border-radius:8px;font-size:13px;' + learnStateStyle(d.state) + '">' + mark + ' ' + esc(d.name) + count + '</span>';
-  }).join('') + '</div>';
+function learnStateColor(state){
+  return state === "controlled" ? "#2fa86e" : state === "frontier" ? "#e0952a" : "rgba(127,127,127,.4)";
 }
-// Per-learning tag pickers (organ field + competency domain). Reassigning wins
-// over whatever the AI text said and is stored on the item.
+function learnStateMark(state){
+  return state === "controlled" ? "★" : state === "frontier" ? "⚔" : "·";
+}
+function learnTile(t){
+  var count = t.total ? ' ' + t.mastered + '/' + t.total : '';
+  return '<span style="display:inline-block;padding:3px 7px;border-radius:7px;font-size:12px;' + learnStateStyle(t.state) + '">' + learnStateMark(t.state) + esc(t.name) + count + '</span>';
+}
+// A continent (organ system) with its province tiles and a left accent by state.
+function learnContinent(c){
+  return '<div style="margin-top:10px;padding-left:8px;border-left:3px solid ' + learnStateColor(c.state) + '">' +
+    '<div style="display:flex;gap:6px;align-items:baseline"><span style="font-weight:600">' + learnStateMark(c.state) + ' ' + esc(c.name) + '</span><span class="faint" style="font-size:12px">' + c.controlled + '/' + c.totalProvinces + ' ' + esc(STR.learnProvUnit) + '</span></div>' +
+    '<div class="row wrap" style="gap:4px;margin-top:4px">' + c.provinces.map(learnTile).join('') + '</div>' +
+  '</div>';
+}
+// Per-learning tag pickers: one grouped province select (picking a province also
+// sets its continent) + the competency domain. Reassigning wins over the AI text.
 function learnTagEditor(it){
-  var fieldOpts = '<option value="">' + esc(STR.learnUncat) + '</option>' + ORGAN_FIELDS.map(function(n){
-    return '<option value="' + esc(n) + '"' + (it.field === n ? ' selected' : '') + '>' + esc(n) + '</option>';
+  var groups = ORGAN_FIELDS.map(function(sys){
+    var opts = provincesOf(sys).map(function(p){
+      return '<option value="' + esc(p.id) + '"' + (it.province === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>';
+    }).join('');
+    return '<optgroup label="' + esc(sys) + '">' + opts + '</optgroup>';
   }).join('');
+  var provSel = '<select class="input" style="flex:1;min-width:130px" onchange="setLearningProvince(\'' + esc(it.caseId) + '\',\'' + esc(it.id) + '\',this.value)"><option value="">' + esc(STR.learnUncat) + '</option>' + groups + '</select>';
   var domOpts = '<option value="0">' + esc(STR.learnDomainNone) + '</option>' + PF_DOMAINS.map(function(n, i){
     return '<option value="' + (i + 1) + '"' + (it.domain === i + 1 ? ' selected' : '') + '>' + esc(n) + '</option>';
   }).join('');
-  return '<div class="row wrap" style="gap:6px;margin-top:6px">' +
-    '<select class="input" style="flex:1;min-width:120px" onchange="setLearningField(\'' + esc(it.caseId) + '\',\'' + esc(it.id) + '\',this.value)">' + fieldOpts + '</select>' +
-    '<select class="input" style="flex:1;min-width:120px" onchange="setLearningDomain(\'' + esc(it.caseId) + '\',\'' + esc(it.id) + '\',this.value)">' + domOpts + '</select>' +
-  '</div>';
+  var domSel = '<select class="input" style="flex:1;min-width:130px" onchange="setLearningDomain(\'' + esc(it.caseId) + '\',\'' + esc(it.id) + '\',this.value)">' + domOpts + '</select>';
+  return '<div class="row wrap" style="gap:6px;margin-top:6px">' + provSel + domSel + '</div>';
 }
 function learnChips(it){
-  return (it.field ? '<span class="badge">' + esc(it.field) + '</span> ' : '') +
+  var pp = it.province ? provinceById(it.province) : null;
+  var prov = pp ? pp.name : (it.field || "");
+  return (prov ? '<span class="badge">' + esc(prov) + '</span> ' : '') +
     (it.domain ? '<span class="badge">' + esc(PF_DOMAINS[it.domain - 1]) + '</span> ' : '');
 }
 function renderLearnTabBody(){
   var stats = learnStats(DB.cases, todayISO());
   if (!stats.total) return '<section class="panelcard"><div class="note">' + esc(STR.learnEmpty) + '</div></section>';
 
-  var sub = STR.learnFieldMap + ' ' + stats.fieldControlled + '/' + stats.fieldTotal + ' ・ ' +
-    STR.learnDomainMap + ' ' + stats.domainControlled + '/' + stats.domainTotal + ' ・ ' +
-    stats.caseCount + STR.learnCasesUnit + ' ・ 🔥' + stats.currentStreak + STR.learnStreakUnit;
+  var pct = stats.conquestPct;
   var badges = learnBadges(stats).map(function(b){
     var name = STR["learnMetric_" + b.metric];
     var parts = [];
@@ -5680,14 +5806,21 @@ function renderLearnTabBody(){
     if (b.next !== null) parts.push('<span class="faint" style="font-size:12px">' + esc(name + STR.learnBadgeGap + (b.next - b.value)) + '</span>');
     return parts.join(' ');
   }).filter(Boolean).join('　');
+  // Rank + conquest header: the "強くなる" signal front and centre.
   var header = '<section class="panelcard">' +
-    '<div style="display:flex;align-items:baseline;gap:6px"><div style="font-size:32px;font-weight:700">' + stats.masteredCount + '<span class="faint" style="font-size:16px"> / ' + stats.total + '</span></div><div class="faint">' + esc(STR.learnMasteredUnit) + '</div></div>' +
-    '<div class="faint" style="margin-top:2px">' + esc(sub) + '</div>' +
-    (badges ? '<div class="row wrap" style="gap:8px;margin-top:10px">' + badges + '</div>' : '') +
+    '<div style="display:flex;align-items:center;gap:10px">' +
+      '<div style="font-size:22px">⚔</div>' +
+      '<div style="flex:1"><div style="font-weight:700;font-size:17px">' + esc(STR["learnRank" + stats.rank]) + '</div>' +
+      '<div class="faint" style="font-size:12px">' + esc(STR.learnConquer + ' ' + stats.provControlled + '/' + stats.provTotal + ' ' + STR.learnProvUnit) + '</div></div>' +
+      '<div style="font-size:26px;font-weight:800">' + pct + '<span style="font-size:15px">%</span></div>' +
+    '</div>' +
+    '<div style="height:10px;border-radius:5px;background:rgba(127,127,127,.2);margin-top:8px;overflow:hidden"><div style="height:10px;width:' + pct + '%;background:linear-gradient(90deg,#2fa86e,#5ad0aa)"></div></div>' +
+    '<div class="faint" style="margin-top:8px">' + esc(stats.masteredCount + ' ' + STR.learnMasteredUnit + ' / ' + stats.total + ' ・ ' + stats.caseCount + STR.learnCasesUnit + ' ・ 🔥' + stats.currentStreak + STR.learnStreakUnit) + '</div>' +
+    (badges ? '<div class="row wrap" style="gap:8px;margin-top:8px">' + badges + '</div>' : '') +
   '</section>';
 
-  var mapsSec = '<section class="panelcard"><div class="one">' + esc(STR.learnFieldMap) + '</div><div style="margin-top:8px">' + learnMapChips(stats.fieldMap) + '</div></section>' +
-    '<section class="panelcard"><div class="one">' + esc(STR.learnDomainMap) + '</div><div style="margin-top:8px">' + learnMapChips(stats.domainMap) + '</div></section>';
+  var mapsSec = '<section class="panelcard"><div class="one">' + esc(STR.learnFieldMap) + '</div>' + stats.conquest.map(learnContinent).join('') + '</section>' +
+    '<section class="panelcard"><div class="one">' + esc(STR.learnDomainMap) + '</div><div class="row wrap" style="gap:5px;margin-top:8px">' + stats.domainMap.map(learnTile).join('') + '</div></section>';
 
   var queue = learnReviewQueue(stats.items, 5);
   var queueRows = queue.map(function(it){
