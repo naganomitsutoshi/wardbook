@@ -653,6 +653,24 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(aiCase.aiLogs.find((x) => x.id === "ai3").date, "2026-07-08");
   const aiTwice = L.normalizeCase(JSON.parse(JSON.stringify(aiCase)), "2026-07-08T11:00:00.000Z", "2026-07-08");
   assert.strictEqual(JSON.stringify(aiTwice), JSON.stringify(aiCase));
+  // Saved calculator results (kind:"calc", 2026-07-26): fold like AI logs,
+  // empty text drops, mirror rebuilds, missing date defaults deterministically,
+  // and re-normalize is byte-stable.
+  assert.strictEqual(bareCase.calcLogs.length, 0);
+  const calcCase = L.normalizeCase({
+    id:"cc", label:"cap", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-05T10:00:00.000Z",
+    calcLogs:[
+      { id:"cl1", text:"A-DROP：A-DROP 4 項目 超重症", date:"2026-07-07" },
+      { id:"cl2", text:"" },
+      { id:"cl3", text:"腎機能の計算：CCr 45 mL/分" }
+    ]
+  }, "2026-07-08T10:00:00.000Z", "2026-07-08");
+  assert.strictEqual(calcCase.entries.filter((e) => e.kind === "calc").length, 2);
+  assert.strictEqual(calcCase.calcLogs.length, 2);
+  assert.strictEqual(calcCase.calcLogs.find((x) => x.id === "cl1").date, "2026-07-07");
+  assert.strictEqual(calcCase.calcLogs.find((x) => x.id === "cl3").date, "2026-07-08");
+  const calcTwice = L.normalizeCase(JSON.parse(JSON.stringify(calcCase)), "2026-07-08T11:00:00.000Z", "2026-07-08");
+  assert.strictEqual(JSON.stringify(calcTwice), JSON.stringify(calcCase));
   // Problem tombstone/merge is kind-agnostic (rides the shared merge).
   const prA = { kind:"problem", id:"q", text:"a", status:"active", createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-02T00:00:00.000Z" };
   const prB = { kind:"problem", id:"q", text:"b", status:"resolved", createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-03T00:00:00.000Z" };
@@ -662,10 +680,11 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
     trash:[
       { id:"tp", type:"problem", caseId:"cp", caseLabel:"chf", deletedAt:"2026-07-08T00:00:00.000Z", payload:{ id:"pr1", text:"CHF", status:"active" } },
       { id:"tn", type:"note", caseId:"cp", caseLabel:"chf", deletedAt:"2026-07-08T00:00:00.000Z", payload:{ id:"nt1", text:"afebrile", date:"2026-07-07" } },
+      { id:"tc", type:"calc", caseId:"cp", caseLabel:"chf", deletedAt:"2026-07-08T00:00:00.000Z", payload:{ id:"cl1", text:"A-DROP 4", date:"2026-07-07" } },
       { id:"tx", type:"appt", caseId:"cp", deletedAt:"2026-07-08T00:00:00.000Z", payload:{ id:"a1", text:"x" } }
     ]
   }, "2026-07-08T10:00:00.000Z", "2026-07-08");
-  assert.strictEqual(probTrash.trash.map((x) => x.id).join(","), "tp,tn");
+  assert.strictEqual(probTrash.trash.map((x) => x.id).join(","), "tp,tn,tc");
 
   // ---- SPEC-F element-wise merge ------------------------------------------
 

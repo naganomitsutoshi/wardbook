@@ -660,6 +660,16 @@ function normalizeEntryContent(raw, ctx){
     var aiDate = safeDate(row.date, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
     return { kind:"ai", id:id, text:text, date:aiDate };
   }
+  if (row.kind === "calc") {
+    if (!text) return null;
+    // Saved calculator result (2026-07-26): a dated snapshot of a score
+    // ("A-DROP：A-DROP 4 項目 超重症"). Unlike the live inputs it carries the
+    // date it was computed, so it is a record and not a value pretending to be
+    // current. Date fixed at creation, text immutable; rides the entries store
+    // like AI logs (E2E-encrypted sync). Never enters aiFeedbackPayload.
+    var calcDate = safeDate(row.date, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
+    return { kind:"calc", id:id, text:text, date:calcDate };
+  }
   if (row.kind === "seed") {
     if (!text) return null;
     var snap = isObj(row.snapshot) ? row.snapshot : {};
@@ -756,6 +766,7 @@ function entriesFromMirrors(c, ctx){
   cloneArr(c && c.problems).forEach(function(x){ rows.push({ kind:"problem", id:x.id, text:x.text, status:x.status }); });
   cloneArr(c && c.notes).forEach(function(x){ rows.push({ kind:"note", id:x.id, text:x.text, date:x.date }); });
   cloneArr(c && c.aiLogs).forEach(function(x){ rows.push({ kind:"ai", id:x.id, text:x.text, date:x.date }); });
+  cloneArr(c && c.calcLogs).forEach(function(x){ rows.push({ kind:"calc", id:x.id, text:x.text, date:x.date }); });
   cloneArr(c && c.chart && c.chart.items).forEach(function(x){
     var kind = x.kind === "band" ? "chartBand" : x.kind === "event" ? "chartEvent" : "chartValue";
     var row = { kind:kind, id:x.id, catId:x.catId, name:x.name };
@@ -782,6 +793,7 @@ function entryRebuildMirrors(c){
   c.problems = live.filter(function(e){ return e.kind === "problem"; }).map(function(e){ return { id:e.id, text:e.text, status:e.status }; });
   c.notes = live.filter(function(e){ return e.kind === "note"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
   c.aiLogs = live.filter(function(e){ return e.kind === "ai"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
+  c.calcLogs = live.filter(function(e){ return e.kind === "calc"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
   c.chart = { items: live.filter(function(e){ return e.kind === "chartValue" || e.kind === "chartBand" || e.kind === "chartEvent"; }).map(function(e){
     if (e.kind === "chartValue") return { id:e.id, catId:e.catId, kind:"value", name:e.name, values:JSON.parse(JSON.stringify(e.values)), planned:JSON.parse(JSON.stringify(e.planned)) };
     if (e.kind === "chartBand") return { id:e.id, catId:e.catId, kind:"band", name:e.name, startDate:e.startDate, endDate:e.endDate };
@@ -926,6 +938,7 @@ function normalizeCase(raw, nowIso, todayIso){
   out.problems = mirrorRows(src.problems, "problem");
   out.notes = mirrorRows(src.notes, "note");
   out.aiLogs = mirrorRows(src.aiLogs, "ai");
+  out.calcLogs = mirrorRows(src.calcLogs, "calc");
   out.discharge = {
     checklist:isObj(src.discharge && src.discharge.checklist) ? src.discharge.checklist : {},
     plannedOn:src.discharge && src.discharge.plannedOn ? safeDate(src.discharge.plannedOn, null) : null
@@ -998,7 +1011,7 @@ function trashCutoffIso(nowIso){
 
 function normalizeTrashEntry(entry, nowIso){
   var row = isObj(entry) ? entry : {};
-  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true, "problem":true, "note":true, "ai":true, "chartItem":true };
+  var types = { "case":true, "next":true, "todo":true, "pending":true, "seed":true, "problem":true, "note":true, "ai":true, "calc":true, "chartItem":true };
   // Entries of removed types (appt / chartMed / chartEvent) are dropped, not
   // coerced to "case": coercion would turn their payload into a garbage case on restore.
   if (!types[row.type]) return null;
@@ -2155,6 +2168,9 @@ const STR = {
   calcPickTitle:"計算を選ぶ",
   calcNoCase:"患者に紐づけない計算です。入力は保存されません",
   calcBackToList:"一覧へ",
+  calcSaveBtn:"この計算を記録に残す",
+  calcSavedNote:"算出日つきで記録に残します（詳細画面の「計算の記録」で見返せます）",
+  calcLogPanel:"計算の記録",
   unset:"未設定",
   addDxTag:"＋病名タグ",
   dxTagPh:"病名タグ（確定病名で検索用）",
@@ -2432,6 +2448,7 @@ function trashTypeLabel(type){
   if (type === "problem") return STR.problemsLabel;
   if (type === "note") return STR.notesLabel;
   if (type === "ai") return STR.aiPanel;
+  if (type === "calc") return STR.calcLogPanel;
   if (type === "chartItem") return STR.chartPanel;
   return type;
 }
@@ -2478,6 +2495,7 @@ function restoreTrash(trashId){
     else if (entry.type === "problem") c.problems.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "note") c.notes.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "ai") c.aiLogs.push(JSON.parse(JSON.stringify(entry.payload)));
+    else if (entry.type === "calc") c.calcLogs.push(JSON.parse(JSON.stringify(entry.payload)));
     else if (entry.type === "chartItem") {
       c.chart = normalizeChart(c.chart);
       c.chart.items.push(JSON.parse(JSON.stringify(entry.payload)));
@@ -3618,6 +3636,35 @@ function updateCaseBio(caseId, key, value){
   });
 }
 
+// Save the calculator result on screen as a dated record (2026-07-26). Stored
+// as a kind:"calc" entry (E2E-encrypted sync, like AI logs). It carries the
+// day it was computed, so a saved score is a snapshot and not a stale-looking
+// live value. Never fed to aiFeedbackPayload — the AI boundary stays admission
+// text + notes (CEO 2026-07-21). Only reachable from a case sheet (the tab has
+// no case), so a result is always present; closing the sheet reveals the record
+// under the calc button and is the "it saved" signal.
+function saveCalcResult(caseId, toolId){
+  var tool = calcToolById(toolId);
+  if (!tool || !caseId) return;
+  var values = calcValuesFor(caseId);
+  if (values === null) return;
+  var parts = calcCollect(tool, values).filter(function(r){ return r.value !== null; }).map(function(r){
+    var band = r.bandKey && STR[r.bandKey] ? " " + STR[r.bandKey] : "";
+    return STR[r.labelKey] + " " + r.value + " " + STR[r.unitKey] + band;
+  });
+  if (!parts.length) return;
+  var text = STR[tool.nameKey] + "：" + parts.join(" / ");
+  addListItem("calcLogs", caseId, text, null, function(t){ return { id:uid(), text:t, date:todayISO() }; });
+  if (SHEET.name === "calc") closeSheet();
+}
+
+// Saved results are cheap to recompute, so clutter control wins over the
+// mis-tap protection AI logs get: delete with a confirm, like daily notes.
+function deleteCalcLog(caseId, itemId){
+  if (typeof confirm === "function" && !confirm(STR.deleteItemConfirm)) return;
+  deleteListItem("calcLogs", "calc", caseId, itemId);
+}
+
 function addDxTag(caseId, value){
   var text = String(value || "").trim();
   if (!text) return;
@@ -4317,10 +4364,18 @@ function fmtTaskLine(item){
 }
 function fmtPendingLine(item){ return "- " + item.text + (item.backOn ? " (" + item.backOn + ")" : ""); }
 function fmtNoteLine(item){ return "- " + item.date + " " + item.text; }
+function fmtCalcLine(item){ return "- " + item.date + " " + item.text; }
 
 // Exports read notes oldest-first (chronological narrative for AI feedback).
 function notesChrono(c){
   return cloneArr(c.notes).sort(function(a, b){
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    return a.id < b.id ? -1 : 1;
+  });
+}
+
+function calcLogsChrono(c){
+  return cloneArr(c.calcLogs).sort(function(a, b){
     if (a.date !== b.date) return a.date < b.date ? -1 : 1;
     return a.id < b.id ? -1 : 1;
   });
@@ -4356,6 +4411,7 @@ function dischargeExportText(caseId){
   lines.push("", "## Phase", c.phaseNote || "-");
   lines.push("", "## Admission note", admOf(c).text || "-");
   pushSection(lines, "Daily notes", notesChrono(c), fmtNoteLine);
+  pushSection(lines, "Calculations", calcLogsChrono(c), fmtCalcLine);
   pushSection(lines, "Remaining Task", cloneArr(c.todos).filter(function(item){ return item && !item.done; }), fmtTaskLine);
   pushSection(lines, "Pending", cloneArr(c.pendings), fmtPendingLine);
   return lines.join("\n");
@@ -5179,6 +5235,20 @@ function renderAiPanel(c){
   '</div></section>';
 }
 
+// Saved calculator results: dated snapshots, newest first, each deletable with
+// a confirm. Read-only text (no edit — recompute to change). The panel is
+// omitted entirely until something is saved, so it never adds empty chrome.
+function renderCalcPanel(c){
+  var logs = cloneArr(c.calcLogs).sort(function(a, b){
+    if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+    return a.id < b.id ? 1 : -1;
+  }).map(function(item){
+    return '<div class="lineitem"><div class="linegrow"><div class="text" style="white-space:pre-wrap">' + esc(item.text) + '</div><div class="faint">' + esc(item.date) + '</div></div><button class="iconbtn" onclick="deleteCalcLog(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
+  }).join('');
+  if (!logs) return '';
+  return '<section class="panelcard anchor" id="anc-calc"><div class="one">' + esc(STR.calcLogPanel) + '</div><div class="stack" style="margin-top:10px">' + logs + '</div></section>';
+}
+
 function renderSectionCard(title, body, addId, placeholder, addFn, caseId, secClass, anchorId){
   return '<section class="panelcard' + (secClass ? ' ' + secClass : '') + (anchorId ? ' anchor" id="' + esc(anchorId) : '') + '"><div class="one">' + esc(title) + '</div><div class="stack" style="margin-top:10px">' +
     (body || '<div class="faint">-</div>') +
@@ -5300,6 +5370,7 @@ function calcToolBody(tool){
     calcWarnKeys(tool, values).map(function(msgKey){ return '<div class="note warn">' + esc(STR[msgKey]) + '</div>'; }).join('') +
     results.map(resultBlock).join('') +
     tool.fields.map(field).join('') +
+    ((caseId && anyResult) ? '<button class="ghostbtn" onclick="saveCalcResult(\'' + esc(caseId) + '\',\'' + esc(tool.id) + '\')">' + esc(STR.calcSaveBtn) + '</button><div class="faint">' + esc(STR.calcSavedNote) + '</div>' : '') +
     (tool.rangeKey ? '<div class="note">' + esc(STR[tool.rangeKey]) + '</div>' : '') +
     '<div class="note warn">' + esc(STR[tool.disclaimerKey]) + '</div>' +
     '<div class="faint">' + esc(STR[tool.sourceKey]) + '</div>';
@@ -5463,6 +5534,7 @@ renderDetail = function(caseId){
     renderAdmissionPanel(c) +
     '<section class="panelcard sec-phase"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
     '<section class="panelcard"><div class="row"><button class="ghostbtn" style="flex:1" onclick="openPlanSheet(\'' + esc(c.id) + '\')">' + esc(STR.addPlanBtn) + '</button><button class="ghostbtn" style="flex:1" onclick="openCalcSheet(\'' + esc(c.id) + '\')">' + esc(STR.calcBtn) + '</button></div></section>' +
+    renderCalcPanel(c) +
     (dischargeInline ? dischargePanel : '') +
     renderSectionCard(DB.config.labels.task, renderTaskList(c), "taskInput", STR.taskPh, "addTask", c.id, "sec-task", "anc-task") +
     renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id, "sec-pending", "anc-pending") +
