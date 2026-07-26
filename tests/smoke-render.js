@@ -144,7 +144,7 @@ vm.runInContext(`
   "handlePopState", "navPush", "navUnwindAll",
   "openDayView", "shiftDayDate",
   "addTask", "taskToPending", "updateTodoDue", "updateTodoTime",
-  "runAiFeedback", "aiFeedbackPayload", "deleteAiLog",
+  "runAiFeedback", "aiFeedbackPayload",
   "aiPromptText", "saveAiPrompt", "resetAiPrompt",
   "toggleAiLog", "aiCardBadge"
 ].forEach((name) => {
@@ -170,7 +170,10 @@ vm.runInContext(`
   "addSeed", "deleteSeed", "renderSeedList", "countSeedsOn", "formatSeedExport",
   "addProblem", "deleteProblem", "toggleProblemStatus", "updateProblemText", "renderProblemList",
   "dayExportText", "copyDayExport",
-  "renderMissPrompt", "commitMissSeed", "expandMissPrompt", "dismissMissPrompt", "clearMiss"
+  "renderMissPrompt", "commitMissSeed", "expandMissPrompt", "dismissMissPrompt", "clearMiss",
+  // 2026-07-26 removal: AI log delete button (mis-taps were erasing feedback).
+  // Trash restore of old kind:"ai" entries is unaffected.
+  "deleteAiLog"
 ].forEach((name) => {
   if (vm.runInContext(`typeof ${name}`, sandbox) !== "undefined") fail("removed fn still defined: " + name);
 });
@@ -600,14 +603,14 @@ const aiPayloadStr = JSON.stringify(aiPayload);
 });
 vm.runInContext("updateCaseBio('c1','age',''); updateCaseBio('c1','weightKg',''); updateCaseBio('c1','cr',''); updateCaseBio('c1','crDate','');", sandbox);
 
-// Saved AI feedback (Phase 2.1, 2026-07-21): deletable to trash — but NEVER
-// exported and (above) never fed back into the AI payload. Collapsed by
-// default (2026-07-22): date + first-line preview, tap the header to expand.
+// Saved AI feedback (Phase 2.1, 2026-07-21): NEVER exported and (above) never
+// fed back into the AI payload. Collapsed by default (2026-07-22): date +
+// first-line preview, tap the header to expand. No delete button (2026-07-26).
 if (!detailHtml.includes("toggleAiLog('ai-one')")) fail("saved AI feedback missing collapse toggle");
 if (!detailHtml.includes("ai-fb-keep")) fail("collapsed AI feedback missing preview");
 if (detailHtml.includes("ai-fb-second-line")) fail("collapsed AI feedback shows full text");
 if (detailHtml.includes(vm.runInContext("STR.aiUnreviewed", sandbox))) fail("collapsed AI feedback shows unreviewed mark");
-if (!detailHtml.includes("deleteAiLog('c1','ai-one')")) fail("saved AI feedback missing delete");
+if (detailHtml.includes("deleteAiLog(")) fail("AI feedback delete button should be gone");
 const detailAiOpen = vm.runInContext("toggleAiLog('ai-one'); renderDetail('c1')", sandbox);
 if (!detailAiOpen.includes("ai-fb-second-line")) fail("expanded AI feedback missing full text");
 if (!detailAiOpen.includes(vm.runInContext("STR.aiUnreviewed", sandbox))) fail("expanded AI feedback missing unreviewed mark");
@@ -675,6 +678,14 @@ vm.runInContext("DB.config.chartCats.push({ id:'cat-reha', name:'REHA', kind:'ev
 const cellSheet2 = vm.runInContext("renderWeekCellSheet()", sandbox);
 if (!cellSheet2.includes("setCellDraftType('cat:cat-reha')")) fail("new category did not extend cell menu");
 vm.runInContext("DB.config.chartCats = DB.config.chartCats.filter(function(c){return c.id!=='cat-reha'});", sandbox);
+
+// Delete confirmation (2026-07-26): item deletes ask first; cancelling keeps
+// the item. The sandbox confirm defaults to true for every other test here.
+if (!vm.runInContext("typeof STR.deleteItemConfirm === 'string' && STR.deleteItemConfirm.length > 0", sandbox)) fail("missing deleteItemConfirm label");
+vm.runInContext("confirm = function(){ return false; };", sandbox);
+vm.runInContext("deleteTodo('c1','nf')", sandbox);
+if (!vm.runInContext("DB.cases.find(function(c){return c.id==='c1'}).todos.some(function(t){return t.id==='nf'})", sandbox)) fail("cancelled delete removed the task");
+vm.runInContext("confirm = function(){ return true; };", sandbox);
 
 vm.runInContext("VIEW.searchQuery='uti'; VIEW.searchMonth=''; VIEW.searchStageId='';", sandbox);
 const searchHits = vm.runInContext("renderSearch()", sandbox);

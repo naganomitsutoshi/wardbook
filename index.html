@@ -2164,6 +2164,7 @@ const STR = {
   emptyBoard:"入院患者がいません。「＋ 入院を登録」から始めます。",
   deleteCase:"この症例を削除",
   deleteConfirm:"この症例を完全に削除します。よろしいですか？",
+  deleteItemConfirm:"\u3053\u306e\u9805\u76ee\u3092\u524a\u9664\u3057\u307e\u3059\u3002\u3088\u308d\u3057\u3044\u3067\u3059\u304b\uff1f",
   dueLabel:"指定日",
   timeLabel:"時刻",
   toPendingBtn:"済→待ちに",
@@ -3654,6 +3655,7 @@ function deleteListItem(prop, type, caseId, itemId){
 }
 
 function removeDxTag(caseId, index){
+  if (typeof confirm === "function" && !confirm(STR.deleteItemConfirm)) return;
   mutateCase(caseId, function(c){
     c.dxTags = c.dxTags.filter(function(x, i){ return i !== index; });
   });
@@ -3675,6 +3677,7 @@ function updateNoteText(caseId, itemId, value){
 }
 
 function deleteNote(caseId, itemId){
+  if (typeof confirm === "function" && !confirm(STR.deleteItemConfirm)) return;
   deleteListItem("notes", "note", caseId, itemId);
 }
 
@@ -3706,6 +3709,7 @@ function taskToPending(caseId, itemId){
 }
 
 function deleteTodo(caseId, itemId){
+  if (typeof confirm === "function" && !confirm(STR.deleteItemConfirm)) return;
   deleteListItem("todos", "todo", caseId, itemId);
 }
 
@@ -3722,6 +3726,7 @@ function updatePendingBackOn(caseId, itemId, value){
 }
 
 function deletePending(caseId, itemId){
+  if (typeof confirm === "function" && !confirm(STR.deleteItemConfirm)) return;
   deleteListItem("pendings", "pending", caseId, itemId);
 }
 
@@ -4111,6 +4116,7 @@ function patchChartItem(caseId, itemId, kind, fn){
 }
 
 function removeChartItem(caseId, itemId){
+  if (typeof confirm === "function" && !confirm(STR.deleteItemConfirm)) return;
   patchChartItem(caseId, itemId, "", function(item, c){
     pushTrashEntry("chartItem", c, item);
     c.chart.items = c.chart.items.filter(function(row){ return row.id !== itemId; });
@@ -5124,6 +5130,8 @@ function runAiFeedback(caseId){
 
 // Saved logs are collapsed by default (date + first-line preview); tapping the
 // header toggles. Expansion state lives in VIEW only (UI state, not synced).
+// AI logs have no delete button by design (2026-07-26): mis-taps were erasing
+// feedback. Old kind:"ai" trash entries stay restorable.
 function aiLogOpen(itemId){
   var map = isObj(VIEW.aiOpen) ? VIEW.aiOpen : {};
   return !!map[itemId];
@@ -5163,16 +5171,12 @@ function renderAiPanel(c){
     var head = '<div class="text" style="cursor:pointer" onclick="toggleAiLog(\'' + esc(item.id) + '\')">' +
       (open ? '▾ ' : '▸ ') + esc(item.date + (open ? '' : ' ' + aiLogPreview(item.text))) + '</div>';
     var body = open ? '<div class="text" style="white-space:pre-wrap">' + esc(item.text) + '</div><div class="faint">' + esc(STR.aiUnreviewed) + '</div>' : '';
-    return '<div class="lineitem"><div class="linegrow">' + head + body + '</div><button class="iconbtn" onclick="deleteAiLog(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
+    return '<div class="lineitem"><div class="linegrow">' + head + body + '</div></div>';
   }).join('');
   return '<section class="panelcard sec-ai anchor" id="anc-ai"><div class="one">' + esc(STR.aiPanel) + '</div><div class="stack" style="margin-top:10px">' +
     '<button class="ghostbtn" ' + (busy ? 'disabled ' : '') + 'onclick="runAiFeedback(\'' + esc(c.id) + '\')">' + esc(STR.aiRun) + '</button>' +
     status + logs +
   '</div></section>';
-}
-
-function deleteAiLog(caseId, itemId){
-  deleteListItem("aiLogs", "ai", caseId, itemId);
 }
 
 function renderSectionCard(title, body, addId, placeholder, addFn, caseId, secClass, anchorId){
