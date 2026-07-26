@@ -671,6 +671,79 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(calcCase.calcLogs.find((x) => x.id === "cl3").date, "2026-07-08");
   const calcTwice = L.normalizeCase(JSON.parse(JSON.stringify(calcCase)), "2026-07-08T11:00:00.000Z", "2026-07-08");
   assert.strictEqual(JSON.stringify(calcTwice), JSON.stringify(calcCase));
+
+  // --- learning conquest maps (2026-07-27) ---------------------------------
+  // Tag parsing from the coach's 分野:/領域: lines (position-independent).
+  assert.strictEqual(L.learnFieldFromText("良い点...\n分野: 循環器\n領域: なし"), "循環器");
+  assert.strictEqual(L.learnFieldFromText("分野: 循環器（心不全）"), "循環器"); // extra text still matches
+  assert.strictEqual(L.learnFieldFromText("no tag here"), "");
+  assert.strictEqual(L.learnDomainFromText("領域: 家族志向のケア"), 6);
+  assert.strictEqual(L.learnDomainFromText("領域: なし"), 0);
+  assert.strictEqual(L.learnDomainFromText("領域: 緩和・人生の最終段階"), 16);
+  assert.strictEqual(L.canonOrganField("循環器"), "循環器");
+  assert.strictEqual(L.canonOrganField("架空科"), "");
+  assert.strictEqual(L.canonPfDomain(16), 16);
+  assert.strictEqual(L.canonPfDomain(17), 0);
+  assert.strictEqual(L.normalizeViewTab("learn"), "learn"); // tab is registered
+
+  // AI entry gains field/domain/mastered on normalize; field defaults from the
+  // text tag but an explicit field wins; mastered/reviewCount ride through;
+  // re-normalize is byte-stable.
+  const learnCase = L.normalizeCase({
+    id:"cl2", label:"cap", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-05T10:00:00.000Z",
+    aiLogs:[
+      { id:"L1", text:"fb\n分野: 循環器\n領域: なし", date:"2026-07-07" },
+      { id:"L2", text:"fb\n分野: 循環器", date:"2026-07-08", field:"感染症", mastered:true, reviewCount:2, lastReviewedOn:"2026-07-08" },
+      { id:"L3", text:"fb no tag", date:"2026-07-09" }
+    ]
+  }, "2026-07-10T10:00:00.000Z", "2026-07-10");
+  const byId = {}; learnCase.aiLogs.forEach((x) => { byId[x.id] = x; });
+  assert.strictEqual(byId.L1.field, "循環器");
+  assert.strictEqual(byId.L1.domain, 0);
+  assert.strictEqual(byId.L2.field, "感染症"); // explicit override beats the text's 循環器
+  assert.strictEqual(byId.L2.mastered, true);
+  assert.strictEqual(byId.L2.reviewCount, 2);
+  assert.strictEqual(byId.L3.field, "");
+  const learnTwice = L.normalizeCase(JSON.parse(JSON.stringify(learnCase)), "2026-07-10T11:00:00.000Z", "2026-07-10");
+  assert.strictEqual(JSON.stringify(learnTwice), JSON.stringify(learnCase));
+
+  // Map states + stats across cases.
+  const learnCases = [
+    { id:"a", label:"A", aiLogs:[
+      { id:"a1", text:"fb", date:"2026-07-05", field:"循環器", domain:6, mastered:true },
+      { id:"a2", text:"fb", date:"2026-07-06", field:"循環器", domain:6, mastered:true }
+    ]},
+    { id:"b", label:"B", aiLogs:[
+      { id:"b1", text:"fb", date:"2026-07-07", field:"感染症", domain:0, mastered:false },
+      { id:"b2", text:"fb", date:"2026-07-08", field:"感染症", domain:0, mastered:true }
+    ]}
+  ];
+  const learnItems = L.collectLearnings(learnCases);
+  assert.strictEqual(learnItems.length, 4);
+  assert.strictEqual(learnItems[0].id, "b2"); // newest first
+  const fieldMap = L.learnMapState(learnItems, "field");
+  assert.strictEqual(fieldMap.find((d) => d.name === "循環器").state, "controlled"); // 2/2
+  assert.strictEqual(fieldMap.find((d) => d.name === "感染症").state, "frontier");    // 1/2
+  assert.strictEqual(fieldMap.find((d) => d.name === "呼吸器").state, "fog");          // 0
+  assert.strictEqual(L.learnMapState(learnItems, "domain")[5].state, "controlled");    // domain 6
+
+  const learnStats = L.learnStats(learnCases, "2026-07-08");
+  assert.strictEqual(learnStats.total, 4);
+  assert.strictEqual(learnStats.masteredCount, 3);
+  assert.strictEqual(learnStats.fieldControlled, 1);
+  assert.strictEqual(learnStats.domainControlled, 1);
+  assert.strictEqual(learnStats.currentStreak, 4); // 07-05..08 ending today
+
+  // Review queue: only unmastered.
+  const q = L.learnReviewQueue(learnItems);
+  assert.strictEqual(q.length, 1);
+  assert.strictEqual(q[0].id, "b1");
+
+  // Badges: milestone tiers (2 controlled domains earns the first tier).
+  const learnBadges = L.learnBadges(learnStats);
+  assert.strictEqual(learnBadges.find((b) => b.metric === "total").next, 10);
+  assert.strictEqual(learnBadges.find((b) => b.metric === "controlled").value, 2);
+  assert.strictEqual(learnBadges.find((b) => b.metric === "controlled").earned, 1);
   // Problem tombstone/merge is kind-agnostic (rides the shared merge).
   const prA = { kind:"problem", id:"q", text:"a", status:"active", createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-02T00:00:00.000Z" };
   const prB = { kind:"problem", id:"q", text:"b", status:"resolved", createdAt:"2026-07-01T00:00:00.000Z", updatedAt:"2026-07-03T00:00:00.000Z" };

@@ -658,7 +658,16 @@ function normalizeEntryContent(raw, ctx){
     // Saved AI feedback (Phase 2.1, CEO 2026-07-21): date fixed at creation,
     // text immutable. Rides the entries store like notes (E2E-encrypted sync).
     var aiDate = safeDate(row.date, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
-    return { kind:"ai", id:id, text:text, date:aiDate };
+    // Learning annotations (2026-07-27, conquest maps). field/domain default
+    // from the tag lines in the text but, once present on the row, are kept so a
+    // manual reassignment wins and re-normalize is byte-stable (no dirty ping-
+    // pong). mastered/reviewCount/lastReviewedOn are the review mechanic — the
+    // user's annotations, never the AI text, and never sent back to the AI.
+    var aiField = Object.prototype.hasOwnProperty.call(row, "field") ? canonOrganField(row.field) : learnFieldFromText(text);
+    var aiDomain = Object.prototype.hasOwnProperty.call(row, "domain") ? canonPfDomain(row.domain) : learnDomainFromText(text);
+    var aiRev = isFinite(Number(row.reviewCount)) && Number(row.reviewCount) > 0 ? Math.floor(Number(row.reviewCount)) : 0;
+    var aiLast = row.lastReviewedOn ? safeDate(row.lastReviewedOn, "") : "";
+    return { kind:"ai", id:id, text:text, date:aiDate, field:aiField, domain:aiDomain, mastered:row.mastered === true, reviewCount:aiRev, lastReviewedOn:aiLast };
   }
   if (row.kind === "calc") {
     if (!text) return null;
@@ -765,7 +774,7 @@ function entriesFromMirrors(c, ctx){
   cloneArr(c && c.seeds).forEach(function(x){ rows.push({ kind:"seed", id:x.id, text:x.text, createdOn:x.createdOn, snapshot:x.snapshot, sentAt:x.sentAt }); });
   cloneArr(c && c.problems).forEach(function(x){ rows.push({ kind:"problem", id:x.id, text:x.text, status:x.status }); });
   cloneArr(c && c.notes).forEach(function(x){ rows.push({ kind:"note", id:x.id, text:x.text, date:x.date }); });
-  cloneArr(c && c.aiLogs).forEach(function(x){ rows.push({ kind:"ai", id:x.id, text:x.text, date:x.date }); });
+  cloneArr(c && c.aiLogs).forEach(function(x){ rows.push({ kind:"ai", id:x.id, text:x.text, date:x.date, field:x.field, domain:x.domain, mastered:x.mastered, reviewCount:x.reviewCount, lastReviewedOn:x.lastReviewedOn }); });
   cloneArr(c && c.calcLogs).forEach(function(x){ rows.push({ kind:"calc", id:x.id, text:x.text, date:x.date }); });
   cloneArr(c && c.chart && c.chart.items).forEach(function(x){
     var kind = x.kind === "band" ? "chartBand" : x.kind === "event" ? "chartEvent" : "chartValue";
@@ -792,7 +801,7 @@ function entryRebuildMirrors(c){
   });
   c.problems = live.filter(function(e){ return e.kind === "problem"; }).map(function(e){ return { id:e.id, text:e.text, status:e.status }; });
   c.notes = live.filter(function(e){ return e.kind === "note"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
-  c.aiLogs = live.filter(function(e){ return e.kind === "ai"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
+  c.aiLogs = live.filter(function(e){ return e.kind === "ai"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date, field:e.field, domain:e.domain, mastered:e.mastered, reviewCount:e.reviewCount, lastReviewedOn:e.lastReviewedOn }; });
   c.calcLogs = live.filter(function(e){ return e.kind === "calc"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
   c.chart = { items: live.filter(function(e){ return e.kind === "chartValue" || e.kind === "chartBand" || e.kind === "chartEvent"; }).map(function(e){
     if (e.kind === "chartValue") return { id:e.id, catId:e.catId, kind:"value", name:e.name, values:JSON.parse(JSON.stringify(e.values)), planned:JSON.parse(JSON.stringify(e.planned)) };
@@ -1995,6 +2004,164 @@ function calcWarnKeys(tool, values){
   return out;
 }
 
+// ---- learning conquest maps (cross-case AI feedback) ----------------------
+// The 学び tab turns every saved AI-feedback item (kind:"ai") into territory on
+// two fixed maps. Nothing new is stored: each item grows its own field/domain/
+// mastered annotations and the maps are derived, so the collection survives a
+// case being discharged (discharged cases stay in DB.cases; only a hard delete
+// removes its share). Territory is "controlled" only once every learning in a
+// domain is mastered — collecting alone widens the frontier, it does not conquer.
+// CEO 2026-07-27 accepted the 16領域 map duplicating the Vault portfolio hub.
+// All pure -> stats/streaks/badges tested without a DOM.
+// Design note: 5_開発部/設計/Wardbook_学習の征服マップ.md
+
+// Map 1: organ/system fields (internal-medicine J-OSLER, 13). The names double
+// as ids: the AI tags with a name and we store the matched name.
+var ORGAN_FIELDS = ["総合内科", "消化器", "循環器", "内分泌", "代謝", "腎臓", "呼吸器", "血液", "神経", "アレルギー", "膠原病", "感染症", "救急"];
+// Map 2: family-medicine competencies (16), 1-indexed to match the portfolio hub.
+var PF_DOMAINS = [
+  "未分化な健康問題", "予防医学と健康増進", "慢性疾患のケア", "長期的な全人的関係に基づくケア",
+  "患者中心の医療", "家族志向のケア", "地域志向のプライマリ・ケア", "障害とリハビリテーション",
+  "EBMの実践", "メンタルヘルス", "SDH・アドボカシー", "複雑困難・多疾患併存",
+  "チーム医療・移行", "プロフェッショナリズム・倫理", "セクシャルヘルス・思春期", "緩和・人生の最終段階"
+];
+
+// Coerce a stored/typed tag to a canonical value ("" / 0 = uncategorised).
+function canonOrganField(raw){
+  var v = String(raw == null ? "" : raw).trim();
+  if (!v) return "";
+  for (var i = 0; i < ORGAN_FIELDS.length; i++) if (v.indexOf(ORGAN_FIELDS[i]) !== -1) return ORGAN_FIELDS[i];
+  return "";
+}
+function canonPfDomain(raw){
+  var n = Math.floor(Number(raw));
+  return isFinite(n) && n >= 1 && n <= 16 ? n : 0;
+}
+// One tag line each, found anywhere in the AI text (position-independent).
+function learnFieldFromText(text){
+  var m = String(text || "").match(/^\s*分野[:：]\s*(.+)$/m);
+  return m ? canonOrganField(m[1]) : "";
+}
+function learnDomainFromText(text){
+  var m = String(text || "").match(/^\s*領域[:：]\s*(.+)$/m);
+  if (!m) return 0;
+  var s = m[1];
+  if (/なし|無し|該当なし/.test(s)) return 0;
+  for (var i = 0; i < PF_DOMAINS.length; i++) if (s.indexOf(PF_DOMAINS[i]) !== -1) return i + 1;
+  return 0;
+}
+
+// Flatten every case's aiLogs into learning items, newest first.
+function collectLearnings(cases){
+  var out = [];
+  cloneArr(cases).forEach(function(c){
+    if (!c || !c.aiLogs) return;
+    var label = typeof c.label === "string" ? c.label : "";
+    cloneArr(c.aiLogs).forEach(function(x){
+      if (!x || !x.id || typeof x.text !== "string" || !x.text) return;
+      out.push({
+        caseId:c.id, caseLabel:label, id:x.id, text:x.text, date:x.date || "",
+        field:canonOrganField(x.field), domain:canonPfDomain(x.domain),
+        mastered:x.mastered === true, reviewCount:isFinite(x.reviewCount) ? x.reviewCount : 0,
+        lastReviewedOn:typeof x.lastReviewedOn === "string" ? x.lastReviewedOn : ""
+      });
+    });
+  });
+  out.sort(function(a, b){
+    if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+    return a.id < b.id ? 1 : -1;
+  });
+  return out;
+}
+
+// Per-domain state on one map: fog (no learnings) / frontier (some unmastered) /
+// controlled (>=1 and all mastered). Uncategorised items belong to no domain.
+function learnMapState(items, mapKey){
+  var isField = mapKey === "field";
+  var names = isField ? ORGAN_FIELDS : PF_DOMAINS;
+  var total = {}, mast = {};
+  cloneArr(items).forEach(function(it){
+    var k = isField ? it.field : it.domain;
+    if (isField ? !k : !(k >= 1)) return;
+    total[k] = (total[k] || 0) + 1;
+    if (it.mastered) mast[k] = (mast[k] || 0) + 1;
+  });
+  return names.map(function(name, i){
+    var key = isField ? name : i + 1;
+    var t = total[key] || 0, m = mast[key] || 0;
+    return { key:key, name:name, total:t, mastered:m, state:(t === 0 ? "fog" : (m >= t ? "controlled" : "frontier")) };
+  });
+}
+
+// current = a streak ending today or yesterday (still alive); longest = best ever.
+function learnStreaks(dateList, todayIso){
+  var set = {};
+  cloneArr(dateList).forEach(function(d){ if (/^\d{4}-\d{2}-\d{2}$/.test(d)) set[d] = true; });
+  var uniq = Object.keys(set).sort();
+  var longest = 0, run = 0, prev = null;
+  uniq.forEach(function(d){
+    run = (prev && computeDay(prev, d) === 2) ? run + 1 : 1;
+    if (run > longest) longest = run;
+    prev = d;
+  });
+  var current = 0;
+  if (uniq.length) {
+    var gap = computeDay(uniq[uniq.length - 1], todayIso); // 1 = today, 2 = yesterday
+    if (gap === 1 || gap === 2) {
+      current = 1;
+      for (var i = uniq.length - 2; i >= 0; i--) {
+        if (computeDay(uniq[i], uniq[i + 1]) === 2) current++; else break;
+      }
+    }
+  }
+  return { current:current, longest:longest };
+}
+
+// Unmastered items, least-recently-reviewed first (so a "まだ" sinks it and the
+// oldest untouched learnings resurface). Optional cap for the queue view.
+function learnReviewQueue(items, limit){
+  var pending = cloneArr(items).filter(function(it){ return !it.mastered; });
+  pending.sort(function(a, b){
+    var la = a.lastReviewedOn || "", lb = b.lastReviewedOn || "";
+    if (la !== lb) return la < lb ? -1 : 1;
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    return a.id < b.id ? -1 : 1;
+  });
+  return typeof limit === "number" && limit > 0 ? pending.slice(0, limit) : pending;
+}
+
+function learnStats(cases, todayIso){
+  var items = collectLearnings(cases);
+  var caseSet = {}, masteredCount = 0, dates = [];
+  items.forEach(function(it){
+    caseSet[it.caseId] = true;
+    if (it.mastered) masteredCount++;
+    dates.push(it.date);
+  });
+  var fieldMap = learnMapState(items, "field");
+  var domainMap = learnMapState(items, "domain");
+  function controlled(map){ return map.filter(function(d){ return d.state === "controlled"; }).length; }
+  var s = learnStreaks(dates, todayIso);
+  return {
+    total:items.length, caseCount:Object.keys(caseSet).length, masteredCount:masteredCount,
+    fieldMap:fieldMap, domainMap:domainMap,
+    fieldControlled:controlled(fieldMap), fieldTotal:fieldMap.length,
+    domainControlled:controlled(domainMap), domainTotal:domainMap.length,
+    currentStreak:s.current, longestStreak:s.longest, items:items
+  };
+}
+
+// Milestone tiers per metric -> earned tier + next target (badges row).
+var LEARN_TIERS = { total:[10, 25, 50, 100], cases:[5, 15, 30], streak:[3, 7, 14], controlled:[1, 5, 10, 20] };
+function learnBadges(stats){
+  var value = { total:stats.total, cases:stats.caseCount, streak:stats.longestStreak, controlled:stats.fieldControlled + stats.domainControlled };
+  return Object.keys(LEARN_TIERS).map(function(metric){
+    var v = value[metric], earned = 0, next = null;
+    LEARN_TIERS[metric].forEach(function(n){ if (v >= n) earned = n; else if (next === null) next = n; });
+    return { metric:metric, value:v, earned:earned, next:next };
+  });
+}
+
 // Top-level screens are a registry, same idea as CALC_TOOLS: this list is the
 // only place that knows which tabs exist and in what order. The chip row, the
 // body dispatch (TAB_BODY) and the on-enter hooks (TAB_ENTER) all read from it,
@@ -2004,7 +2171,8 @@ var VIEW_TABS = [
   { id:"board", labelKey:"boardView" },
   { id:"day",   labelKey:"dayView" },
   { id:"week",  labelKey:"weekView" },
-  { id:"calc",  labelKey:"calcBtn", scratch:true }
+  { id:"calc",  labelKey:"calcBtn", scratch:true },
+  { id:"learn", labelKey:"learnView" }
 ];
 
 function viewTabById(id){
@@ -2034,6 +2202,18 @@ if (typeof module !== "undefined") {
     calcAdropItems:calcAdropItems,
     calcAdropBandKey:calcAdropBandKey,
     calcToolById:calcToolById,
+    ORGAN_FIELDS:ORGAN_FIELDS,
+    PF_DOMAINS:PF_DOMAINS,
+    canonOrganField:canonOrganField,
+    canonPfDomain:canonPfDomain,
+    learnFieldFromText:learnFieldFromText,
+    learnDomainFromText:learnDomainFromText,
+    collectLearnings:collectLearnings,
+    learnMapState:learnMapState,
+    learnStreaks:learnStreaks,
+    learnReviewQueue:learnReviewQueue,
+    learnStats:learnStats,
+    learnBadges:learnBadges,
     viewTabById:viewTabById,
     normalizeViewTab:normalizeViewTab,
     VIEW_TABS:VIEW_TABS,
@@ -2171,6 +2351,28 @@ const STR = {
   calcSaveBtn:"この計算を記録に残す",
   calcSavedNote:"算出日つきで記録に残します（詳細画面の「計算の記録」で見返せます）",
   calcLogPanel:"計算の記録",
+  learnView:"学び",
+  learnEmpty:"まだ学びがありません。症例の「指導医AI」を実行すると、ここに自動で集まります",
+  learnMasteredUnit:"身についた",
+  learnFieldMap:"臓器・システム分野",
+  learnDomainMap:"到達領域（家庭医療）",
+  learnCasesUnit:"症例分",
+  learnStreakUnit:"日連続",
+  learnReview:"復習キュー",
+  learnReviewNote:"読み返して「身についた／まだ」を返すと領土が塗られます",
+  learnReviewed:"復習",
+  learnGotIt:"身についた",
+  learnNotYet:"まだ",
+  learnUndoMaster:"未修得に戻す",
+  learnAll:"すべての学び",
+  learnOpenCase:"元の症例を開く",
+  learnUncat:"未分類",
+  learnDomainNone:"領域なし",
+  learnBadgeGap:" あと",
+  learnMetric_total:"学び",
+  learnMetric_cases:"症例",
+  learnMetric_streak:"連続",
+  learnMetric_controlled:"支配",
   unset:"未設定",
   addDxTag:"＋病名タグ",
   dxTagPh:"病名タグ（確定病名で検索用）",
@@ -2286,7 +2488,7 @@ Object.assign(STR, {
   aiPromptSection:"\u6307\u5c0e\u533bAI\u3078\u306e\u6307\u793a\u6587\uff08\u30d7\u30ed\u30f3\u30d7\u30c8\uff09",
   aiPromptNote:"\u3053\u306e\u6307\u793a\u6587\u304c\u305d\u306e\u307e\u307eAI\u306b\u9001\u3089\u308c\u307e\u3059\u3002\u3053\u3053\u3067\u89b3\u70b9\u3084\u6587\u91cf\u3092\u8abf\u6574\u3067\u304d\u307e\u3059\u3002\u3053\u306e\u7aef\u672b\u306e\u307f\u306b\u4fdd\u5b58\uff08\u4ed6\u7aef\u672b\u306b\u306f\u540c\u671f\u3055\u308c\u307e\u305b\u3093\uff09\u3002\u7a7a\u306b\u3059\u308b\u3068\u521d\u671f\u5024\u306b\u623b\u308a\u307e\u3059",
   aiPromptReset:"\u521d\u671f\u5024\u306b\u623b\u3059",
-  aiPromptDefault:"\u3042\u306a\u305f\u306f\u65e5\u672c\u306e\u7dcf\u5408\u8a3a\u7642\u79d1\u306e\u6307\u5c0e\u533b\u3067\u3059\u3002\u5c02\u653b\u533b\u304c\u66f8\u3044\u305f\u5165\u9662\u75c7\u4f8b\u306e\u8a18\u9332\uff08\u5165\u9662\u6642\u8a18\u9332\u3068\u65e5\u3005\u306e\u8a18\u9332\uff09\u3092\u8aad\u307f\u3001\u6559\u80b2\u7684\u30d5\u30a3\u30fc\u30c9\u30d0\u30c3\u30af\u3092\u8fd4\u3057\u3066\u304f\u3060\u3055\u3044\u3002\n\u524d\u63d0\uff1a\u8a18\u9332\u306f\u533f\u540d\u5316\u6e08\u307f\u3067\u3001\u6c0f\u540d\u30fbID\u7b49\u306e\u500b\u4eba\u8b58\u5225\u5b50\u306f\u542b\u307e\u308c\u307e\u305b\u3093\u3002\u8a18\u9332\u306f\u8981\u70b9\u30e1\u30e2\u3067\u3042\u308a\u3001\u30ab\u30eb\u30c6\u5168\u6587\u3067\u306f\u3042\u308a\u307e\u305b\u3093\u3002\n\u51fa\u529b\u306f\u65e5\u672c\u8a9e\u3067\u3001\u6b21\u306e4\u7bc0\u3092\u898b\u51fa\u3057\u3064\u304d\u3067\u7c21\u6f54\u306b\uff08\u5168\u4f53\u3067400\u301c600\u5b57\u76ee\u5b89\uff09\uff1a\n1. \u826f\u3044\u70b9\uff08\u8a18\u9332\u30fb\u30a2\u30bb\u30b9\u30e1\u30f3\u30c8\u3067\u8a55\u4fa1\u3067\u304d\u308b\u70b9\uff09\n2. \u691c\u8a0e\u3059\u3079\u304d\u70b9\uff08\u9451\u5225\u30fb\u8a55\u4fa1\u30fb\u30de\u30cd\u30b8\u30e1\u30f3\u30c8\u3067\u8a70\u3081\u304c\u7518\u3044\u70b9\uff09\n3. \u898b\u843d\u3068\u3057\u30ea\u30b9\u30af\uff08\u3053\u306e\u8a18\u9332\u304b\u3089\u60f3\u8d77\u3059\u3079\u304d\u5371\u967a\u306a\u898b\u843d\u3068\u3057\u30fb\u30ec\u30c3\u30c9\u30d5\u30e9\u30b0\uff09\n4. \u6b21\u306e\u4e00\u624b\uff08\u660e\u65e5\u306e\u56de\u8a3a\u3067\u78ba\u8a8d\u30fb\u5b9f\u884c\u3059\u3079\u304d\u5177\u4f53\u7684\u30a2\u30af\u30b7\u30e7\u30f3\uff09\n\u6ce8\u610f\uff1a\u8a18\u9332\u306b\u306a\u3044\u60c5\u5831\u3092\u63a8\u6e2c\u3067\u65ad\u5b9a\u3057\u306a\u3044\u3002\u4e0d\u8db3\u304c\u3042\u308c\u3070\u300c\u8a18\u9332\u306b\u301c\u306e\u8a18\u8f09\u304c\u306a\u3044\u300d\u3068\u6307\u6458\u3059\u308b\u3002\u65ad\u5b9a\u7684\u306a\u8a3a\u65ad\u306e\u5ba3\u8a00\u306f\u305b\u305a\u3001\u6559\u80b2\u7684\u306a\u554f\u3044\u304b\u3051\u3092\u4ea4\u3048\u308b\u3002"
+  aiPromptDefault:"\u3042\u306a\u305f\u306f\u65e5\u672c\u306e\u7dcf\u5408\u8a3a\u7642\u79d1\u306e\u6307\u5c0e\u533b\u3067\u3059\u3002\u5c02\u653b\u533b\u304c\u66f8\u3044\u305f\u5165\u9662\u75c7\u4f8b\u306e\u8a18\u9332\uff08\u5165\u9662\u6642\u8a18\u9332\u3068\u65e5\u3005\u306e\u8a18\u9332\uff09\u3092\u8aad\u307f\u3001\u6559\u80b2\u7684\u30d5\u30a3\u30fc\u30c9\u30d0\u30c3\u30af\u3092\u8fd4\u3057\u3066\u304f\u3060\u3055\u3044\u3002\n\u524d\u63d0\uff1a\u8a18\u9332\u306f\u533f\u540d\u5316\u6e08\u307f\u3067\u3001\u6c0f\u540d\u30fbID\u7b49\u306e\u500b\u4eba\u8b58\u5225\u5b50\u306f\u542b\u307e\u308c\u307e\u305b\u3093\u3002\u8a18\u9332\u306f\u8981\u70b9\u30e1\u30e2\u3067\u3042\u308a\u3001\u30ab\u30eb\u30c6\u5168\u6587\u3067\u306f\u3042\u308a\u307e\u305b\u3093\u3002\n\u51fa\u529b\u306f\u65e5\u672c\u8a9e\u3067\u3001\u6b21\u306e4\u7bc0\u3092\u898b\u51fa\u3057\u3064\u304d\u3067\u7c21\u6f54\u306b\uff08\u5168\u4f53\u3067400\u301c600\u5b57\u76ee\u5b89\uff09\uff1a\n1. \u826f\u3044\u70b9\uff08\u8a18\u9332\u30fb\u30a2\u30bb\u30b9\u30e1\u30f3\u30c8\u3067\u8a55\u4fa1\u3067\u304d\u308b\u70b9\uff09\n2. \u691c\u8a0e\u3059\u3079\u304d\u70b9\uff08\u9451\u5225\u30fb\u8a55\u4fa1\u30fb\u30de\u30cd\u30b8\u30e1\u30f3\u30c8\u3067\u8a70\u3081\u304c\u7518\u3044\u70b9\uff09\n3. \u898b\u843d\u3068\u3057\u30ea\u30b9\u30af\uff08\u3053\u306e\u8a18\u9332\u304b\u3089\u60f3\u8d77\u3059\u3079\u304d\u5371\u967a\u306a\u898b\u843d\u3068\u3057\u30fb\u30ec\u30c3\u30c9\u30d5\u30e9\u30b0\uff09\n4. \u6b21\u306e\u4e00\u624b\uff08\u660e\u65e5\u306e\u56de\u8a3a\u3067\u78ba\u8a8d\u30fb\u5b9f\u884c\u3059\u3079\u304d\u5177\u4f53\u7684\u30a2\u30af\u30b7\u30e7\u30f3\uff09\n\u6ce8\u610f\uff1a\u8a18\u9332\u306b\u306a\u3044\u60c5\u5831\u3092\u63a8\u6e2c\u3067\u65ad\u5b9a\u3057\u306a\u3044\u3002\u4e0d\u8db3\u304c\u3042\u308c\u3070\u300c\u8a18\u9332\u306b\u301c\u306e\u8a18\u8f09\u304c\u306a\u3044\u300d\u3068\u6307\u6458\u3059\u308b\u3002\u65ad\u5b9a\u7684\u306a\u8a3a\u65ad\u306e\u5ba3\u8a00\u306f\u305b\u305a\u3001\u6559\u80b2\u7684\u306a\u554f\u3044\u304b\u3051\u3092\u4ea4\u3048\u308b\u3002\n\u307e\u305f\u3001\u5b66\u3073\u3092\u5730\u56f3\u306b\u5206\u985e\u3059\u308b\u305f\u3081\u3001\u51fa\u529b\u306e\u4e2d\u306b\u5fc5\u305a\u6b21\u306e2\u884c\u3092\u5165\u308c\u308b\u3002\u300e\u5206\u91ce: \u300f\u306b \u7dcf\u5408\u5185\u79d1/\u6d88\u5316\u5668/\u5faa\u74b0\u5668/\u5185\u5206\u6ccc/\u4ee3\u8b1d/\u814e\u81d3/\u547c\u5438\u5668/\u8840\u6db2/\u795e\u7d4c/\u30a2\u30ec\u30eb\u30ae\u30fc/\u81a0\u539f\u75c5/\u611f\u67d3\u75c7/\u6551\u6025 \u304b\u3089\u6700\u3082\u8fd1\u30441\u3064\u3002\u300e\u9818\u57df: \u300f\u306b \u672a\u5206\u5316\u306a\u5065\u5eb7\u554f\u984c/\u4e88\u9632\u533b\u5b66\u3068\u5065\u5eb7\u5897\u9032/\u6162\u6027\u75be\u60a3\u306e\u30b1\u30a2/\u9577\u671f\u7684\u306a\u5168\u4eba\u7684\u95a2\u4fc2\u306b\u57fa\u3065\u304f\u30b1\u30a2/\u60a3\u8005\u4e2d\u5fc3\u306e\u533b\u7642/\u5bb6\u65cf\u5fd7\u5411\u306e\u30b1\u30a2/\u5730\u57df\u5fd7\u5411\u306e\u30d7\u30e9\u30a4\u30de\u30ea\u30fb\u30b1\u30a2/\u969c\u5bb3\u3068\u30ea\u30cf\u30d3\u30ea\u30c6\u30fc\u30b7\u30e7\u30f3/EBM\u306e\u5b9f\u8df5/\u30e1\u30f3\u30bf\u30eb\u30d8\u30eb\u30b9/SDH\u30fb\u30a2\u30c9\u30dc\u30ab\u30b7\u30fc/\u8907\u96d1\u56f0\u96e3\u30fb\u591a\u75be\u60a3\u4f75\u5b58/\u30c1\u30fc\u30e0\u533b\u7642\u30fb\u79fb\u884c/\u30d7\u30ed\u30d5\u30a7\u30c3\u30b7\u30e7\u30ca\u30ea\u30ba\u30e0\u30fb\u502b\u7406/\u30bb\u30af\u30b7\u30e3\u30eb\u30d8\u30eb\u30b9\u30fb\u601d\u6625\u671f/\u7de9\u548c\u30fb\u4eba\u751f\u306e\u6700\u7d42\u6bb5\u968e \u306e\u3046\u3061\u8a72\u5f53\u3059\u308b1\u3064\u3001\u306a\u3051\u308c\u3070\u300e\u9818\u57df: \u306a\u3057\u300f\u3002"
 });
 
 let DB = normalizeState(null);
@@ -3663,6 +3865,32 @@ function saveCalcResult(caseId, toolId){
 function deleteCalcLog(caseId, itemId){
   if (typeof confirm === "function" && !confirm(STR.deleteItemConfirm)) return;
   deleteListItem("calcLogs", "calc", caseId, itemId);
+}
+
+// ---- learning review mechanic (annotations on an AI feedback item) ---------
+// These edit the user's own annotations on a kind:"ai" entry (mastery + the two
+// map tags). The AI text is never touched. Marking mastered/not-yet both bump
+// reviewCount and stamp lastReviewedOn so the review queue rotates.
+function patchLearning(caseId, itemId, fn){
+  mutateCase(caseId, function(c){
+    var it = (c.aiLogs || []).find(function(x){ return x.id === itemId; });
+    if (it) fn(it);
+  });
+}
+function learnMarkMastered(caseId, itemId){
+  patchLearning(caseId, itemId, function(it){ it.mastered = true; it.reviewCount = (it.reviewCount || 0) + 1; it.lastReviewedOn = todayISO(); });
+}
+function learnMarkNotYet(caseId, itemId){
+  patchLearning(caseId, itemId, function(it){ it.mastered = false; it.reviewCount = (it.reviewCount || 0) + 1; it.lastReviewedOn = todayISO(); });
+}
+function learnUnmaster(caseId, itemId){
+  patchLearning(caseId, itemId, function(it){ it.mastered = false; });
+}
+function setLearningField(caseId, itemId, value){
+  patchLearning(caseId, itemId, function(it){ it.field = String(value || ""); });
+}
+function setLearningDomain(caseId, itemId, value){
+  patchLearning(caseId, itemId, function(it){ it.domain = Math.floor(Number(value)) || 0; });
 }
 
 function addDxTag(caseId, value){
@@ -5405,6 +5633,94 @@ function renderCalcTabBody(){
   '</div></section>';
 }
 
+// ---- learning conquest map tab --------------------------------------------
+// One state colour per territory: fog (untouched), frontier (learnings remain
+// unmastered), controlled (all mastered). Theme-independent rgba fills.
+function learnStateStyle(state){
+  if (state === "controlled") return "background:rgba(50,165,110,.28)";
+  if (state === "frontier") return "background:rgba(230,150,30,.24)";
+  return "background:rgba(127,127,127,.14)";
+}
+function learnMapChips(map){
+  return '<div class="row wrap" style="gap:6px">' + map.map(function(d){
+    var mark = d.state === "controlled" ? "★" : d.state === "frontier" ? "⚔" : "・";
+    var count = d.total ? '<span class="faint"> ' + d.mastered + '/' + d.total + '</span>' : '';
+    return '<span style="display:inline-block;padding:4px 8px;border-radius:8px;font-size:13px;' + learnStateStyle(d.state) + '">' + mark + ' ' + esc(d.name) + count + '</span>';
+  }).join('') + '</div>';
+}
+// Per-learning tag pickers (organ field + competency domain). Reassigning wins
+// over whatever the AI text said and is stored on the item.
+function learnTagEditor(it){
+  var fieldOpts = '<option value="">' + esc(STR.learnUncat) + '</option>' + ORGAN_FIELDS.map(function(n){
+    return '<option value="' + esc(n) + '"' + (it.field === n ? ' selected' : '') + '>' + esc(n) + '</option>';
+  }).join('');
+  var domOpts = '<option value="0">' + esc(STR.learnDomainNone) + '</option>' + PF_DOMAINS.map(function(n, i){
+    return '<option value="' + (i + 1) + '"' + (it.domain === i + 1 ? ' selected' : '') + '>' + esc(n) + '</option>';
+  }).join('');
+  return '<div class="row wrap" style="gap:6px;margin-top:6px">' +
+    '<select class="input" style="flex:1;min-width:120px" onchange="setLearningField(\'' + esc(it.caseId) + '\',\'' + esc(it.id) + '\',this.value)">' + fieldOpts + '</select>' +
+    '<select class="input" style="flex:1;min-width:120px" onchange="setLearningDomain(\'' + esc(it.caseId) + '\',\'' + esc(it.id) + '\',this.value)">' + domOpts + '</select>' +
+  '</div>';
+}
+function learnChips(it){
+  return (it.field ? '<span class="badge">' + esc(it.field) + '</span> ' : '') +
+    (it.domain ? '<span class="badge">' + esc(PF_DOMAINS[it.domain - 1]) + '</span> ' : '');
+}
+function renderLearnTabBody(){
+  var stats = learnStats(DB.cases, todayISO());
+  if (!stats.total) return '<section class="panelcard"><div class="note">' + esc(STR.learnEmpty) + '</div></section>';
+
+  var sub = STR.learnFieldMap + ' ' + stats.fieldControlled + '/' + stats.fieldTotal + ' ・ ' +
+    STR.learnDomainMap + ' ' + stats.domainControlled + '/' + stats.domainTotal + ' ・ ' +
+    stats.caseCount + STR.learnCasesUnit + ' ・ 🔥' + stats.currentStreak + STR.learnStreakUnit;
+  var badges = learnBadges(stats).map(function(b){
+    var name = STR["learnMetric_" + b.metric];
+    var parts = [];
+    if (b.earned > 0) parts.push('<span class="badge">' + esc(name + ' ' + b.earned) + '</span>');
+    if (b.next !== null) parts.push('<span class="faint" style="font-size:12px">' + esc(name + STR.learnBadgeGap + (b.next - b.value)) + '</span>');
+    return parts.join(' ');
+  }).filter(Boolean).join('　');
+  var header = '<section class="panelcard">' +
+    '<div style="display:flex;align-items:baseline;gap:6px"><div style="font-size:32px;font-weight:700">' + stats.masteredCount + '<span class="faint" style="font-size:16px"> / ' + stats.total + '</span></div><div class="faint">' + esc(STR.learnMasteredUnit) + '</div></div>' +
+    '<div class="faint" style="margin-top:2px">' + esc(sub) + '</div>' +
+    (badges ? '<div class="row wrap" style="gap:8px;margin-top:10px">' + badges + '</div>' : '') +
+  '</section>';
+
+  var mapsSec = '<section class="panelcard"><div class="one">' + esc(STR.learnFieldMap) + '</div><div style="margin-top:8px">' + learnMapChips(stats.fieldMap) + '</div></section>' +
+    '<section class="panelcard"><div class="one">' + esc(STR.learnDomainMap) + '</div><div style="margin-top:8px">' + learnMapChips(stats.domainMap) + '</div></section>';
+
+  var queue = learnReviewQueue(stats.items, 5);
+  var queueRows = queue.map(function(it){
+    return '<div class="lineitem"><div class="linegrow">' + learnChips(it) +
+      '<div class="text" style="white-space:pre-wrap;margin-top:4px">' + esc(it.text) + '</div>' +
+      '<div class="faint">' + esc(it.date + ' ' + it.caseLabel + (it.reviewCount ? ' ・' + STR.learnReviewed + it.reviewCount : '')) + '</div>' +
+      '<div class="row" style="margin-top:6px;gap:6px"><button class="ghostbtn" onclick="learnMarkMastered(\'' + esc(it.caseId) + '\',\'' + esc(it.id) + '\')">' + esc(STR.learnGotIt) + '</button><button class="ghostbtn" onclick="learnMarkNotYet(\'' + esc(it.caseId) + '\',\'' + esc(it.id) + '\')">' + esc(STR.learnNotYet) + '</button></div>' +
+    '</div></div>';
+  }).join('');
+  var queueSec = queue.length ? '<section class="panelcard"><div class="one">' + esc(STR.learnReview) + '</div><div class="faint" style="margin-top:2px">' + esc(STR.learnReviewNote) + '</div><div class="stack" style="margin-top:10px">' + queueRows + '</div></section>' : '';
+
+  var list = stats.items.map(function(it){
+    var open = aiLogOpen(it.id);
+    var flag = it.mastered ? '✅ ' : '';
+    var head = '<div class="text" style="cursor:pointer" onclick="toggleAiLog(\'' + esc(it.id) + '\')">' + (open ? '▾ ' : '▸ ') + flag + learnChips(it) + esc(it.date + ' ' + it.caseLabel) + (open ? '' : ' — ' + esc(aiLogPreview(it.text))) + '</div>';
+    var body = '';
+    if (open) {
+      var masterBtn = it.mastered
+        ? '<button class="ghostbtn" onclick="learnMarkNotYet(\'' + esc(it.caseId) + '\',\'' + esc(it.id) + '\')">' + esc(STR.learnUndoMaster) + '</button>'
+        : '<button class="ghostbtn" onclick="learnMarkMastered(\'' + esc(it.caseId) + '\',\'' + esc(it.id) + '\')">' + esc(STR.learnGotIt) + '</button>';
+      body = '<div class="text" style="white-space:pre-wrap;margin-top:4px">' + esc(it.text) + '</div>' +
+        '<div class="faint">' + esc(STR.aiUnreviewed) + '</div>' +
+        learnTagEditor(it) +
+        '<div class="row" style="margin-top:6px;gap:6px">' + masterBtn +
+        '<button class="smallbtn" onclick="openDetail(\'' + esc(it.caseId) + '\')">' + esc(STR.learnOpenCase) + '</button></div>';
+    }
+    return '<div class="lineitem"><div class="linegrow">' + head + body + '</div></div>';
+  }).join('');
+  var listSec = '<section class="panelcard"><div class="one">' + esc(STR.learnAll) + '</div><div class="stack" style="margin-top:10px">' + list + '</div></section>';
+
+  return header + mapsSec + queueSec + listSec;
+}
+
 function renderStageSheet(){
   var c = DB.cases.find(function(item){ return item.id === VIEW.stagePickerFor; });
   var active = c ? c.stageId : "";
@@ -5486,7 +5802,8 @@ var TAB_BODY = {
   board:renderCaseListView,
   day:renderDayPlanView,
   week:renderWeekView,
-  calc:renderCalcTabBody
+  calc:renderCalcTabBody,
+  learn:renderLearnTabBody
 };
 
 function renderTabBar(mode){

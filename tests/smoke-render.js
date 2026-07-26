@@ -446,6 +446,22 @@ if (untouched.age !== null || untouched.weightKg !== null || untouched.cr !== nu
 // Leaving and coming back starts clean: scratch values must not linger.
 vm.runInContext("setBoardMode('board'); setBoardMode('calc'); openCalcTool('kidney');", sandbox);
 if (!vm.runInContext("renderBoard()", sandbox).includes(vm.runInContext("STR.calcNeedInput", sandbox))) fail("calc tab must be empty on re-entry");
+// Learning conquest map tab: a saved AI feedback item becomes territory,
+// mastering it conquers that domain, and the mastery annotation never leaks
+// into the AI payload.
+vm.runInContext("mutateCase('c1', function(c){ c.aiLogs.push({ id:'ai-smoke', text:'x', date:todayISO(), field:'\\u5faa\\u74b0\\u5668', domain:0, mastered:false, reviewCount:0, lastReviewedOn:'' }); });", sandbox);
+vm.runInContext("setBoardMode('learn');", sandbox);
+var learnHtml = vm.runInContext("renderBoard()", sandbox);
+if (!learnHtml.includes(vm.runInContext("STR.learnFieldMap", sandbox))) fail("learn tab missing the organ map");
+if (!learnHtml.includes("learnMarkMastered('c1','ai-smoke')")) fail("learn tab missing mastery action");
+if (!learnHtml.includes(vm.runInContext("'\\u5faa\\u74b0\\u5668'", sandbox))) fail("learn tab missing the organ territory");
+vm.runInContext("learnMarkMastered('c1','ai-smoke');", sandbox);
+var learnAfter = JSON.parse(vm.runInContext("JSON.stringify(learnStats(DB.cases, todayISO()))", sandbox));
+if (learnAfter.masteredCount < 1) fail("mastering did not record");
+if (learnAfter.fieldControlled < 1) fail("mastering did not conquer the organ territory");
+var aiPay = JSON.parse(vm.runInContext("JSON.stringify(aiFeedbackPayload(DB.cases.find(c=>c.id==='c1')))", sandbox));
+if (Object.keys(aiPay).length !== 2 || JSON.stringify(aiPay).indexOf("mastered") !== -1) fail("learning annotations leaked into the AI payload");
+vm.runInContext("mutateCase('c1', function(c){ c.aiLogs = c.aiLogs.filter(function(x){ return x.id !== 'ai-smoke'; }); }); setBoardMode('board');", sandbox);
 vm.runInContext("setBoardMode('board');", sandbox);
 // The PII warning must name the widened boundary (age/sex/weight now allowed).
 if (!vm.runInContext("STR.piiWarning", sandbox).includes("年齢")) fail("piiWarning not revised for the new boundary");
