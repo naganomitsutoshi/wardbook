@@ -99,6 +99,43 @@
     padding:10px;
   }
   .card.dragging{opacity:.72}
+  /* Board card = 案B (CEO 2026-07-28, 3案比較で選定). The card stops being a box:
+     no border, no shadow, no stage band. Rank by size instead — today's tasks
+     carry the only large type so the eye lands on "次に何をやるか" first, and
+     局面/先の予定/待ち drop to a quiet metadata block. People are separated by a
+     divider + whitespace, not by a frame. Search results keep the old .card box. */
+  .list.bl{gap:0}
+  .bcard{
+    background:transparent;
+    border:0;border-bottom:1px solid var(--line);
+    border-radius:0;
+    box-shadow:none;
+    padding:14px 6px 16px;
+  }
+  .bhead{display:flex;align-items:center;gap:8px;min-width:0;margin-bottom:6px}
+  .bhead .handle{
+    width:26px;min-width:26px;min-height:26px;padding:0;
+    border:0;background:transparent;color:var(--soft);font-size:13px;
+  }
+  .bid{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.02em;flex:none}
+  .bmeta{font-size:11px;color:var(--soft);flex:none}
+  /* 病名 sits right of 病室 (CEO 2026-07-28) and takes the slack, so a long tag
+     list truncates instead of pushing the stage chip off the row. */
+  .bdx{
+    font-size:11px;color:var(--muted);
+    flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .bstage{
+    display:inline-flex;align-items:center;gap:5px;flex:none;margin-left:auto;
+    font-size:11px;color:var(--soft);white-space:nowrap;
+  }
+  .btask{display:flex;gap:12px;align-items:flex-start;padding:7px 0}
+  .btask .check{margin-top:2px}
+  .btasktext{font-size:17px;line-height:1.35;flex:1;min-width:0;word-break:break-word}
+  .btime{font-size:13px;color:var(--muted);margin-left:6px}
+  .bquiet{margin-top:8px;font-size:12px;line-height:1.7;color:var(--soft)}
+  .bquiet .k{color:var(--muted);font-weight:700;margin-right:8px}
+  .bquiet .hot{color:var(--sec-pending);font-weight:700}
   .cardhead{display:flex;gap:8px;align-items:flex-start}
   .handle,.iconbtn,.ghostbtn,.chipbtn,.pickbtn,.smallbtn,.primary{
     border:1px solid var(--line);
@@ -4893,46 +4930,49 @@ function boardCardTasks(c){
   return { now:timed.concat(now.filter(function(x){ return !x.time; })), later:later };
 }
 
-function taskMetaLine(item, faintDue){
-  var bits = [];
-  if (faintDue && item.due) bits.push(item.due);
-  if (item.time) bits.push(item.time);
-  return bits.length ? '<div class="faint">' + esc(bits.join(' ')) + '</div>' : '';
+// One quiet metadata line: bold key, then the value (already escaped by caller,
+// because 待ち mixes plain text with the highlighted 今日戻り span).
+function quietLine(label, valueHtml){
+  return '<div><span class="k">' + esc(label || "") + '</span>' + valueHtml + '</div>';
 }
 
 function renderBoardCard(c){
+  var today = todayISO();
   var stage = stageById(c.stageId);
   var tasks = boardCardTasks(c);
-  var undone = tasks.now;
-  var showPendings = c.pendings.length > 0;
-  var stageStyle = 'border-left-color:' + esc(stage.color);
+  var visible = cardSectionsVisible();
   var stale = stalenessLevel(c.lastTouchedAt, nowISO());
   var staleClass = stale === 2 ? ' stale2' : stale === 1 ? ' stale1' : '';
-  var sectionHtml = {
-    phase:c.phaseNote ? '<div class="phase sec-phase">' + esc(c.phaseNote) + '</div>' : '',
-    task:(undone.length || tasks.later.length) ? '<div class="section sec-task"><div class="sectiontitle">' + esc(DB.config.labels.task) + ' ' + undone.length + '</div><div class="plain">' + undone.map(function(item){
-      return '<label class="lineitem" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + taskMetaLine(item, false) + '</div></label>';
-    }).join('') + tasks.later.map(function(item){
+  // 案B: today's tasks are the subject of the card — the only large type, no
+  // section title above them (the checkboxes say what they are).
+  var taskHtml = visible.indexOf("task") >= 0 ? tasks.now.map(function(item){
+    return '<label class="btask" onclick="event.stopPropagation()"><input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')"><span class="btasktext">' + esc(item.text) + (item.time ? '<span class="btime">' + esc(item.time) + '</span>' : '') + '</span></label>';
+  }).join('') : '';
+  // Everything else becomes quiet metadata. Show/hide and the up-down order from
+  // 設定 still apply — only the weight changed, so no settings migration.
+  var quietHtml = {
+    phase:c.phaseNote ? quietLine(DB.config.labels.phase, esc(c.phaseNote)) : '',
+    task:tasks.later.map(function(item){
       var when = (item.due ? item.due.slice(5) : '') + (item.time ? ' ' + item.time : '');
-      return '<div class="lineitem"><div class="linegrow"><div class="compactline"><div class="text">' + esc(item.text) + '</div>' + (when ? '<span class="datechip">' + esc(when) + '</span>' : '') + '</div></div></div>';
-    }).join('') + '</div></div>' : '',
-    pending:showPendings ? '<div class="section sec-pending"><div class="sectiontitle">' + esc(DB.config.labels.pending) + '</div><div class="plain">' + c.pendings.map(function(item){
-      var urgent = item.backOn && item.backOn <= todayISO();
-      return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(item.text) + '</div>' + (item.backOn ? '<div class="faint">' + esc(item.backOn) + '</div>' : '') + '</div>' + (urgent ? '<span class="badge">' + esc(STR.backTodayBadge) + '</span>' : '') + '</div>';
-    }).join('') + '</div></div>' : ''
+      return quietLine(DB.config.labels.task, (when ? esc(when) + '　' : '') + esc(item.text));
+    }).join(''),
+    pending:c.pendings.map(function(item){
+      var urgent = item.backOn && item.backOn <= today;
+      var tail = urgent ? '<span class="hot">' + esc(STR.backTodayBadge) + '</span>' : (item.backOn ? esc(item.backOn.slice(5)) : '');
+      return quietLine(DB.config.labels.pending, esc(item.text) + (tail ? '　' + tail : ''));
+    }).join('')
   };
-  var orderedSections = cardSectionsVisible().map(function(name){ return sectionHtml[name] || ""; }).join('');
-  return '<article class="card' + staleClass + (DND.activeId === c.id ? ' dragging' : '') + '" style="' + stageStyle + '" onclick="openDetail(\'' + esc(c.id) + '\')">' +
-    '<div class="cardhead">' +
+  var quiet = visible.map(function(name){ return quietHtml[name] || ""; }).join('');
+  return '<article class="card bcard' + staleClass + (DND.activeId === c.id ? ' dragging' : '') + '" onclick="openDetail(\'' + esc(c.id) + '\')">' +
+    '<div class="bhead">' +
       '<button class="handle" onpointerdown="startDragCase(event,\'' + esc(c.id) + '\')" onclick="event.stopPropagation()">≡</button>' +
-      '<div class="linegrow">' +
-        '<div class="labelrow"><div class="caseid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, todayISO()) + '</div>' +
-        (compactMeta(c) ? '<div class="meta">' + esc(compactMeta(c)) + '</div>' : '') +
-        '<div class="stagechip">' + stageDot(stage) + '<span>' + esc(stage.name) + '</span></div>' + aiCardBadge(c) + '</div>' +
-        (c.dxTags.length ? '<div class="dxline">' + esc(c.dxTags.join('・')) + '</div>' : '') +
-        orderedSections +
-      '</div>' +
+      '<span class="bid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, today) + '</span>' +
+      (compactMeta(c) ? '<span class="bmeta">' + esc(compactMeta(c)) + '</span>' : '') +
+      '<span class="bdx">' + (c.dxTags.length ? esc(c.dxTags.join('・')) : '') + '</span>' +
+      '<span class="bstage">' + stageDot(stage) + esc(stage.name) + '</span>' + aiCardBadge(c) +
     '</div>' +
+    taskHtml +
+    (quiet ? '<div class="bquiet">' + quiet + '</div>' : '') +
   '</article>';
 }
 
@@ -5894,7 +5934,7 @@ function renderDataSheet(){
 function renderCaseListView(){
   var cases = boardCases();
   if (!cases.length) return '<div class="empty">' + esc(STR.emptyBoard) + '</div>';
-  return '<div class="list">' +
+  return '<div class="list bl">' +
     cases.map(function(c, idx){
       return '<div class="dropzone" data-drop-index="' + idx + '"></div>' + renderBoardCard(c);
     }).join('') +

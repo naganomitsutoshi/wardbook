@@ -229,15 +229,20 @@ if (!boardHtml.includes('data-drop-index="0"')) fail("board missing dropzone ind
 if (boardHtml.includes("onpointerenter")) fail("board dropzone still uses inline pointer handlers");
 // Density modes were dropped (CEO 2026-07-22): one board rendering, no toggle.
 if (boardHtml.includes("toggleDensity()")) fail("board still renders density toggle");
-// Ward/room shows in the card meta; the three sections carry their color classes.
+// 案B board card (CEO 2026-07-28): no box, no section titles. Today's tasks are
+// the only large type; 局面/先の予定/待ち live in the quiet metadata block.
 if (!boardHtml.includes("3E-305")) fail("board missing ward/room in meta");
+if (!boardHtml.includes('class="card bcard')) fail("board card lost the 案B class");
+if (!boardHtml.includes('class="btasktext"')) fail("board card missing large task text");
+if (!boardHtml.includes('class="bquiet"')) fail("board card missing quiet metadata block");
+if (boardHtml.includes("sectiontitle")) fail("board card still renders section titles");
 ["sec-phase", "sec-task", "sec-pending"].forEach((cls) => {
-  if (!boardHtml.includes(cls)) fail("board missing section color class " + cls);
+  if (boardHtml.includes(cls)) fail("board card still renders section color class " + cls);
 });
 // Seeds section is gone from cards (2026-07-25) even when legacy seed data exists.
 if (boardHtml.includes("sec-seeds")) fail("board still renders seeds section");
-// Dx tags show on the card (CEO 2026-07-25) — the fixture c1 carries "cap".
-if (!boardHtml.includes('class="dxline"') || !boardHtml.includes("cap")) fail("board card missing dx tag line");
+// Dx tags sit right of the ward/room (CEO 2026-07-28) — fixture c1 carries "cap".
+if (!boardHtml.includes('class="bdx"') || !boardHtml.includes("cap")) fail("board card missing dx tags next to the room");
 // The evening review is gone from the bottom bar.
 if (boardHtml.includes("openReview()")) fail("board still offers the evening review");
 
