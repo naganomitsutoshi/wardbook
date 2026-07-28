@@ -241,8 +241,10 @@ if (boardHtml.includes("sectiontitle")) fail("board card still renders section t
 });
 // Seeds section is gone from cards (2026-07-25) even when legacy seed data exists.
 if (boardHtml.includes("sec-seeds")) fail("board still renders seeds section");
-// Dx tags sit right of the ward/room (CEO 2026-07-28) — fixture c1 carries "cap".
-if (!boardHtml.includes('class="bdx"') || !boardHtml.includes("cap")) fail("board card missing dx tags next to the room");
+// Dx tags get their own line under the name/room row (CEO 2026-07-28), so a long
+// 病名 wraps instead of being cut off — fixture c1 carries "cap".
+if (!boardHtml.includes('<div class="bdx">') || !boardHtml.includes("cap")) fail("board card missing the dx line under the head row");
+if (boardHtml.includes('<span class="bdx">')) fail("dx tags still sit inside the head row");
 // The evening review is gone from the bottom bar.
 if (boardHtml.includes("openReview()")) fail("board still offers the evening review");
 
@@ -264,6 +266,12 @@ if (!fullBoardHtml.includes("todo-three")) fail("normal board caps task items (t
 if (fullBoardHtml.includes("moveCaseDirection(")) fail("normal card still renders reorder buttons");
 if (!fullBoardHtml.includes("startDragCase(")) fail("board card missing drag handle");
 if (!fullBoardHtml.includes(vm.runInContext("STR.backTodayBadge", sandbox))) fail("board card missing back-today badge");
+// One heading per kind (CEO 2026-07-28): c1 now carries two 待ち, and they must
+// stack under a single 待ち label instead of repeating it per line.
+const quietRowCount = (fullBoardHtml.match(/class="qrow"/g) || []).length;
+const quietValCount = (fullBoardHtml.match(/class="ql"/g) || []).length;
+if (!quietRowCount) fail("board card missing quiet metadata rows");
+if (quietValCount <= quietRowCount) fail("board card repeats the quiet heading for every value");
 
 vm.runInContext("VIEW.boardMode='week'", sandbox);
 const weekHtml = vm.runInContext("renderBoard()", sandbox);

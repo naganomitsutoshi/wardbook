@@ -112,19 +112,16 @@
     box-shadow:none;
     padding:14px 6px 16px;
   }
-  .bhead{display:flex;align-items:center;gap:8px;min-width:0;margin-bottom:6px}
+  .bhead{display:flex;align-items:center;gap:8px;min-width:0;margin-bottom:2px}
   .bhead .handle{
     width:26px;min-width:26px;min-height:26px;padding:0;
     border:0;background:transparent;color:var(--soft);font-size:13px;
   }
   .bid{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.02em;flex:none}
   .bmeta{font-size:11px;color:var(--soft);flex:none}
-  /* 病名 sits right of 病室 (CEO 2026-07-28) and takes the slack, so a long tag
-     list truncates instead of pushing the stage chip off the row. */
-  .bdx{
-    font-size:11px;color:var(--muted);
-    flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  }
+  /* 病名 gets its own line under the name/room row (CEO 2026-07-28): on the row
+     it had to be truncated, and a cut-off 病名 is worse than a second line. */
+  .bdx{font-size:11px;color:var(--muted);margin:0 0 8px 34px;word-break:break-word}
   .bstage{
     display:inline-flex;align-items:center;gap:5px;flex:none;margin-left:auto;
     font-size:11px;color:var(--soft);white-space:nowrap;
@@ -134,7 +131,12 @@
   .btasktext{font-size:17px;line-height:1.35;flex:1;min-width:0;word-break:break-word}
   .btime{font-size:13px;color:var(--muted);margin-left:6px}
   .bquiet{margin-top:8px;font-size:12px;line-height:1.7;color:var(--soft)}
-  .bquiet .k{color:var(--muted);font-weight:700;margin-right:8px}
+  /* One heading per kind (CEO 2026-07-28): 待ち が2件あっても "待ち" は1回だけ
+     出し、値を右側に積む。見出し列を固定幅にして種類が縦にそろう。 */
+  .bquiet .qrow{display:flex;gap:8px;align-items:flex-start}
+  .bquiet .k{color:var(--muted);font-weight:700;flex:none;min-width:3.6em}
+  .bquiet .qv{flex:1;min-width:0}
+  .bquiet .ql{display:block;word-break:break-word}
   .bquiet .hot{color:var(--sec-pending);font-weight:700}
   .cardhead{display:flex;gap:8px;align-items:flex-start}
   .handle,.iconbtn,.ghostbtn,.chipbtn,.pickbtn,.smallbtn,.primary{
@@ -4930,10 +4932,14 @@ function boardCardTasks(c){
   return { now:timed.concat(now.filter(function(x){ return !x.time; })), later:later };
 }
 
-// One quiet metadata line: bold key, then the value (already escaped by caller,
-// because 待ち mixes plain text with the highlighted 今日戻り span).
-function quietLine(label, valueHtml){
-  return '<div><span class="k">' + esc(label || "") + '</span>' + valueHtml + '</div>';
+// One quiet metadata row per kind: the label is printed once and every value of
+// that kind stacks to its right (values arrive pre-escaped, because 待ち mixes
+// plain text with the highlighted 今日戻り span).
+function quietRow(label, values){
+  if (!values.length) return '';
+  return '<div class="qrow"><span class="k">' + esc(label || "") + '</span><span class="qv">' + values.map(function(v){
+    return '<span class="ql">' + v + '</span>';
+  }).join('') + '</span></div>';
 }
 
 function renderBoardCard(c){
@@ -4950,27 +4956,27 @@ function renderBoardCard(c){
   }).join('') : '';
   // Everything else becomes quiet metadata. Show/hide and the up-down order from
   // 設定 still apply — only the weight changed, so no settings migration.
-  var quietHtml = {
-    phase:c.phaseNote ? quietLine(DB.config.labels.phase, esc(c.phaseNote)) : '',
-    task:tasks.later.map(function(item){
+  var quietRows = {
+    phase:c.phaseNote ? quietRow(DB.config.labels.phase, [esc(c.phaseNote)]) : '',
+    task:quietRow(DB.config.labels.task, tasks.later.map(function(item){
       var when = (item.due ? item.due.slice(5) : '') + (item.time ? ' ' + item.time : '');
-      return quietLine(DB.config.labels.task, (when ? esc(when) + '　' : '') + esc(item.text));
-    }).join(''),
-    pending:c.pendings.map(function(item){
+      return (when ? esc(when) + '　' : '') + esc(item.text);
+    })),
+    pending:quietRow(DB.config.labels.pending, c.pendings.map(function(item){
       var urgent = item.backOn && item.backOn <= today;
       var tail = urgent ? '<span class="hot">' + esc(STR.backTodayBadge) + '</span>' : (item.backOn ? esc(item.backOn.slice(5)) : '');
-      return quietLine(DB.config.labels.pending, esc(item.text) + (tail ? '　' + tail : ''));
-    }).join('')
+      return esc(item.text) + (tail ? '　' + tail : '');
+    }))
   };
-  var quiet = visible.map(function(name){ return quietHtml[name] || ""; }).join('');
+  var quiet = visible.map(function(name){ return quietRows[name] || ""; }).join('');
   return '<article class="card bcard' + staleClass + (DND.activeId === c.id ? ' dragging' : '') + '" onclick="openDetail(\'' + esc(c.id) + '\')">' +
     '<div class="bhead">' +
       '<button class="handle" onpointerdown="startDragCase(event,\'' + esc(c.id) + '\')" onclick="event.stopPropagation()">≡</button>' +
       '<span class="bid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, today) + '</span>' +
       (compactMeta(c) ? '<span class="bmeta">' + esc(compactMeta(c)) + '</span>' : '') +
-      '<span class="bdx">' + (c.dxTags.length ? esc(c.dxTags.join('・')) : '') + '</span>' +
       '<span class="bstage">' + stageDot(stage) + esc(stage.name) + '</span>' + aiCardBadge(c) +
     '</div>' +
+    (c.dxTags.length ? '<div class="bdx">' + esc(c.dxTags.join('・')) + '</div>' : '') +
     taskHtml +
     (quiet ? '<div class="bquiet">' + quiet + '</div>' : '') +
   '</article>';
