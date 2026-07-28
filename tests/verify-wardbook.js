@@ -1310,5 +1310,30 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   }
   assert.strictEqual(L.CALC_FIELDS.bun.store, "case", "BUN is a lab value and is kept with its date");
 
+  // Home-screen icons (CEO 2026-07-29). Android crops "maskable" itself, so an
+  // icon declared as both purposes is cropped twice and the corners fray. Keep
+  // the two purposes on separate files, and keep every one of them cached —
+  // an icon missing from the service worker is an icon that vanishes offline.
+  const root = path.join(__dirname, "..");
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.webmanifest"), "utf8"));
+  const swSrc = fs.readFileSync(path.join(root, "sw.js"), "utf8");
+  assert.ok(manifest.icons.length, "manifest must declare icons");
+  for (const icon of manifest.icons) {
+    const purposes = String(icon.purpose || "any").split(/\s+/);
+    assert.ok(
+      !(purposes.includes("any") && purposes.includes("maskable")),
+      icon.src + " must serve one purpose only (any OR maskable)"
+    );
+    assert.ok(fs.existsSync(path.join(root, icon.src)), "missing icon file " + icon.src);
+    assert.ok(swSrc.includes('"' + icon.src + '"'), icon.src + " is not precached in sw.js");
+  }
+  for (const purpose of ["any", "maskable"]) {
+    assert.ok(
+      manifest.icons.some((icon) => String(icon.purpose || "any").split(/\s+/).includes(purpose)),
+      "no icon declared for purpose " + purpose
+    );
+  }
+  assert.strictEqual(manifest.theme_color, "#14456e", "theme color must stay Mitsuba navy");
+
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));

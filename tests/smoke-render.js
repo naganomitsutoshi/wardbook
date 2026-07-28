@@ -772,6 +772,13 @@ if (vm.runInContext("DB.cases.length", sandbox) > 0) {
 }
 
 if (documentElement["data-theme"] !== "dark") fail("dark theme attribute not applied");
+// The system bar must stay Mitsuba navy so it runs unbroken into the app
+// header (CEO 2026-07-29). If someone re-points it at the page background the
+// status bar goes grey again and the seam comes back.
+if (themeMeta.content !== "#0b2c4a") fail("dark status bar must be Mitsuba deep navy");
+vm.runInContext("setThemeMode('light')", sandbox);
+if (themeMeta.content !== "#14456e") fail("light status bar must be Mitsuba navy");
+vm.runInContext("setThemeMode('os')", sandbox);
 if (vm.runInContext("SYNC_RT.fb", sandbox) !== null) fail("sync import happened without config");
 
 const appHtml = vm.runInContext("render()", sandbox);

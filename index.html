@@ -4,12 +4,12 @@
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseapp.com https://wardbook-ai.naganomitsutoshi.workers.dev; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'; worker-src 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#f5f6f8">
+<meta name="theme-color" content="#14456e">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Wardbook">
 <link rel="manifest" href="./manifest.webmanifest">
-<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/icon-192-maskable.png">
 <link rel="icon" type="image/png" href="./icons/icon-192.png">
 <title>Wardbook</title>
 <style>
@@ -67,6 +67,13 @@
     --btn:#ffffff;
     --on-accent:#fff;
     --bar:rgba(245,246,248,.96);
+    /* 画面上部だけ Mitsuba ネイビー (CEO 2026-07-29). 下の操作バー (--bar) は
+       主要ボタンが載るので中立のまま＝ブランド色は面積を絞る (UI骨子 §2). */
+    --topbar:#14456e;
+    --topbar-ink:#eaf1f8;
+    --topbar-line:rgba(255,255,255,.16);
+    --topbar-btn:rgba(255,255,255,.12);
+    --topbar-btn-line:rgba(255,255,255,.30);
     --drop:rgba(17,24,39,.14);
     --shadow:0 1px 2px rgba(0,0,0,.06);
     --weekend-sun:#b44a4a;
@@ -93,6 +100,11 @@
     --btn:#232b33;
     --on-accent:#13161a;
     --bar:rgba(19,22,26,.96);
+    --topbar:#0b2c4a;
+    --topbar-ink:#dbe7f2;
+    --topbar-line:rgba(255,255,255,.12);
+    --topbar-btn:rgba(255,255,255,.10);
+    --topbar-btn-line:rgba(255,255,255,.26);
     --drop:rgba(237,242,247,.22);
     --shadow:0 1px 2px rgba(0,0,0,.28);
     --weekend-sun:#f09a9a;
@@ -115,10 +127,15 @@
   .app{max-width:720px;margin:0 auto;padding:0 0 88px}
   .topbar{
     position:sticky;top:0;z-index:20;
-    background:var(--bar);
-    backdrop-filter:blur(8px);
-    border-bottom:1px solid var(--line);
+    background:var(--topbar);
+    color:var(--topbar-ink);
+    border-bottom:1px solid var(--topbar-line);
     padding:10px 14px calc(10px + env(safe-area-inset-top));
+  }
+  .topbar .ghostbtn{
+    background:var(--topbar-btn);
+    border-color:var(--topbar-btn-line);
+    color:var(--topbar-ink);
   }
   .toprow{display:flex;align-items:center;gap:8px}
   .title{font-size:13px;font-weight:700;letter-spacing:.04em}
@@ -2920,7 +2937,9 @@ function applyTheme(){
     document.documentElement.setAttribute("data-theme", theme);
   }
   var meta = typeof document !== "undefined" && document.querySelector ? document.querySelector('meta[name="theme-color"]') : null;
-  if (meta && meta.setAttribute) meta.setAttribute("content", theme === "dark" ? "#13161a" : "#f5f6f8");
+  // Status bar follows the topbar, not the page background (CEO 2026-07-29),
+  // so the brand navy runs unbroken from the system bar into the app header.
+  if (meta && meta.setAttribute) meta.setAttribute("content", theme === "dark" ? "#0b2c4a" : "#14456e");
 }
 
 function setThemeMode(mode){
