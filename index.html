@@ -105,12 +105,17 @@
      局面/先の予定/待ち drop to a quiet metadata block. People are separated by a
      divider + whitespace, not by a frame. Search results keep the old .card box. */
   .list.bl{gap:0}
+  /* 患者の区切りは「意味のある線1本」で立てる（CEO 2026-07-28・区切り3案から案1）。
+     左の3px帯はステージ色そのものなので、どこから次の人かと同時に「急性期か
+     退院調整か」が視野の端で分かる。箱には戻さない（枠・影はないまま）。 */
   .bcard{
     background:transparent;
-    border:0;border-bottom:1px solid var(--line);
+    border:0;
+    border-left:3px solid var(--line);
+    border-bottom:1px solid var(--line);
     border-radius:0;
     box-shadow:none;
-    padding:14px 6px 16px;
+    padding:14px 6px 16px 10px;
   }
   .bhead{display:flex;align-items:center;gap:8px;min-width:0;margin-bottom:2px}
   .bhead .handle{
@@ -4969,7 +4974,7 @@ function renderBoardCard(c){
     }))
   };
   var quiet = visible.map(function(name){ return quietRows[name] || ""; }).join('');
-  return '<article class="card bcard' + staleClass + (DND.activeId === c.id ? ' dragging' : '') + '" onclick="openDetail(\'' + esc(c.id) + '\')">' +
+  return '<article class="card bcard' + staleClass + (DND.activeId === c.id ? ' dragging' : '') + '" style="border-left-color:' + esc(stage.color) + '" onclick="openDetail(\'' + esc(c.id) + '\')">' +
     '<div class="bhead">' +
       '<button class="handle" onpointerdown="startDragCase(event,\'' + esc(c.id) + '\')" onclick="event.stopPropagation()">≡</button>' +
       '<span class="bid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, today) + '</span>' +

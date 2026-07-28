@@ -233,6 +233,8 @@ if (boardHtml.includes("toggleDensity()")) fail("board still renders density tog
 // the only large type; 局面/先の予定/待ち live in the quiet metadata block.
 if (!boardHtml.includes("3E-305")) fail("board missing ward/room in meta");
 if (!boardHtml.includes('class="card bcard')) fail("board card lost the 案B class");
+// The patient divider is a stage-colored rail (CEO 2026-07-28, 区切り案1).
+if (!boardHtml.includes("border-left-color:")) fail("board card missing the stage color rail");
 if (!boardHtml.includes('class="btasktext"')) fail("board card missing large task text");
 if (!boardHtml.includes('class="bquiet"')) fail("board card missing quiet metadata block");
 if (boardHtml.includes("sectiontitle")) fail("board card still renders section titles");
