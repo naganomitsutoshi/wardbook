@@ -155,7 +155,11 @@ function make(size, { maskable }) {
   return png(size, size, px);
 }
 
-for (const size of [192, 512]) {
+// 1024 exists because the PWA splash screen blows the icon up to roughly a
+// third of the screen: on a 1080p+ phone that upscaled the 512 and the dots
+// showed (CEO 2026-07-29). Chrome picks the closest size, so shipping the big
+// one costs nothing at home-screen size.
+for (const size of [192, 512, 1024]) {
   fs.writeFileSync(path.join(outDir, `icon-${size}.png`), make(size, { maskable: false }));
   fs.writeFileSync(path.join(outDir, `icon-${size}-maskable.png`), make(size, { maskable: true }));
   console.log(`icon-${size}.png / icon-${size}-maskable.png`);

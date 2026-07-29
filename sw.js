@@ -1,12 +1,14 @@
-﻿const CACHE = "wardbook-v44";
+﻿const CACHE = "wardbook-v45";
 const ASSETS = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
+  "./icons/icon-1024.png",
   "./icons/icon-192-maskable.png",
-  "./icons/icon-512-maskable.png"
+  "./icons/icon-512-maskable.png",
+  "./icons/icon-1024-maskable.png"
 ];
 
 self.addEventListener("install", (event) => {

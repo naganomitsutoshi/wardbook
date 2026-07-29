@@ -1574,6 +1574,17 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
     );
   }
   assert.strictEqual(manifest.theme_color, "#14456e", "theme color must stay Mitsuba navy");
+  // The launch screen paints background_color before anything renders. White
+  // there flashed against the navy icon (CEO 2026-07-29).
+  assert.strictEqual(manifest.background_color, "#14456e", "launch background must stay Mitsuba navy");
+  // The splash blows the icon up to about a third of the screen, so anything
+  // smaller than 1024 shows its pixels on a modern phone.
+  for (const purpose of ["any", "maskable"]) {
+    const widest = manifest.icons
+      .filter((icon) => String(icon.purpose || "any").split(/\s+/).includes(purpose))
+      .reduce((max, icon) => Math.max(max, parseInt(icon.sizes, 10) || 0), 0);
+    assert.ok(widest >= 1024, purpose + " icons must go up to at least 1024px for the splash screen");
+  }
 
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));
