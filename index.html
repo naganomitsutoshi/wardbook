@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://*.googleapis.com https://*.firebaseapp.com https://wardbook-ai.naganomitsutoshi.workers.dev; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'; worker-src 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#14456e">
+<meta name="theme-color" content="#0e3252">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Wardbook">
@@ -48,70 +48,80 @@
 .learnrpg .badge{background:#13233f;border:1px solid #33507f;color:#bcd2f5}
 .learnrpg .ghostbtn,.learnrpg .smallbtn{background:#15243f;border:1px solid #33507f;color:#dbe7ff}
 .learnrpg select.input{background:#0f1c33;color:#eaf2ff;border-color:#33507f}
+  /* 色は Mitsuba トークン正本 v3 (5_開発部/設計/Mitsuba_UI骨子.md, CEO 2026-07-29)
+     を Wardbook の変数名に写したもの。値は正本からのコピーで、ここで独自に
+     調整しない。正本が動いたらこの2ブロックだけを差し替える。
+     ブランド紺は「面積を絞る」＝上部バー・主要ボタン・タブの選択状態だけに置き、
+     画面の大部分は中立のスレートで持つ (正本 §2 面積の原則)。 */
   :root{
     color-scheme:light;
-    --bg:#f5f6f8;
+    --bg:#f4f6f8;
     --card:#ffffff;
-    --panel:#eef1f4;
-    --line:#d7dce2;
-    --text:#17202a;
-    --muted:#5f6b78;
-    --soft:#8a95a3;
-    --accent:#111827;
-    --danger:#b91c1c;
-    --danger-soft:#fee2e2;
-    --ok:#166534;
-    --ok-soft:#dcfce7;
-    --badge:#fff7ed;
-    --badge-line:#fdba74;
+    --panel:#eef2f6;              /* 正本 --th-bg：一段沈んだ面 */
+    --line:#d7dee6;
+    --text:#1f2933;               /* 正本 --ink */
+    --muted:#5b6875;
+    --soft:#5b6875;               /* 正本に --muted より薄い段はない＝同値 */
+    --accent:#0e3252;             /* 正本 --fill-brand：主要ボタン・選択タブだけ */
+    --danger:#c0392b;
+    --danger-soft:#fdecec;
+    --ok:#1a6b50;                 /* 正本 --ok＝ブランド緑（完了・正常＝現在地） */
+    --ok-soft:#e5f0ea;
+    --badge:#fdf6e3;              /* 正本 --warn-bg */
+    --badge-line:#b7791f;         /* 正本 --warn-line */
     --btn:#ffffff;
     --on-accent:#fff;
-    --bar:rgba(245,246,248,.96);
-    /* 画面上部だけ Mitsuba ネイビー (CEO 2026-07-29). 下の操作バー (--bar) は
-       主要ボタンが載るので中立のまま＝ブランド色は面積を絞る (UI骨子 §2). */
-    --topbar:#14456e;
+    --bar:rgba(244,246,248,.96);
+    /* 画面上部だけブランド紺のグラデーション (正本 --hdr-a / --hdr-b)。下の
+       操作バー (--bar) は主要ボタンが載るので中立のまま。 */
+    --hdr-a:#081f33;
+    --hdr-b:#0e3252;
     --topbar-ink:#eaf1f8;
     --topbar-line:rgba(255,255,255,.16);
     --topbar-btn:rgba(255,255,255,.12);
     --topbar-btn-line:rgba(255,255,255,.30);
     --drop:rgba(17,24,39,.14);
-    --shadow:0 1px 2px rgba(0,0,0,.06);
-    --weekend-sun:#b44a4a;
-    --weekend-sat:#4f6fb8;
-    --sec-phase:#6d28d9;
-    --sec-task:#1d4ed8;
-    --sec-pending:#b45309;
+    --shadow:0 1px 3px rgba(20,30,45,.10),0 1px 2px rgba(20,30,45,.06);
+    --weekend-sun:#c0392b;        /* 正本 --danger */
+    --weekend-sat:#2b6cb0;        /* 正本 --info */
+    --sec-phase:#33475b;          /* 正本 --ink-2：局面は信号でなく構造 */
+    --sec-task:#2b6cb0;           /* 正本 --info */
+    --sec-pending:#8a5b12;        /* 正本 --warn */
     --scrim:rgba(15,23,42,.45);
   }
   :root[data-theme="dark"]{
     color-scheme:dark;
-    --bg:#13161a;
-    --card:#1b2128;
-    --panel:#232b33;
-    --line:#354150;
-    --text:#edf2f7;
-    --muted:#b2bcc7;
-    --soft:#8e99a6;
-    --accent:#e5e7eb;
-    --danger-soft:#3a1f23;
-    --ok-soft:#173327;
-    --badge:#342516;
-    --badge-line:#855f38;
-    --btn:#232b33;
-    --on-accent:#13161a;
-    --bar:rgba(19,22,26,.96);
-    --topbar:#0b2c4a;
+    --bg:#0f161e;
+    --card:#18212b;
+    --panel:#1e2a36;              /* 正本 --th-bg（暗所） */
+    --line:#2e3c4b;
+    --text:#e8edf2;               /* 正本 --ink（暗所） */
+    --muted:#9db0c0;
+    --soft:#9db0c0;
+    --accent:#2c6faf;             /* 正本 --fill-brand（暗所）：白文字 5.25 */
+    --danger:#f08a80;
+    --danger-soft:#3a1f1c;
+    --ok:#4fb78e;                 /* 正本 --ok（暗所） */
+    --ok-soft:#0f2a22;
+    --badge:#33290f;              /* 正本 --warn-bg（暗所） */
+    --badge-line:#e3b24c;
+    --btn:#1e2a36;
+    --on-accent:#fff;
+    --bar:rgba(15,22,30,.96);
+    /* 上部バーは明暗どちらでも同じ紺グラデーション（正本§v3「ヘッダーは紺を維持」） */
+    --hdr-a:#081f33;
+    --hdr-b:#0e3252;
     --topbar-ink:#dbe7f2;
     --topbar-line:rgba(255,255,255,.12);
     --topbar-btn:rgba(255,255,255,.10);
     --topbar-btn-line:rgba(255,255,255,.26);
     --drop:rgba(237,242,247,.22);
-    --shadow:0 1px 2px rgba(0,0,0,.28);
-    --weekend-sun:#f09a9a;
-    --weekend-sat:#9db8ff;
-    --sec-phase:#c4b5fd;
-    --sec-task:#93c5fd;
-    --sec-pending:#fbbf6e;
+    --shadow:0 1px 3px rgba(0,0,0,.45);
+    --weekend-sun:#f08a80;        /* 正本 --danger（暗所） */
+    --weekend-sat:#7fb0d9;        /* 正本 --info（暗所） */
+    --sec-phase:#b7c6d4;          /* 正本 --ink-2（暗所） */
+    --sec-task:#7fb0d9;
+    --sec-pending:#e3b24c;
     --scrim:rgba(0,0,0,.6);
   }
   *{box-sizing:border-box}
@@ -127,7 +137,7 @@
   .app{max-width:720px;margin:0 auto;padding:0 0 88px}
   .topbar{
     position:sticky;top:0;z-index:20;
-    background:var(--topbar);
+    background:linear-gradient(90deg,var(--hdr-a),var(--hdr-b));
     color:var(--topbar-ink);
     border-bottom:1px solid var(--topbar-line);
     padding:10px 14px calc(10px + env(safe-area-inset-top));
@@ -3553,7 +3563,7 @@ function applyTheme(){
   var meta = typeof document !== "undefined" && document.querySelector ? document.querySelector('meta[name="theme-color"]') : null;
   // Status bar follows the topbar, not the page background (CEO 2026-07-29),
   // so the brand navy runs unbroken from the system bar into the app header.
-  if (meta && meta.setAttribute) meta.setAttribute("content", theme === "dark" ? "#0b2c4a" : "#14456e");
+  if (meta && meta.setAttribute) meta.setAttribute("content", "#0e3252");
 }
 
 function setThemeMode(mode){

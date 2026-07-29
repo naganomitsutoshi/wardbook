@@ -1573,10 +1573,10 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
       "no icon declared for purpose " + purpose
     );
   }
-  assert.strictEqual(manifest.theme_color, "#14456e", "theme color must stay Mitsuba navy");
+  assert.strictEqual(manifest.theme_color, "#0e3252", "theme color must stay Mitsuba navy");
   // The launch screen paints background_color before anything renders. White
   // there flashed against the navy icon (CEO 2026-07-29).
-  assert.strictEqual(manifest.background_color, "#14456e", "launch background must stay Mitsuba navy");
+  assert.strictEqual(manifest.background_color, "#0e3252", "launch background must stay Mitsuba navy");
   // The splash blows the icon up to about a third of the screen, so anything
   // smaller than 1024 shows its pixels on a modern phone.
   for (const purpose of ["any", "maskable"]) {

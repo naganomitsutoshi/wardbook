@@ -1,12 +1,13 @@
 // Wardbook home-screen icons. Dependency-free PNG writer (no build tooling).
 //
 // Design: 案1「Wモノグラム」 — CEO 2026-07-29 (5案比較から選定).
-//   ground : Mitsuba brand navy #14456E as the gradient midpoint
+//   ground : Mitsuba brand navy #0E3252 as the gradient midpoint
 //   strokes: softened off-white, NOT pure white. CEO asked to hold the
 //            ground/stroke contrast down ("もう少し押さえて"), so the mark sits
 //            around 7:1 instead of the ~14:1 that pure white on deep navy gives.
+//            The ink moves whenever the ground does, to keep that ratio.
 //   accent : the final upstroke only, in the brand green (dark-ground token).
-// Brand tokens are the正本 in 5_開発部/設計/Mitsuba_UI骨子.md (CEO 2026-07-28).
+// Brand tokens are the正本 in 5_開発部/設計/Mitsuba_UI骨子.md (v3, CEO 2026-07-29).
 //
 // Two purposes, two files each (Android crops "maskable" itself, so a
 // self-drawn rounded square there would be cropped twice — that was the old
@@ -26,10 +27,10 @@ const outDir = path.join(process.cwd(), "icons");
 fs.mkdirSync(outDir, { recursive: true });
 
 // ---- palette -------------------------------------------------------------
-const BG_TOP = [0x1a, 0x53, 0x82];    // navy, lit
-const BG_BOTTOM = [0x0f, 0x3a, 0x5e]; // navy, deep  (midpoint ≈ brand #14456E)
-const INK = [0xd3, 0xe0, 0xec];       // softened off-white (~7:1 on the ground)
-const GREEN = [0x4f, 0xbe, 0x92];     // brand green for dark grounds
+const BG_TOP = [0x16, 0x4a, 0x75];    // navy, lit
+const BG_BOTTOM = [0x07, 0x1b, 0x2e]; // navy, deep  (midpoint ≈ brand #0E3252)
+const INK = [0xb4, 0xc6, 0xd8];       // softened off-white (~7.4:1 on the ground)
+const GREEN = [0x4f, 0xb7, 0x8e];     // brand green for dark grounds
 
 // ---- geometry (fractions of the icon side) -------------------------------
 // The W as four segments. The last one is the green upstroke.
