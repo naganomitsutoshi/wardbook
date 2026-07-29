@@ -275,8 +275,12 @@ const quietValCount = (fullBoardHtml.match(/class="ql"/g) || []).length;
 if (!quietRowCount) fail("board card missing quiet metadata rows");
 if (quietValCount <= quietRowCount) fail("board card repeats the quiet heading for every value");
 
+// 今日／週間予定 left the tab row on 2026-07-30 (CEO), but their code stays in
+// the file so either can be restored with one VIEW_TABS line. The views are
+// therefore rendered directly here — going through renderBoard() would now
+// fall back to the board, since the tab ids are no longer registered.
 vm.runInContext("VIEW.boardMode='week'", sandbox);
-const weekHtml = vm.runInContext("renderBoard()", sandbox);
+const weekHtml = vm.runInContext("renderWeekView()", sandbox);
 if (!weekHtml.includes("weekgrid")) fail("week view missing grid");
 if (!weekHtml.includes("todaycol")) fail("week view missing today column");
 if (!weekHtml.includes("casecell")) fail("week view missing case row headers");
@@ -294,8 +298,8 @@ if (!weekHtml.includes("overdue")) fail("week today column missing overdue dot")
 if (weekHtml.includes("bandbit")) fail("week cell should no longer render chart band bits");
 
 // Day overview: today's todos/pendings grouped per case, no density toggle.
-vm.runInContext("setBoardMode('day')", sandbox);
-const dayHtml = vm.runInContext("renderBoard()", sandbox);
+vm.runInContext("VIEW.boardMode='day'; VIEW.dayDate=todayISO();", sandbox);
+const dayHtml = vm.runInContext("renderDayPlanView()", sandbox);
 if (!dayHtml.includes("daynav")) fail("day view missing date nav");
 if (!dayHtml.includes("shiftDayDate(1)")) fail("day view missing next-day nav");
 if (!dayHtml.includes("haien")) fail("day view missing case group");
@@ -308,7 +312,7 @@ if (!dayHtml.includes("cancelValuePlan('c1'")) fail("day view missing value-plan
 // A past-due undone task (ABX, due 2026-07-10) rolls onto today's list.
 if (!dayHtml.includes("ABX")) fail("day view missing rolled-over due task");
 vm.runInContext("openDayView('2026-07-10')", sandbox);
-const dayFutureHtml = vm.runInContext("renderBoard()", sandbox);
+const dayFutureHtml = vm.runInContext("renderDayPlanView()", sandbox);
 if (!dayFutureHtml.includes("★")) fail("day view missing planned-discharge row");
 vm.runInContext("setBoardMode('board')", sandbox);
 
@@ -495,15 +499,54 @@ tabIds.forEach(function(id){
 vm.runInContext("VIEW.boardMode='gone'", sandbox);
 if (!vm.runInContext("renderBoard()", sandbox).includes("dropzone")) fail("unknown tab must fall back to the board");
 vm.runInContext("setBoardMode('board')", sandbox);
+// The retired tabs must not come back silently: a chip for either one means the
+// 2026-07-30 decision was undone by accident.
+["day", "week"].forEach(function(id){
+  if (tabBar.includes("setBoardMode('" + id + "')")) fail("retired tab still has a chip: " + id);
+});
 
-// Calculator tab (patient-less). It now sits in the tab row beside ボード／今日／
-// 週間予定 (CEO 2026-07-22), so the topbar no longer carries a button.
+// clover-pages tab (CEO 2026-07-30): a link list, one tap from the board. Every
+// registry row must render as its own opener, and the index stays as the escape
+// hatch for pages that are not listed.
+const cloverPaths = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.path))", sandbox));
+const cloverKeys = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.nameKey))", sandbox));
+const cloverIds = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.id))", sandbox));
+if (!cloverPaths.length) fail("clover tab has no links");
+if (new Set(cloverIds).size !== cloverIds.length) fail("clover link ids must be unique");
+vm.runInContext("setBoardMode('clover')", sandbox);
+const cloverHtml = vm.runInContext("renderBoard()", sandbox);
+cloverPaths.forEach(function(path, i){
+  // A path the guard refuses would render a dead row, so check the URL builder
+  // rather than only the markup.
+  if (!vm.runInContext("cloverUrl(" + JSON.stringify(path) + ")", sandbox)) fail("clover path refused by the guard: " + path);
+  if (!cloverHtml.includes("openCloverPage('" + path + "')")) fail("clover tab missing row: " + path);
+  if (!vm.runInContext("STR[" + JSON.stringify(cloverKeys[i]) + "]", sandbox)) fail("clover link has no label: " + cloverKeys[i]);
+});
+if (!cloverHtml.includes("openVaultHtml()")) fail("clover tab missing the index row");
+if (!cloverHtml.includes(vm.runInContext("STR.cloverNote", sandbox))) fail("clover tab must say it opens an external page");
+// Nothing patient-bound may reach this screen: it is published, device-agnostic
+// content, so no case may be rendered or reachable from it.
+["haien", "openDetail('c1')", "updateCaseBio", "3E-305"].forEach(function(needle){
+  if (cloverHtml.includes(needle)) fail("clover tab leaks case data: " + needle);
+});
+// window.open takes registry paths only.
+["https://example.com/x.html", "javascript:alert(1)", "1_MKM/../secret.html", "//evil.test/x"].forEach(function(bad){
+  if (vm.runInContext("cloverUrl(" + JSON.stringify(bad) + ")", sandbox)) fail("cloverUrl accepted a non-registry path: " + bad);
+});
+vm.runInContext("setBoardMode('board')", sandbox);
+
+// Calculator tab (patient-less). It sits in the tab row beside board／
+// clover-pages／input (CEO 2026-07-22, tabs trimmed 2026-07-30), so the topbar
+// carries no button. The clover row left this list when the tab arrived: three
+// ways into the same pages is what made it hard to find.
 if (vm.runInContext("renderTopbar()", sandbox).includes("openCalcTab()")) fail("calculator button must leave the topbar");
 vm.runInContext("openCalcTab()", sandbox);
 if (vm.runInContext("VIEW.boardMode", sandbox) !== "calc") fail("openCalcTab did not switch to the calc tab");
 if (vm.runInContext("SHEET.name", sandbox) !== "") fail("calc tab must not open a sheet");
 if (vm.runInContext("VIEW.calcFor", sandbox) !== "") fail("calc tab must not be bound to a case");
-if (!vm.runInContext("renderBoard()", sandbox).includes("openCalcTool('adrop')")) fail("calc tab missing the tool list");
+const calcListHtml = vm.runInContext("renderBoard()", sandbox);
+if (!calcListHtml.includes("openCalcTool('adrop')")) fail("calc tab missing the tool list");
+if (calcListHtml.includes("openVaultHtml()")) fail("clover-pages must not sit in the calculator list any more");
 vm.runInContext("openCalcTool('kidney')", sandbox);
 const calcTabEmpty = vm.runInContext("renderBoard()", sandbox);
 if (!calcTabEmpty.includes(vm.runInContext("STR.calcNoCase", sandbox))) fail("calc tab must say inputs are not saved");

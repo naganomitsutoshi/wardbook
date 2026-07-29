@@ -1203,6 +1203,15 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   // Density modes were dropped (CEO 2026-07-22): no tab may re-grow the toggle.
   assert.strictEqual(L.VIEW_TABS.filter((t) => t.density).length, 0, "no density toggle on any tab");
   assert.ok(tabIds.has("calc"), "the calculator is a tab of its own (CEO 2026-07-22)");
+  // 2026-07-30 (CEO): four tabs only — board / score / clover-pages / input.
+  // 今日 and 週間予定 were retired (barely used) to put clover-pages, which is
+  // opened many times a day, one tap from the board instead of three.
+  // Joined, not deepStrictEqual: the logic block runs in a vm realm, so its
+  // arrays never strict-equal a host array.
+  assert.strictEqual(L.VIEW_TABS.map((t) => t.id).join(","), "board,calc,clover,learn",
+    "tab row is board / score / clover-pages / input in that order");
+  assert.strictEqual(L.normalizeViewTab("day"), "board", "the retired 今日 tab lands on the board");
+  assert.strictEqual(L.normalizeViewTab("week"), "board", "the retired 週間予定 tab lands on the board");
   assert.strictEqual(L.viewTabById("gone"), null, "unknown tab id resolves to null");
   // A tab id that no longer exists (older device, dropped tab) must land on the
   // board rather than render nothing.

@@ -2829,12 +2829,16 @@ function learnBadges(stats){
 // body dispatch (TAB_BODY) and the on-enter hooks (TAB_ENTER) all read from it,
 // so adding a screen is a data change plus one render function.
 //   scratch:true  = entering the tab throws away the previous session's inputs
+//
+// 2026-07-30 (CEO): 今日／週間予定 were retired from the tab row — they were
+// barely used, and clover-pages (opened many times a day) was three taps deep
+// behind the calculator list. The two views' code and logic stay in the file
+// unreachable, so restoring either is a one-line change here.
 var VIEW_TABS = [
-  { id:"board", labelKey:"boardView" },
-  { id:"day",   labelKey:"dayView" },
-  { id:"week",  labelKey:"weekView" },
-  { id:"calc",  labelKey:"calcBtn", scratch:true },
-  { id:"learn", labelKey:"learnView" }
+  { id:"board",  labelKey:"boardView" },
+  { id:"calc",   labelKey:"scoreView", scratch:true },
+  { id:"clover", labelKey:"cloverView" },
+  { id:"learn",  labelKey:"learnView" }
 ];
 
 function viewTabById(id){
@@ -3174,7 +3178,7 @@ const STR = {
   calcSaveBtn:"この計算を記録に残す",
   calcSavedNote:"算出日つきで記録に残します（詳細画面の「計算の記録」で見返せます）",
   calcLogPanel:"計算の記録",
-  learnView:"学び",
+  learnView:"input",
   learnEmpty:"まだ学びがありません。症例の「指導医AI」を実行すると、ここに自動で集まります",
   learnMasteredUnit:"身についた",
   learnFieldMap:"征服マップ（臓器・システム）",
@@ -3223,7 +3227,25 @@ const STR = {
   taskEditClose:"閉じる",
   menuRow:"その他",
   vaultHtmlRow:"早見表（clover-pages）",
-  calcVaultLink:"換算表・早見表（clover-pages）を開く",
+  cloverView:"clover-pages",
+  cloverGroupAdm:"\u5165\u9662\u5bfe\u5fdc",
+  cloverGroupRef:"\u30d5\u30ed\u30fc\u30fb\u65e9\u898b\u8868",
+  cloverIndexRow:"\u76ee\u6b21\uff08\u5168\u90e8\uff09\u3092\u898b\u308b",
+  cloverNote:"clover-pages \u3092\u65b0\u3057\u3044\u30bf\u30d6\u3067\u958b\u304d\u307e\u3059\uff08\u60a3\u8005\u30c7\u30fc\u30bf\u306f\u9001\u308a\u307e\u305b\u3093\uff09",
+  cloverDka:"DKA \u5165\u9662\u5bfe\u5fdc",
+  cloverHypoNa:"\u4f4eNa \u5165\u9662\u5bfe\u5fdc",
+  cloverHyperNa:"\u9ad8Na \u5165\u9662\u5bfe\u5fdc",
+  cloverHypoK:"\u4f4eK \u5165\u9662\u5bfe\u5fdc",
+  cloverHyperK:"\u9ad8K \u5165\u9662\u5bfe\u5fdc",
+  cloverAbx:"\u6297\u83cc\u85ac \u6295\u4e0e\u91cf",
+  cloverNutri:"\u5165\u9662\u60a3\u8005\u306e\u6804\u990a\u7ba1\u7406",
+  cloverCap:"\u5e02\u4e2d\u80ba\u708e \u30d5\u30ed\u30fc",
+  cloverHf:"\u5fc3\u4e0d\u5168GL2025",
+  cloverStroke:"\u8133\u5352\u4e2dGL2025",
+  cloverDizzy:"\u3081\u307e\u3044 \u65e9\u898b\u8868",
+  cloverInfect:"\u611f\u67d3\u75c7\u8a3a\u7642\u306e\u57fa\u672c",
+  cloverThyroid:"\u7532\u72b6\u817a\u6a5f\u80fd\u306e\u89e3\u91c8",
+  cloverDx:"\u8a3a\u65ad\u63a8\u8ad6\u30d5\u30eb\u30b3\u30fc\u30b9",
   backOnLabel:"戻り日（不明なら空欄）",
   editMeta:"年代・性別",
   confirm:"確定",
@@ -3240,7 +3262,8 @@ Object.assign(STR, {
   trashEmpty:"\u3054\u307f\u3070\u3053\u306f\u7a7a\u3067\u3059\u30027\u65e5\u9593\u4fdd\u6301\u3057\u307e\u3059\u3002",
   restoreRow:"\u623b\u3059",
   restoreMissingCase:"\u5143\u306e\u75c7\u4f8b\u304c\u306a\u3044\u305f\u3081\u623b\u305b\u307e\u305b\u3093",
-  boardView:"ボード",
+  boardView:"board",
+  scoreView:"score",
   weekView:"週間予定",
   searchPh:"ラベル・病名タグ・本文を検索",
   searchRun:"\u691c\u7d22",
@@ -4069,13 +4092,6 @@ function syncOrientationLock(){
 // What each tab needs done when you arrive on it. A tab with nothing to set up
 // simply has no entry here.
 var TAB_ENTER = {
-  day:function(){ VIEW.dayDate = todayISO(); },
-  week:function(prev){
-    if (prev === "week") return;
-    VIEW.weekPast = 0;
-    VIEW.weekFuture = weekDefaultFuture();
-    WEEK_SCROLL_RT.initPending = true;
-  },
   calc:function(prev){
     if (prev === "calc") return;
     // Arriving on the calculator always starts from empty: the moment's state
@@ -6183,6 +6199,41 @@ var VAULT_HTML_URL = "https://clover-pages.naganomitsutoshi.workers.dev/";
 function openVaultHtml(){
   window.open(VAULT_HTML_URL, "_blank", "noopener");
 }
+
+// The clover-pages tab (CEO 2026-07-30). Pages opened daily get their own row
+// so they are two taps away (tab -> page) instead of three via the index.
+// Adding one is a DATA change: copy the href straight out of the clover-pages
+// index — it is already percent-encoded, which keeps this list pure ASCII — and
+// add one STR label. Anything not listed stays reachable through cloverIndexRow.
+var CLOVER_LINKS = [
+  { id:"dka", nameKey:"cloverDka", groupKey:"cloverGroupAdm", path:"1_MKM/DKA_%E5%85%A5%E9%99%A2%E5%AF%BE%E5%BF%9C.html" },
+  { id:"hypona", nameKey:"cloverHypoNa", groupKey:"cloverGroupAdm", path:"1_MKM/%E4%BD%8E%E3%83%8A%E3%83%88%E3%83%AA%E3%82%A6%E3%83%A0%E8%A1%80%E7%97%87_%E5%85%A5%E9%99%A2%E5%AF%BE%E5%BF%9C.html" },
+  { id:"hyperna", nameKey:"cloverHyperNa", groupKey:"cloverGroupAdm", path:"1_MKM/%E9%AB%98%E3%83%8A%E3%83%88%E3%83%AA%E3%82%A6%E3%83%A0%E8%A1%80%E7%97%87_%E5%85%A5%E9%99%A2%E5%AF%BE%E5%BF%9C.html" },
+  { id:"hypok", nameKey:"cloverHypoK", groupKey:"cloverGroupAdm", path:"1_MKM/%E4%BD%8E%E3%82%AB%E3%83%AA%E3%82%A6%E3%83%A0%E8%A1%80%E7%97%87_%E5%85%A5%E9%99%A2%E5%AF%BE%E5%BF%9C.html" },
+  { id:"hyperk", nameKey:"cloverHyperK", groupKey:"cloverGroupAdm", path:"1_MKM/%E9%AB%98%E3%82%AB%E3%83%AA%E3%82%A6%E3%83%A0%E8%A1%80%E7%97%87_%E5%85%A5%E9%99%A2%E5%AF%BE%E5%BF%9C.html" },
+  { id:"abx", nameKey:"cloverAbx", groupKey:"cloverGroupAdm", path:"1_MKM/%E6%8A%97%E8%8F%8C%E8%96%AC%E6%8A%95%E4%B8%8E%E9%87%8F%E3%82%B7%E3%83%9F%E3%83%A5%E3%83%AC%E3%83%BC%E3%82%BF%E3%83%BC.html" },
+  { id:"nutri", nameKey:"cloverNutri", groupKey:"cloverGroupAdm", path:"1_MKM/%E5%85%A5%E9%99%A2%E6%82%A3%E8%80%85%E3%81%AE%E6%A0%84%E9%A4%8A%E7%AE%A1%E7%90%86.html" },
+  { id:"cap", nameKey:"cloverCap", groupKey:"cloverGroupRef", path:"1_MKM/%E5%B8%82%E4%B8%AD%E8%82%BA%E7%82%8E%E8%A8%BA%E7%99%82%E3%83%95%E3%83%AD%E3%83%BC_%E3%83%95%E3%83%AD%E3%83%BC%E3%83%81%E3%83%A3%E3%83%BC%E3%83%88.html" },
+  { id:"hf", nameKey:"cloverHf", groupKey:"cloverGroupRef", path:"1_MKM/%E5%BF%83%E4%B8%8D%E5%85%A8%E8%A8%BA%E7%99%82GL2025_%E3%83%95%E3%83%AD%E3%83%BC%E3%83%81%E3%83%A3%E3%83%BC%E3%83%88.html" },
+  { id:"stroke", nameKey:"cloverStroke", groupKey:"cloverGroupRef", path:"1_MKM/%E8%84%B3%E5%8D%92%E4%B8%AD%E6%B2%BB%E7%99%82GL2025_%E3%83%95%E3%83%AD%E3%83%BC%E3%83%81%E3%83%A3%E3%83%BC%E3%83%88.html" },
+  { id:"dizzy", nameKey:"cloverDizzy", groupKey:"cloverGroupRef", path:"1_MKM/%E3%82%81%E3%81%BE%E3%81%84%E3%81%AE%E3%82%A2%E3%83%97%E3%83%AD%E3%83%BC%E3%83%81_%E6%97%A9%E8%A6%8B%E8%A1%A8_%E7%B5%90%E8%AB%96.html" },
+  { id:"infect", nameKey:"cloverInfect", groupKey:"cloverGroupRef", path:"1_MKM/%E6%84%9F%E6%9F%93%E7%97%87%E8%A8%BA%E7%99%82%E3%81%AE%E5%9F%BA%E6%9C%AC_%E6%97%A9%E8%A6%8B%E8%A1%A8_%E7%B5%90%E8%AB%96.html" },
+  { id:"thyroid", nameKey:"cloverThyroid", groupKey:"cloverGroupRef", path:"1_MKM/%E7%94%B2%E7%8A%B6%E8%85%BA%E6%A9%9F%E8%83%BD%E3%81%AE%E8%A7%A3%E9%87%88_%E6%97%A9%E8%A6%8B%E8%A1%A8.html" },
+  { id:"dx", nameKey:"cloverDx", groupKey:"cloverGroupRef", path:"1_MKM/%E8%A8%BA%E6%96%AD%E6%8E%A8%E8%AB%96%E3%83%95%E3%83%AB%E3%82%B3%E3%83%BC%E3%82%B9_%E6%97%A9%E8%A6%8B%E8%A1%A8_%E7%B5%90%E8%AB%96.html" }
+];
+
+// Registry paths only: a value that is not a plain relative path (an absolute
+// URL, a javascript: scheme, a parent-directory hop) is refused rather than
+// handed to window.open.
+function cloverUrl(path){
+  var p = String(path || "");
+  return /^[A-Za-z0-9_%.\-]+(\/[A-Za-z0-9_%.\-]+)*$/.test(p) && p.indexOf("..") < 0 ? VAULT_HTML_URL + p : "";
+}
+
+function openCloverPage(path){
+  var url = cloverUrl(path);
+  if (url) window.open(url, "_blank", "noopener");
+}
 var AI = { caseId:"", status:"", text:"" };
 
 function aiToken(){
@@ -6379,8 +6430,7 @@ function calcListBody(){
   return (VIEW.calcFor ? '' : '<div class="note">' + esc(STR.calcNoCase) + '</div>') +
     CALC_TOOLS.map(function(tool){
       return '<button class="lineitem" style="width:100%;text-align:left" onclick="openCalcTool(\'' + esc(tool.id) + '\')"><span class="text">' + esc(STR[tool.nameKey] || tool.id) + '</span></button>';
-    }).join('') +
-    '<button class="lineitem" style="width:100%;text-align:left" onclick="openVaultHtml()"><span class="text" style="flex:1">' + esc(STR.calcVaultLink) + '</span><span class="faint">↗</span></button>';
+    }).join('');
 }
 
 function renderCalcListSheet(){
@@ -6491,6 +6541,29 @@ function renderCalcTabBody(){
   return '<section class="panelcard"><div class="one">' + esc(STR[tool.nameKey]) + '</div><div class="stack" style="margin-top:10px">' +
     calcToolBody(tool) +
     (CALC_TOOLS.length > 1 ? '<div class="row">' + calcBackBtn() + '</div>' : '') +
+  '</div></section>';
+}
+
+// ---- clover-pages tab -----------------------------------------------------
+// A link list and nothing else: the pages are published elsewhere, so this tab
+// holds no patient data and stores nothing. Group headings follow the order
+// declared in CLOVER_LINKS, so re-ordering the registry re-orders the screen.
+function cloverRow(labelKey, handler){
+  return '<button class="lineitem" style="width:100%;text-align:left" onclick="' + handler + '"><span class="text" style="flex:1">' + esc(STR[labelKey] || labelKey) + '</span><span class="faint">↗</span></button>';
+}
+
+function renderCloverTabBody(){
+  var rows = '', group = '';
+  CLOVER_LINKS.forEach(function(link){
+    if (link.groupKey !== group) {
+      group = link.groupKey;
+      rows += '<div class="fieldlabel">' + esc(STR[group] || group) + '</div>';
+    }
+    rows += cloverRow(link.nameKey, "openCloverPage('" + esc(link.path) + "')");
+  });
+  return '<section class="panelcard"><div class="stack">' + rows +
+    cloverRow("cloverIndexRow", "openVaultHtml()") +
+    '<div class="note">' + esc(STR.cloverNote) + '</div>' +
   '</div></section>';
 }
 
@@ -6690,9 +6763,8 @@ function renderWeekView(){
 // here; renderBoard itself never learns the list.
 var TAB_BODY = {
   board:renderCaseListView,
-  day:renderDayPlanView,
-  week:renderWeekView,
   calc:renderCalcTabBody,
+  clover:renderCloverTabBody,
   learn:renderLearnTabBody
 };
 
