@@ -1911,7 +1911,8 @@ function chartDayParse(text, items){
 // still compute — CEO decided 2026-07-22 to warn rather than refuse.
 var CALC_LIMITS = {
   ageMin:1, ageMax:120, weightMin:20, weightMax:200, crMin:0.1, crMax:20,
-  bunMin:1, bunMax:200, spo2Min:50, spo2Max:100, sbpMin:40, sbpMax:300
+  bunMin:1, bunMax:200, spo2Min:50, spo2Max:100, sbpMin:40, sbpMax:300,
+  rrMin:4, rrMax:80, dbpMin:20, dbpMax:200
 };
 var CALC_ADULT_MIN_AGE = 18;
 
@@ -2006,6 +2007,76 @@ function calcAdropBandKey(v){
   return "calcAdropB4";
 }
 
+// ---- CURB-65 (community-acquired pneumonia severity, UK) ------------------
+// 1_MKM ruled this out on 2026-07-22 and re-supervised it on 2026-07-29
+// (監修依頼 §10-2) once the goal became replacing HOKUTO, i.e. every score has
+// to be here. It is allowed under three conditions, all of them implemented:
+//
+//  1. The only primary threshold is "urea > 7 mmol/l" (Thorax 2003 / NICE
+//     NG250). No primary source states a BUN mg/dL cut-off, so this app never
+//     prints one. Japanese labs report BUN in mg/dL, so the INPUT is converted
+//     (divide by 28.014 mg/mmol of urea nitrogen, expressed per dL = 2.8014 —
+//     a unit definition, not a clinical threshold) and compared with the
+//     verbatim 7 mmol/l. Identical treatment to FIB-4's 万/uL -> x10^9/L.
+//     Deliberately NOT shown as a second result: rounding a converted 6.997 to
+//     "7.0" next to an unscored item would read as a bug. The conversion rule
+//     is stated in the formula line instead.
+//  2. Bands carry NICE's mortality risk only. NG250's care settings (virtual
+//     ward / SDEC unit / hospital at home) assume the UK system, so they are
+//     omitted — exactly as A-DROP's 外来/一般病棟/ICU is omitted.
+//  3. A-DROP and CURB-65 disagree on three points (systolic 90 exactly, the
+//     age rule, respiratory rate vs SpO2). The disagreement is displayed
+//     rather than hidden: the two are separate tools and never merged, and
+//     no ○× flag is shared between them (only raw values like age and sbp).
+//
+// As with A-DROP nothing is scored from a blank: one undetermined item makes
+// the whole score null. Note the boundaries run the OPPOSITE way to A-DROP —
+// systolic 90 exactly does NOT count here but does count in A-DROP.
+var CURB65_UREA_PER_BUN = 2.8014;   // BUN [mg/dL] / this = urea [mmol/L]
+
+function calcBunToUrea(bunMgDl){
+  var b = calcNum(bunMgDl);
+  return b === null ? null : b / CURB65_UREA_PER_BUN;
+}
+
+function calcCurb65Items(v){
+  var vals = v || {};
+  var age = calcNum(vals.age), rr = calcNum(vals.rr);
+  var sbp = calcNum(vals.sbp), dbp = calcNum(vals.dbp);
+  var confusion = vals.confusion;
+  if (!calcInRange(age, CALC_LIMITS.ageMin, CALC_LIMITS.ageMax)) return null;
+  if (confusion !== true && confusion !== false) return null;
+  if (!calcInRange(calcNum(vals.bun), CALC_LIMITS.bunMin, CALC_LIMITS.bunMax)) return null;
+  if (!calcInRange(rr, CALC_LIMITS.rrMin, CALC_LIMITS.rrMax)) return null;
+  if (!calcInRange(sbp, CALC_LIMITS.sbpMin, CALC_LIMITS.sbpMax)) return null;
+  if (!calcInRange(dbp, CALC_LIMITS.dbpMin, CALC_LIMITS.dbpMax)) return null;
+  var urea = calcBunToUrea(vals.bun);
+  return {
+    c:confusion === true ? 1 : 0,
+    u:urea > 7 ? 1 : 0,                       // strictly greater — 7.0 does NOT count
+    r:rr >= 30 ? 1 : 0,                       // 30 counts
+    b:(sbp < 90 || dbp <= 60) ? 1 : 0,        // systolic 90 does NOT count; diastolic 60 does
+    age65:age >= 65 ? 1 : 0                   // 65 counts
+  };
+}
+
+function calcCurb65(v){
+  var items = calcCurb65Items(v);
+  if (!items) return null;
+  return items.c + items.u + items.r + items.b + items.age65;
+}
+
+// NICE NG250 verbatim: 0 or 1 low (<3%), 2 intermediate (3-15%), 3 to 5 high
+// (>15%). Mortality percentages travel across health systems; care settings do
+// not, so only these three bands exist here.
+function calcCurb65BandKey(v){
+  var n = calcCurb65(v);
+  if (n === null) return "";
+  if (n <= 1) return "calcCurbB1";
+  if (n === 2) return "calcCurbB2";
+  return "calcCurbB3";
+}
+
 // ---- calculator registry --------------------------------------------------
 // Adding a calculator has to stay a DATA change, not a code change: one entry
 // in CALC_TOOLS (plus any missing key in CALC_FIELDS) is the whole job. The
@@ -2033,7 +2104,12 @@ var CALC_FIELDS = {
   sbp:         { type:"num",  store:"none", labelKey:"calcSbp",  min:CALC_LIMITS.sbpMin,  max:CALC_LIMITS.sbpMax,  noteKey:"calcNotSaved" },
   orientation: { type:"bool3", store:"none", labelKey:"calcOrientation", noteKey:"calcNotSaved" },
   dehydration: { type:"bool3", store:"none", labelKey:"calcDehydration", noteKey:"calcDehydNote" },
-  shock:       { type:"bool3", store:"none", labelKey:"calcShock", noteKey:"calcNotSaved" }
+  shock:       { type:"bool3", store:"none", labelKey:"calcShock", noteKey:"calcNotSaved" },
+  // CURB-65. Raw values only are shared with A-DROP (age, bun, sbp); the ○×
+  // items are separate fields because the two scores define them differently.
+  rr:          { type:"num",  store:"none", labelKey:"calcRr",  min:CALC_LIMITS.rrMin,  max:CALC_LIMITS.rrMax,  noteKey:"calcNotSaved" },
+  dbp:         { type:"num",  store:"none", labelKey:"calcDbp", min:CALC_LIMITS.dbpMin, max:CALC_LIMITS.dbpMax, noteKey:"calcNotSaved" },
+  confusion:   { type:"bool3", store:"none", labelKey:"calcConfusion", noteKey:"calcConfusionNote" }
 };
 
 // Every tool must carry sourceKey and every result a useKey ("what it is for").
@@ -2075,6 +2151,23 @@ var CALC_TOOLS = [{
   rangeKey:"calcAdropRange",
   disclaimerKey:"calcAdropCaution",
   sourceKey:"calcAdropSource"
+}, {
+  id:"curb65",
+  nameKey:"calcCurbTitle",
+  fields:["age", "confusion", "bun", "bunDate", "rr", "sbp", "dbp"],
+  results:[
+    { key:"curb65", main:true, labelKey:"calcCurbLabel", unitKey:"calcCurbUnit", useKey:"calcCurbUse", formulaKey:"calcCurbFormula",
+      run:calcCurb65, band:calcCurb65BandKey }
+  ],
+  warns:[
+    { key:"ped",  msgKey:"calcPedWarn",     when:function(v){ var a = calcNum(v.age); return a !== null && a < CALC_ADULT_MIN_AGE; } },
+    { key:"diff", msgKey:"calcCurbVsAdrop", when:function(){ return true; } },
+    { key:"scope", msgKey:"calcCurbScope",  when:function(){ return true; } }
+  ],
+  needKey:"calcCurbNeed",
+  rangeKey:"calcCurbRange",
+  disclaimerKey:"calcCurbCaution",
+  sourceKey:"calcCurbSource"
 }];
 
 function calcToolById(id){
@@ -2393,6 +2486,10 @@ if (typeof module !== "undefined") {
     calcAdrop:calcAdrop,
     calcAdropItems:calcAdropItems,
     calcAdropBandKey:calcAdropBandKey,
+    calcBunToUrea:calcBunToUrea,
+    calcCurb65:calcCurb65,
+    calcCurb65Items:calcCurb65Items,
+    calcCurb65BandKey:calcCurb65BandKey,
     calcToolById:calcToolById,
     ORGAN_FIELDS:ORGAN_FIELDS,
     PF_DOMAINS:PF_DOMAINS,
@@ -2544,6 +2641,24 @@ const STR = {
   calcAdropRange:"入力できる範囲：年齢 1〜120歳／BUN 1〜200mg/dL／SpO2 50〜100％／収縮期血圧 40〜300mmHg",
   calcAdropCaution:"死亡率とは良好な相関を示すが、肺炎の進行（増悪）の予測には不向き（GL2024 p.31）。療養の場（外来／一般病棟／ICU）はガイドライン上バンドが重なっており点数から一意に決まらないため表示しない。",
   calcAdropSource:"出典：成人肺炎診療ガイドライン2024 p.31 表1（1_MKM 監修済 2026-07-22）。市中肺炎に対する A-DROP は弱く推奨（エビデンスの確実性 C）",
+  calcRr:"呼吸数（回/分）",
+  calcDbp:"拡張期血圧",
+  calcConfusion:"意識障害（新規の見当識障害）",
+  calcConfusionNote:"保存しません。原著の定義は AMT（簡易知能検査）8点以下、または人・場所・時間の新規の見当識障害",
+  calcCurbTitle:"CURB-65（市中肺炎の重症度）",
+  calcCurbLabel:"CURB-65",
+  calcCurbUnit:"点",
+  calcCurbUse:"市中肺炎（CAP）の死亡リスク層別に用いる",
+  calcCurbFormula:"各1点：C 意識障害／U 尿素 7mmol/L 超（BUN mg/dL ÷ 2.8014 で換算。閾値はガイドライン逐語の mmol/L のまま）／R 呼吸数 30回/分以上／B 収縮期 90mmHg 未満 または 拡張期 60mmHg 以下（両方でも1点）／65 年齢 65歳以上",
+  calcCurbB1:"低リスク（0〜1点・30日死亡 3%未満）",
+  calcCurbB2:"中リスク（2点・30日死亡 3〜15%）",
+  calcCurbB3:"高リスク（3〜5点・30日死亡 15%超）",
+  calcCurbVsAdrop:"⚠ A-DROP とは判定が割れることがあります：①収縮期90ちょうど＝CURB-65 は非該当（90未満）／A-DROP は該当（90以下） ②年齢＝CURB-65 は65歳以上（性別不問）／A-DROP は男70歳・女75歳以上 ③呼吸＝CURB-65 は呼吸数／A-DROP は SpO2（測っている指標が別）",
+  calcCurbScope:"市中肺炎（CAP）用。院内肺炎（HAP）には用いない。本邦のガイドラインが CAP に推奨しているのは A-DROP です（成人肺炎診療ガイドライン2024 CQ01・弱く推奨）",
+  calcCurbNeed:"年齢・意識障害・BUN・呼吸数・収縮期血圧・拡張期血圧をすべて入れると判定します（未入力のまま点数は出しません）",
+  calcCurbRange:"入力できる範囲：年齢 1〜120歳／BUN 1〜200mg/dL／呼吸数 4〜80回/分／収縮期血圧 40〜300mmHg／拡張期血圧 20〜200mmHg",
+  calcCurbCaution:"療養の場（virtual ward・hospital at home 等）は英国の医療提供体制を前提とした文言のため表示しません。予後予測能は A-DROP・PSI とほぼ同等（AUC 0.78／0.79／0.79・GL2024 CQ01）。",
+  calcCurbSource:"出典：Lim WS, et al. Thorax 2003;58:377-82（項目・配点）／NICE guideline NG250（2025-09-02、リスク層別）。1_MKM 監修済 2026-07-29。BUN は単位換算のうえ判定しており、mg/dL の閾値はガイドラインに存在しません",
   calcPickTitle:"計算を選ぶ",
   calcNoCase:"患者に紐づけない計算です。入力は保存されません",
   calcBackToList:"一覧へ",

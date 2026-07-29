@@ -1310,6 +1310,73 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   }
   assert.strictEqual(L.CALC_FIELDS.bun.store, "case", "BUN is a lab value and is kept with its date");
 
+  // ---- CURB-65 (1_MKM re-supervised 2026-07-29, 監修依頼 §10-2) -------------
+  // Ruled out on 07-22, allowed on 07-29 under three conditions. The fixtures
+  // are 1_MKM's, with BUN given in mg/dL because that is what Japanese labs
+  // report — the app converts to mmol/L rather than inventing a mg/dL cut-off.
+  const curbTool = L.calcToolById("curb65");
+  assert.ok(curbTool, "CURB-65 tool registered");
+  const CURB_BASE = { age:72, confusion:false, bun:14.0, rr:18, sbp:128, dbp:76 };
+  const curbOf = (over) => L.calcCurb65(Object.assign({}, CURB_BASE, over));
+  const curbBandOf = (over) => L.calcCurb65BandKey(Object.assign({}, CURB_BASE, over));
+  assert.strictEqual(curbOf({}), 1, "MKM CB-1: 72yo, BUN 14.0 (=5.00 mmol/L) -> age only");
+  assert.strictEqual(curbBandOf({}), "calcCurbB1", "MKM CB-1 band: low risk");
+  const cb2 = { age:80, confusion:true, bun:33.6, rr:32, sbp:88, dbp:54 };
+  assert.strictEqual(curbOf(cb2), 5, "MKM CB-2: BUN 33.6 (=12.0 mmol/L), every item -> 5");
+  assert.strictEqual(curbBandOf(cb2), "calcCurbB3", "MKM CB-2 band: high risk");
+  const cb3 = { age:58, confusion:false, bun:25.2, rr:24, sbp:110, dbp:58 };
+  assert.strictEqual(curbOf(cb3), 2, "MKM CB-3: U plus B via the diastolic limb only -> 2");
+  assert.strictEqual(curbBandOf(cb3), "calcCurbB2", "MKM CB-3 band: intermediate risk");
+
+  // The unit conversion. The threshold stays "urea > 7 mmol/l" verbatim; these
+  // pin that the divisor is right, because a wrong one shifts every U silently.
+  assert.ok(Math.abs(L.calcBunToUrea(19.6) - 6.9965) < 0.001, "BUN 19.6 mg/dL converts just under 7 mmol/L");
+  assert.strictEqual(curbOf({ bun:19.6 }), 1, "BUN 19.6 -> urea 6.997, U does NOT count (age only)");
+  assert.strictEqual(curbOf({ bun:19.7 }), 2, "BUN 19.7 -> urea 7.032, U counts");
+  assert.strictEqual(curbOf({ age:20, bun:19.6 }), 0, "and with no other item, 19.6 scores nothing");
+
+  // Boundaries. These run the OPPOSITE way to A-DROP for the systolic limb.
+  assert.strictEqual(curbOf({ age:64 }), 0, "64 does not count");
+  assert.strictEqual(curbOf({ age:65 }), 1, "65 exactly counts");
+  assert.strictEqual(curbOf({ age:20, rr:29 }), 0, "RR 29 does not count");
+  assert.strictEqual(curbOf({ age:20, rr:30 }), 1, "RR 30 exactly counts");
+  assert.strictEqual(curbOf({ age:20, sbp:90, dbp:76 }), 0, "systolic 90 exactly does NOT count (A-DROP: it does)");
+  assert.strictEqual(curbOf({ age:20, sbp:89, dbp:76 }), 1, "systolic 89 counts");
+  assert.strictEqual(curbOf({ age:20, sbp:128, dbp:60 }), 1, "diastolic 60 exactly counts");
+  assert.strictEqual(curbOf({ age:20, sbp:128, dbp:61 }), 0, "diastolic 61 does not");
+  assert.strictEqual(curbOf({ age:20, sbp:88, dbp:54 }), 1, "both limbs still score B only once");
+
+  // The A-DROP disagreement, pinned as a pair. Same 68yo man, systolic exactly
+  // 90: both land on 1 point but via a DIFFERENT item. If a future refactor
+  // ever shares a ○× flag between the two scores, this is what catches it.
+  const clash = { age:68, sex:"M", confusion:false, orientation:false, dehydration:false, shock:false,
+                  bun:18, rr:22, spo2:92, sbp:90, dbp:76 };
+  assert.strictEqual(L.calcCurb65(clash), 1, "clash case: CURB-65 scores age only (systolic 90 excluded)");
+  assert.strictEqual(L.calcAdrop(clash), 1, "clash case: A-DROP scores P only (male 68 excluded)");
+  assert.strictEqual(L.calcCurb65Items(clash).b, 0, "CURB-65 B is 0 at systolic 90");
+  assert.strictEqual(L.calcCurb65Items(clash).age65, 1, "CURB-65 counts 68 as elderly");
+
+  // Nothing is scored from a blank, same rule as A-DROP.
+  for (const missing of [{ age:null }, { confusion:"" }, { bun:null }, { rr:null }, { sbp:null }, { dbp:null }]) {
+    assert.strictEqual(curbOf(missing), null, "unanswered item must not score: " + JSON.stringify(missing));
+    assert.strictEqual(curbBandOf(missing), "", "no band without a score: " + JSON.stringify(missing));
+  }
+  assert.strictEqual(curbOf({ rr:200 }), null, "RR 200 is out of guard");
+  assert.strictEqual(curbOf({ dbp:5 }), null, "diastolic 5 is out of guard");
+  for (const key of ["rr", "dbp", "confusion"]) {
+    assert.strictEqual(L.CALC_FIELDS[key].store, "none", key + " must never be persisted on a case");
+  }
+  // 1_MKM: NICE's care settings are UK-specific and must not reach a band.
+  // A-DROP omits 外来/一般病棟/ICU for the same reason; keep them symmetrical.
+  const curbBandText = ["calcCurbB1", "calcCurbB2", "calcCurbB3"].map((key) => {
+    const m = html.match(new RegExp(key + ':"([^"]*)"'));
+    assert.ok(m, key + " string must exist");
+    return m[1];
+  }).join(" ");
+  for (const banned of ["virtual ward", "SDEC", "hospital at home", "入院", "外来", "ICU"]) {
+    assert.strictEqual(curbBandText.indexOf(banned), -1, "CURB-65 bands must not name a care setting: " + banned);
+  }
+
   // Home-screen icons (CEO 2026-07-29). Android crops "maskable" itself, so an
   // icon declared as both purposes is cropped twice and the corners fray. Keep
   // the two purposes on separate files, and keep every one of them cached —
