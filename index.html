@@ -2023,15 +2023,16 @@ function calcAdropBandKey(v){
 // (監修依頼 §10-2) once the goal became replacing HOKUTO, i.e. every score has
 // to be here. It is allowed under three conditions, all of them implemented:
 //
-//  1. The only primary threshold is "urea > 7 mmol/l" (Thorax 2003 / NICE
-//     NG250). No primary source states a BUN mg/dL cut-off, so this app never
-//     prints one. Japanese labs report BUN in mg/dL, so the INPUT is converted
-//     (divide by 28.014 mg/mmol of urea nitrogen, expressed per dL = 2.8014 —
-//     a unit definition, not a clinical threshold) and compared with the
-//     verbatim 7 mmol/l. Identical treatment to FIB-4's 万/uL -> x10^9/L.
-//     Deliberately NOT shown as a second result: rounding a converted 6.997 to
-//     "7.0" next to an unscored item would read as a bug. The conversion rule
-//     is stated in the formula line instead.
+//  1. The urea item is scored as "BUN > 20 mg/dL" (CEO decision 2026-07-29,
+//     監修依頼 §10-2① as revised). Source: 黒田浩一「市中肺炎（入院治療編）」
+//     U-IDEO 2026;10(4):619 表7 — a published source that states the cut-off in
+//     mg/dL, which is what Japanese labs report. Strictly greater: 20.0 exactly
+//     does NOT count. The earlier build (2026-07-22..2026-07-29) instead kept
+//     the verbatim "urea > 7 mmol/l" and divided BUN by 2.8014; that path is
+//     gone. Because 20 is a rounding of 7 mmol/l (= BUN ~19.6 mg/dL), the
+//     formula line must keep saying so — 1_MKM requires that caveat to stay
+//     visible so the number is not read as a mg/dL cut-off defined by a
+//     guideline. Patients with BUN 19.7-20.0 now score one point lower.
 //  2. Bands carry NICE's mortality risk only. NG250's care settings (virtual
 //     ward / SDEC unit / hospital at home) assume the UK system, so they are
 //     omitted — exactly as A-DROP's 外来/一般病棟/ICU is omitted.
@@ -2043,12 +2044,7 @@ function calcAdropBandKey(v){
 // As with A-DROP nothing is scored from a blank: one undetermined item makes
 // the whole score null. Note the boundaries run the OPPOSITE way to A-DROP —
 // systolic 90 exactly does NOT count here but does count in A-DROP.
-var CURB65_UREA_PER_BUN = 2.8014;   // BUN [mg/dL] / this = urea [mmol/L]
-
-function calcBunToUrea(bunMgDl){
-  var b = calcNum(bunMgDl);
-  return b === null ? null : b / CURB65_UREA_PER_BUN;
-}
+var CURB65_BUN_CUTOFF = 20;   // BUN [mg/dL], strictly greater (20.0 does not count)
 
 function calcCurb65Items(v){
   var vals = v || {};
@@ -2061,10 +2057,10 @@ function calcCurb65Items(v){
   if (!calcInRange(rr, CALC_LIMITS.rrMin, CALC_LIMITS.rrMax)) return null;
   if (!calcInRange(sbp, CALC_LIMITS.sbpMin, CALC_LIMITS.sbpMax)) return null;
   if (!calcInRange(dbp, CALC_LIMITS.dbpMin, CALC_LIMITS.dbpMax)) return null;
-  var urea = calcBunToUrea(vals.bun);
+  var bun = calcNum(vals.bun);
   return {
     c:confusion === true ? 1 : 0,
-    u:urea > 7 ? 1 : 0,                       // strictly greater — 7.0 does NOT count
+    u:bun > CURB65_BUN_CUTOFF ? 1 : 0,        // strictly greater — 20.0 does NOT count
     r:rr >= 30 ? 1 : 0,                       // 30 counts
     b:(sbp < 90 || dbp <= 60) ? 1 : 0,        // systolic 90 does NOT count; diastolic 60 does
     age65:age >= 65 ? 1 : 0                   // 65 counts
@@ -2857,7 +2853,6 @@ if (typeof module !== "undefined") {
     calcAdrop:calcAdrop,
     calcAdropItems:calcAdropItems,
     calcAdropBandKey:calcAdropBandKey,
-    calcBunToUrea:calcBunToUrea,
     calcCurb65:calcCurb65,
     calcCurb65Items:calcCurb65Items,
     calcCurb65BandKey:calcCurb65BandKey,
@@ -3037,7 +3032,7 @@ const STR = {
   calcCurbLabel:"CURB-65",
   calcCurbUnit:"点",
   calcCurbUse:"市中肺炎（CAP）の死亡リスク層別に用いる",
-  calcCurbFormula:"各1点：C 意識障害／U 尿素 7mmol/L 超（BUN mg/dL ÷ 2.8014 で換算。閾値はガイドライン逐語の mmol/L のまま）／R 呼吸数 30回/分以上／B 収縮期 90mmHg 未満 または 拡張期 60mmHg 以下（両方でも1点）／65 年齢 65歳以上",
+  calcCurbFormula:"各1点：C 意識障害／U BUN 20mg/dL 超（20.0ちょうどは非該当。原著は尿素 7mmol/L 超＝BUN 約19.6mg/dL で、20 はその丸め）／R 呼吸数 30回/分以上／B 収縮期 90mmHg 未満 または 拡張期 60mmHg 以下（両方でも1点）／65 年齢 65歳以上",
   calcCurbB1:"低リスク（0〜1点・30日死亡 3%未満）",
   calcCurbB2:"中リスク（2点・30日死亡 3〜15%）",
   calcCurbB3:"高リスク（3〜5点・30日死亡 15%超）",
@@ -3046,7 +3041,7 @@ const STR = {
   calcCurbNeed:"年齢・意識障害・BUN・呼吸数・収縮期血圧・拡張期血圧をすべて入れると判定します（未入力のまま点数は出しません）",
   calcCurbRange:"入力できる範囲：年齢 1〜120歳／BUN 1〜200mg/dL／呼吸数 4〜80回/分／収縮期血圧 40〜300mmHg／拡張期血圧 20〜200mmHg",
   calcCurbCaution:"療養の場（virtual ward・hospital at home 等）は英国の医療提供体制を前提とした文言のため表示しません。予後予測能は A-DROP・PSI とほぼ同等（AUC 0.78／0.79／0.79・GL2024 CQ01）。",
-  calcCurbSource:"出典：Lim WS, et al. Thorax 2003;58:377-82（項目・配点）／NICE guideline NG250（2025-09-02、リスク層別）。1_MKM 監修済 2026-07-29。BUN は単位換算のうえ判定しており、mg/dL の閾値はガイドラインに存在しません",
+  calcCurbSource:"出典：Lim WS, et al. Thorax 2003;58:377-82（項目・配点）／NICE guideline NG250（2025-09-02、リスク層別）／BUN 20mg/dL 超は黒田浩一「市中肺炎（入院治療編）」U-IDEO 2026;10(4):619 表7。1_MKM 監修済 2026-07-29",
   calcLabDate:"採血日",
   // ---- Child-Pugh
   calcCpEnceph:"肝性脳症",

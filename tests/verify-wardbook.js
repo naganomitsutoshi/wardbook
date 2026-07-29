@@ -1318,8 +1318,9 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
 
   // ---- CURB-65 (1_MKM re-supervised 2026-07-29, 監修依頼 §10-2) -------------
   // Ruled out on 07-22, allowed on 07-29 under three conditions. The fixtures
-  // are 1_MKM's, with BUN given in mg/dL because that is what Japanese labs
-  // report — the app converts to mmol/L rather than inventing a mg/dL cut-off.
+  // are 1_MKM's, with BUN in mg/dL because that is what Japanese labs report.
+  // The urea item is scored as BUN > 20 mg/dL (CEO decision 2026-07-29, source
+  // 黒田 U-IDEO 2026;10(4) 表7). The earlier mmol/L conversion path is gone.
   const curbTool = L.calcToolById("curb65");
   assert.ok(curbTool, "CURB-65 tool registered");
   const CURB_BASE = { age:72, confusion:false, bun:14.0, rr:18, sbp:128, dbp:76 };
@@ -1334,12 +1335,14 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(curbOf(cb3), 2, "MKM CB-3: U plus B via the diastolic limb only -> 2");
   assert.strictEqual(curbBandOf(cb3), "calcCurbB2", "MKM CB-3 band: intermediate risk");
 
-  // The unit conversion. The threshold stays "urea > 7 mmol/l" verbatim; these
-  // pin that the divisor is right, because a wrong one shifts every U silently.
-  assert.ok(Math.abs(L.calcBunToUrea(19.6) - 6.9965) < 0.001, "BUN 19.6 mg/dL converts just under 7 mmol/L");
-  assert.strictEqual(curbOf({ bun:19.6 }), 1, "BUN 19.6 -> urea 6.997, U does NOT count (age only)");
-  assert.strictEqual(curbOf({ bun:19.7 }), 2, "BUN 19.7 -> urea 7.032, U counts");
-  assert.strictEqual(curbOf({ age:20, bun:19.6 }), 0, "and with no other item, 19.6 scores nothing");
+  // The urea boundary, strictly greater than 20 mg/dL.
+  assert.strictEqual(curbOf({ bun:20.0 }), 1, "BUN 20.0 exactly does NOT count (age only)");
+  assert.strictEqual(curbOf({ bun:20.1 }), 2, "BUN 20.1 counts");
+  assert.strictEqual(curbOf({ age:20, bun:20.0 }), 0, "and with no other item, 20.0 scores nothing");
+  // Regression guard: 19.7 used to score under the old mmol/L conversion
+  // (19.7 / 2.8014 = 7.03 > 7). If that path ever comes back, this fails.
+  assert.strictEqual(curbOf({ bun:19.7 }), 1, "BUN 19.7 does NOT count (old conversion path is gone)");
+  assert.strictEqual(typeof L.calcBunToUrea, "undefined", "the BUN->urea conversion helper is no longer exported");
 
   // Boundaries. These run the OPPOSITE way to A-DROP for the systolic limb.
   assert.strictEqual(curbOf({ age:64 }), 0, "64 does not count");
