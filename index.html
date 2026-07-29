@@ -1069,6 +1069,9 @@ function normalizeCase(raw, nowIso, todayIso){
       if (def.store !== "case" || def.type === "sex") continue; // sex lives on out.sex, never duplicated
       if (def.type === "date") { bio[key] = safeDate(bioSrc[key], "") || ""; continue; }
       if (def.type === "bool") { bio[key] = bioSrc[key] === true; continue; }
+      // Three states survive the round trip. Collapsing "not assessed" into
+      // "no" here would let a score compute from an item nobody answered.
+      if (def.type === "bool3") { bio[key] = bioSrc[key] === true ? true : bioSrc[key] === false ? false : ""; continue; }
       var n = calcNum(bioSrc[key]);
       if (n === null || n < 0) { bio[key] = null; continue; }
       bio[key] = def.type === "int" ? Math.round(n) : n;
@@ -1912,7 +1915,9 @@ function chartDayParse(text, items){
 var CALC_LIMITS = {
   ageMin:1, ageMax:120, weightMin:20, weightMax:200, crMin:0.1, crMax:20,
   bunMin:1, bunMax:200, spo2Min:50, spo2Max:100, sbpMin:40, sbpMax:300,
-  rrMin:4, rrMax:80, dbpMin:20, dbpMax:200
+  rrMin:4, rrMax:80, dbpMin:20, dbpMax:200,
+  tbilMin:0.1, tbilMax:50, albMin:0.5, albMax:6.5, ptPctMin:5, ptPctMax:150, inrMin:0.5, inrMax:10,
+  astMin:1, astMax:3000, altMin:1, altMax:3000, pltMin:0.1, pltMax:150, bmiMin:10, bmiMax:60
 };
 var CALC_ADULT_MIN_AGE = 18;
 
@@ -1952,6 +1957,12 @@ function calcEgfr(age, sex, cr){
 // One decimal place — 1_MKM: finer digits carry no clinical meaning.
 function calcRound1(value){
   return value === null ? null : Math.round(value * 10) / 10;
+}
+// FIB-4 is the exception: 1_MKM's fixtures are two-decimal (2.83, not 2.8),
+// because the value sits on a 1.3/2.67 scale where the second digit moves the
+// reading. Declared per result so nothing else silently gains precision.
+function calcRound2(value){
+  return value === null ? null : Math.round(value * 100) / 100;
 }
 
 // ---- A-DROP (community-acquired pneumonia severity) -----------------------
@@ -2077,6 +2088,229 @@ function calcCurb65BandKey(v){
   return "calcCurbB3";
 }
 
+// ---- Child-Pugh (liver cirrhosis severity) --------------------------------
+// 1_MKM-verified 2026-07-29 against 肝硬変診療ガイドライン2020（改訂第3版）
+// p.141 表1 (still the newest freely published edition; the 4th is due but
+// unreleased). FIVE items, not six: PT activity (%) and INR are ONE item and
+// are entered exclusively. The Vault note used to list them as separate rows,
+// which would top out at 18 points and break the A/B/C bands entirely — that
+// note was corrected the same day.
+//
+// Boundary values all land on 2 points. The guideline never says so in words;
+// it follows from the three bands being complementary (1 = "under 2.0",
+// 3 = "over 3.0", so 2.0-3.0 inclusive is what is left).
+function calcCpGrade(g){
+  var n = calcNum(g);
+  if (n === null) return null;
+  n = Math.round(n);
+  return (n >= 1 && n <= 3) ? n : null;
+}
+
+function calcChildPughItems(v){
+  var vals = v || {};
+  var enc = calcCpGrade(vals.cpEnceph), asc = calcCpGrade(vals.cpAscites);
+  var tbil = calcNum(vals.tbil), alb = calcNum(vals.alb);
+  var pt = calcNum(vals.ptPct), inr = calcNum(vals.inr);
+  var pbc = vals.cpPbc;
+  if (enc === null || asc === null) return null;
+  if (pbc !== true && pbc !== false) return null;
+  if (!calcInRange(tbil, CALC_LIMITS.tbilMin, CALC_LIMITS.tbilMax)) return null;
+  if (!calcInRange(alb, CALC_LIMITS.albMin, CALC_LIMITS.albMax)) return null;
+  // Exactly one of PT% / INR. Neither -> nothing to score; both -> refuse,
+  // because silently picking one is how a coagulation item gets counted twice.
+  var hasPt = calcInRange(pt, CALC_LIMITS.ptPctMin, CALC_LIMITS.ptPctMax);
+  var hasInr = calcInRange(inr, CALC_LIMITS.inrMin, CALC_LIMITS.inrMax);
+  if (hasPt === hasInr) return null;
+  var bil;
+  if (pbc === true) bil = tbil < 4 ? 1 : (tbil < 10 ? 2 : 3);   // 胆汁うっ滞（PBC）
+  else bil = tbil < 2 ? 1 : (tbil <= 3 ? 2 : 3);
+  return {
+    enceph:enc,
+    ascites:asc,
+    bil:bil,
+    alb:alb > 3.5 ? 1 : (alb >= 2.8 ? 2 : 3),
+    coag:hasPt ? (pt > 70 ? 1 : (pt >= 40 ? 2 : 3)) : (inr < 1.7 ? 1 : (inr <= 2.3 ? 2 : 3))
+  };
+}
+
+function calcChildPugh(v){
+  var it = calcChildPughItems(v);
+  if (!it) return null;
+  return it.enceph + it.ascites + it.bil + it.alb + it.coag;
+}
+
+// GL2020 p.141: class A 5-6 / B 7-9 / C 10-15. Five items of 1 point each is
+// the floor, so a normal liver still scores 5 — never 0.
+function calcChildPughBandKey(v){
+  var n = calcChildPugh(v);
+  if (n === null) return "";
+  if (n <= 6) return "calcCpA";
+  if (n <= 9) return "calcCpB";
+  return "calcCpC";
+}
+
+// True when both coagulation boxes are filled — drives the on-screen warning.
+function calcCpBothCoag(v){
+  var vals = v || {};
+  return calcInRange(calcNum(vals.ptPct), CALC_LIMITS.ptPctMin, CALC_LIMITS.ptPctMax) &&
+         calcInRange(calcNum(vals.inr), CALC_LIMITS.inrMin, CALC_LIMITS.inrMax);
+}
+
+// ---- FIB-4 index (liver fibrosis screening) -------------------------------
+// (age x AST) / (platelets[x10^9/L] x sqrt(ALT)), NAFLD/NASH GL2020 p.31 表1.
+// Japanese labs report platelets in 万/uL, so the input is multiplied by 10.
+// Miss that and every FIB-4 is ten times too large — the single most likely
+// bug here, pinned by its own regression test.
+//
+// No band. 1_MKM 2026-07-29: NAFLD/NASH GL2020 was superseded by MASLD
+// 診療ガイドライン2026 (published 2026-04-01, members-only, no free PDF), and
+// secondary sources show the referral cut-off now carries an age condition
+// ("65歳以下"). Printing the 2020 bands would present a superseded standard as
+// current, so only the number ships until the verbatim text can be read.
+var FIB4_PLT_PER_MAN = 10;   // 万/uL -> x10^9/L
+
+function calcFib4(v){
+  var vals = v || {};
+  var age = calcNum(vals.age), ast = calcNum(vals.ast), alt = calcNum(vals.alt), plt = calcNum(vals.plt);
+  if (!calcInRange(age, CALC_LIMITS.ageMin, CALC_LIMITS.ageMax)) return null;
+  if (!calcInRange(ast, CALC_LIMITS.astMin, CALC_LIMITS.astMax)) return null;
+  if (!calcInRange(alt, CALC_LIMITS.altMin, CALC_LIMITS.altMax)) return null;
+  if (!calcInRange(plt, CALC_LIMITS.pltMin, CALC_LIMITS.pltMax)) return null;
+  var out = (age * ast) / ((plt * FIB4_PLT_PER_MAN) * Math.sqrt(alt));
+  return out > 0 ? out : null;
+}
+
+// ---- atrial fibrillation: CHADS2 / CHA2DS2-VASc / HAS-BLED / HELT-E2S2 ----
+// 1_MKM-verified 2026-07-29 against JCS/JHRS 2020 (Tables 29/30/31/34) and the
+// 2024 Focused Update (Tables 18/19).
+//
+// THE RULE THAT SHAPES ALL FOUR: no ○× flag is ever shared between scores.
+// JCS2020 says so verbatim — "the definitions of risk factors in the HAS-BLED
+// score differ from those in the CHADS2 score" — and the differences are real:
+// hypertension is >=140/90-or-treated in CHADS2 but uncontrolled >160 systolic
+// in HAS-BLED; age is >=75 (2 points) in VASc but >65 (1 point) in HAS-BLED,
+// so 65 exactly splits them; stroke includes TIA/systemic embolism in VASc but
+// is plain "Stroke" in HAS-BLED. One shared checkbox would silently corrupt
+// one of the two. Only raw values (age, sex) are shared.
+function calcAllBool(list){
+  for (var i = 0; i < list.length; i++) if (list[i] !== true && list[i] !== false) return false;
+  return true;
+}
+
+function calcChads2Items(v){
+  var vals = v || {};
+  var age = calcNum(vals.age);
+  if (!calcInRange(age, CALC_LIMITS.ageMin, CALC_LIMITS.ageMax)) return null;
+  if (!calcAllBool([vals.chadsChf, vals.chadsHt, vals.chadsDm, vals.chadsStroke])) return null;
+  return {
+    c:vals.chadsChf ? 1 : 0,
+    h:vals.chadsHt ? 1 : 0,
+    a:age >= 75 ? 1 : 0,
+    d:vals.chadsDm ? 1 : 0,
+    s2:vals.chadsStroke ? 2 : 0
+  };
+}
+function calcChads2(v){
+  var it = calcChads2Items(v);
+  if (!it) return null;
+  return it.c + it.h + it.a + it.d + it.s2;
+}
+// Japan's actual starting rule: JCS/JHRS 2020 Figure 12 "Score: >=1 -> DOAC",
+// re-affirmed unchanged by the 2024 Focused Update.
+function calcChads2BandKey(v){
+  var n = calcChads2(v);
+  if (n === null) return "";
+  return n >= 1 ? "calcChadsB1" : "calcChadsB0";
+}
+
+function calcVascItems(v){
+  var vals = v || {};
+  var age = calcNum(vals.age), sex = vals.sex || "";
+  if (!sex) return null;
+  if (!calcInRange(age, CALC_LIMITS.ageMin, CALC_LIMITS.ageMax)) return null;
+  if (!calcAllBool([vals.vascChf, vals.vascHt, vals.vascDm, vals.vascStroke, vals.vascVd])) return null;
+  return {
+    c:vals.vascChf ? 1 : 0,
+    h:vals.vascHt ? 1 : 0,
+    a2:age >= 75 ? 2 : 0,
+    d:vals.vascDm ? 1 : 0,
+    s2:vals.vascStroke ? 2 : 0,
+    vd:vals.vascVd ? 1 : 0,
+    a:(age >= 65 && age <= 74) ? 1 : 0,   // exclusive with a2 — max stays 9
+    sc:sex === "F" ? 1 : 0
+  };
+}
+function calcVasc(v){
+  var it = calcVascItems(v);
+  if (!it) return null;
+  return it.c + it.h + it.a2 + it.d + it.s2 + it.vd + it.a + it.sc;
+}
+// The ONLY interpretation 1_MKM allows: JCS2020 §3.1.1e verbatim, "anticoagulation
+// therapy is not needed for patients with a CHA2DS2-VASc score of 0, except for
+// females". Any other score gets a number and no words — in Japan this score was
+// downgraded to IIb in 2024 and is not the starting criterion. (A female always
+// scores Sc=1, so a 0 is by construction male.)
+function calcVascBandKey(v){
+  var n = calcVasc(v);
+  if (n === null) return "";
+  return n === 0 ? "calcVascB0" : "";
+}
+
+function calcHasbledItems(v){
+  var vals = v || {};
+  var age = calcNum(vals.age);
+  if (!calcInRange(age, CALC_LIMITS.ageMin, CALC_LIMITS.ageMax)) return null;
+  if (!calcAllBool([vals.hbHt, vals.hbRenal, vals.hbLiver, vals.hbStroke, vals.hbBleed, vals.hbInr, vals.hbDrug, vals.hbAlcohol])) return null;
+  return {
+    h:vals.hbHt ? 1 : 0,
+    a:(vals.hbRenal ? 1 : 0) + (vals.hbLiver ? 1 : 0),
+    s:vals.hbStroke ? 1 : 0,
+    b:vals.hbBleed ? 1 : 0,
+    l:vals.hbInr ? 1 : 0,
+    e:age > 65 ? 1 : 0,                    // strictly over 65 — VASc counts 65
+    d:(vals.hbDrug ? 1 : 0) + (vals.hbAlcohol ? 1 : 0)
+  };
+}
+function calcHasbled(v){
+  var it = calcHasbledItems(v);
+  if (!it) return null;
+  return it.h + it.a + it.s + it.b + it.l + it.e + it.d;
+}
+// >=3 is "high bleeding risk" in JCS2020 and ESC 2024 alike. Neither turns that
+// into a reason to withhold anticoagulation, and 1_MKM forbids implying it:
+// the same patient is also at high thromboembolic risk, so a "consider stopping"
+// reading would push care the harmful way. The band text stays at "address
+// modifiable factors / follow up sooner and more often".
+function calcHasbledBandKey(v){
+  var n = calcHasbled(v);
+  if (n === null) return "";
+  return n >= 3 ? "calcHbB3" : "calcHbB0";
+}
+
+function calcHeltItems(v){
+  var vals = v || {};
+  var age = calcNum(vals.age), bmi = calcNum(vals.bmi);
+  if (!calcInRange(age, CALC_LIMITS.ageMin, CALC_LIMITS.ageMax)) return null;
+  if (!calcInRange(bmi, CALC_LIMITS.bmiMin, CALC_LIMITS.bmiMax)) return null;
+  if (!calcAllBool([vals.heltHt, vals.heltAfType, vals.heltStroke])) return null;
+  return {
+    h:vals.heltHt ? 1 : 0,
+    e:(age >= 75 && age <= 84) ? 1 : 0,
+    l:bmi < 18.5 ? 1 : 0,
+    t:vals.heltAfType ? 1 : 0,
+    e2:age >= 85 ? 2 : 0,                  // exclusive with e — max stays 7
+    s2:vals.heltStroke ? 2 : 0
+  };
+}
+function calcHelt(v){
+  var it = calcHeltItems(v);
+  if (!it) return null;
+  return it.h + it.e + it.l + it.t + it.e2 + it.s2;
+}
+// No band, deliberately. JCS2024 verbatim: "Challenges remain in using the
+// HELT-E2S2 score for initiating anticoagulation therapy" — the guideline that
+// introduced it says its own threshold is unsettled, so none is invented here.
+
 // ---- calculator registry --------------------------------------------------
 // Adding a calculator has to stay a DATA change, not a code change: one entry
 // in CALC_TOOLS (plus any missing key in CALC_FIELDS) is the whole job. The
@@ -2109,7 +2343,46 @@ var CALC_FIELDS = {
   // items are separate fields because the two scores define them differently.
   rr:          { type:"num",  store:"none", labelKey:"calcRr",  min:CALC_LIMITS.rrMin,  max:CALC_LIMITS.rrMax,  noteKey:"calcNotSaved" },
   dbp:         { type:"num",  store:"none", labelKey:"calcDbp", min:CALC_LIMITS.dbpMin, max:CALC_LIMITS.dbpMax, noteKey:"calcNotSaved" },
-  confusion:   { type:"bool3", store:"none", labelKey:"calcConfusion", noteKey:"calcConfusionNote" }
+  confusion:   { type:"bool3", store:"none", labelKey:"calcConfusion", noteKey:"calcConfusionNote" },
+  // Child-Pugh. The two graded items are the moment's state; the labs are kept
+  // with one shared draw date (they come off the same blood sample).
+  cpEnceph:   { type:"grade", store:"none", labelKey:"calcCpEnceph",  choices:["calcCpEnc1", "calcCpEnc2", "calcCpEnc3"], noteKey:"calcNotSaved" },
+  cpAscites:  { type:"grade", store:"none", labelKey:"calcCpAscites", choices:["calcCpAsc1", "calcCpAsc2", "calcCpAsc3"], noteKey:"calcCpAscNote" },
+  tbil:       { type:"num",  store:"case", labelKey:"calcTbil",   min:CALC_LIMITS.tbilMin,  max:CALC_LIMITS.tbilMax },
+  alb:        { type:"num",  store:"case", labelKey:"calcAlb",    min:CALC_LIMITS.albMin,   max:CALC_LIMITS.albMax },
+  ptPct:      { type:"num",  store:"case", labelKey:"calcPtPct",  min:CALC_LIMITS.ptPctMin, max:CALC_LIMITS.ptPctMax, noteKey:"calcCoagNote" },
+  inr:        { type:"num",  store:"case", labelKey:"calcInr",    min:CALC_LIMITS.inrMin,   max:CALC_LIMITS.inrMax,   noteKey:"calcCoagNote" },
+  cpPbc:      { type:"bool3", store:"case", labelKey:"calcCpPbc", noteKey:"calcCpPbcNote" },
+  cpLabDate:  { type:"date", store:"case", labelKey:"calcLabDate", emptyNoteKey:"calcDateMissing" },
+  // FIB-4.
+  ast:        { type:"num",  store:"case", labelKey:"calcAst", min:CALC_LIMITS.astMin, max:CALC_LIMITS.astMax },
+  alt:        { type:"num",  store:"case", labelKey:"calcAlt", min:CALC_LIMITS.altMin, max:CALC_LIMITS.altMax },
+  plt:        { type:"num",  store:"case", labelKey:"calcPlt", min:CALC_LIMITS.pltMin, max:CALC_LIMITS.pltMax, noteKey:"calcPltNote" },
+  fibLabDate: { type:"date", store:"case", labelKey:"calcLabDate", emptyNoteKey:"calcDateMissing" },
+  // Atrial fibrillation. Every flag is prefixed with its own score: the four
+  // scores define "hypertension" and "stroke" differently, so a shared
+  // checkbox would silently corrupt one of them (JCS2020 says so verbatim).
+  chadsChf:    { type:"bool3", store:"case", labelKey:"calcChadsChf" },
+  chadsHt:     { type:"bool3", store:"case", labelKey:"calcChadsHt" },
+  chadsDm:     { type:"bool3", store:"case", labelKey:"calcChadsDm" },
+  chadsStroke: { type:"bool3", store:"case", labelKey:"calcChadsStroke" },
+  vascChf:     { type:"bool3", store:"case", labelKey:"calcVascChf" },
+  vascHt:      { type:"bool3", store:"case", labelKey:"calcVascHt" },
+  vascDm:      { type:"bool3", store:"case", labelKey:"calcVascDm" },
+  vascStroke:  { type:"bool3", store:"case", labelKey:"calcVascStroke" },
+  vascVd:      { type:"bool3", store:"case", labelKey:"calcVascVd" },
+  hbHt:        { type:"bool3", store:"case", labelKey:"calcHbHt" },
+  hbRenal:     { type:"bool3", store:"case", labelKey:"calcHbRenal" },
+  hbLiver:     { type:"bool3", store:"case", labelKey:"calcHbLiver" },
+  hbStroke:    { type:"bool3", store:"case", labelKey:"calcHbStroke" },
+  hbBleed:     { type:"bool3", store:"case", labelKey:"calcHbBleed" },
+  hbInr:       { type:"bool3", store:"case", labelKey:"calcHbInr", noteKey:"calcHbInrNote" },
+  hbDrug:      { type:"bool3", store:"case", labelKey:"calcHbDrug" },
+  hbAlcohol:   { type:"bool3", store:"case", labelKey:"calcHbAlcohol" },
+  heltHt:      { type:"bool3", store:"case", labelKey:"calcHeltHt" },
+  heltAfType:  { type:"bool3", store:"case", labelKey:"calcHeltAf" },
+  heltStroke:  { type:"bool3", store:"case", labelKey:"calcHeltStroke" },
+  bmi:         { type:"num",  store:"case", labelKey:"calcBmi", min:CALC_LIMITS.bmiMin, max:CALC_LIMITS.bmiMax }
 };
 
 // Every tool must carry sourceKey and every result a useKey ("what it is for").
@@ -2168,6 +2441,103 @@ var CALC_TOOLS = [{
   rangeKey:"calcCurbRange",
   disclaimerKey:"calcCurbCaution",
   sourceKey:"calcCurbSource"
+}, {
+  id:"childpugh",
+  nameKey:"calcCpTitle",
+  fields:["cpEnceph", "cpAscites", "tbil", "alb", "ptPct", "inr", "cpPbc", "cpLabDate"],
+  results:[
+    { key:"childpugh", main:true, labelKey:"calcCpLabel", unitKey:"calcCpUnit", useKey:"calcCpUse", formulaKey:"calcCpFormula",
+      run:calcChildPugh, band:calcChildPughBandKey }
+  ],
+  warns:[
+    { key:"coag", msgKey:"calcCpBothWarn", when:calcCpBothCoag },
+    { key:"pbc",  msgKey:"calcCpPbcWarn",  when:function(v){ return (v || {}).cpPbc === true; } }
+  ],
+  needKey:"calcCpNeed",
+  rangeKey:"calcCpRange",
+  disclaimerKey:"calcCpCaution",
+  sourceKey:"calcCpSource"
+}, {
+  id:"fib4",
+  nameKey:"calcFibTitle",
+  fields:["age", "ast", "alt", "plt", "fibLabDate"],
+  results:[
+    // No band: the guideline this app can quote verbatim has been superseded.
+    { key:"fib4", main:true, round:2, labelKey:"calcFibLabel", unitKey:"calcFibUnit", useKey:"calcFibUse", formulaKey:"calcFibFormula",
+      run:calcFib4 }
+  ],
+  warns:[
+    { key:"nointerp", msgKey:"calcFibNoBand", when:function(){ return true; } },
+    { key:"false",    msgKey:"calcFibFalseHigh", when:function(){ return true; } }
+  ],
+  needKey:"calcFibNeed",
+  rangeKey:"calcFibRange",
+  disclaimerKey:"calcFibCaution",
+  sourceKey:"calcFibSource"
+}, {
+  id:"chads2",
+  nameKey:"calcChadsTitle",
+  fields:["age", "chadsChf", "chadsHt", "chadsDm", "chadsStroke"],
+  results:[
+    { key:"chads2", main:true, labelKey:"calcChadsLabel", unitKey:"calcCurbUnit", useKey:"calcChadsUse", formulaKey:"calcChadsFormula",
+      run:calcChads2, band:calcChads2BandKey }
+  ],
+  warns:[
+    { key:"valve", msgKey:"calcChadsValve", when:function(){ return true; } },
+    { key:"hcm",   msgKey:"calcChadsHcm",   when:function(){ return true; } }
+  ],
+  needKey:"calcChadsNeed",
+  rangeKey:"calcChadsRange",
+  disclaimerKey:"calcChadsCaution",
+  sourceKey:"calcChadsSource"
+}, {
+  id:"vasc",
+  nameKey:"calcVascTitle",
+  fields:["age", "sex", "vascChf", "vascHt", "vascDm", "vascStroke", "vascVd"],
+  results:[
+    { key:"vasc", main:true, labelKey:"calcVascLabel", unitKey:"calcCurbUnit", useKey:"calcVascUse", formulaKey:"calcVascFormula",
+      run:calcVasc, band:calcVascBandKey }
+  ],
+  warns:[
+    { key:"jp",   msgKey:"calcVascJp",   when:function(){ return true; } },
+    { key:"noth", msgKey:"calcVascNoTh", when:function(v){ var n = calcVasc(v); return n !== null && n > 0; } }
+  ],
+  needKey:"calcVascNeed",
+  rangeKey:"calcChadsRange",
+  disclaimerKey:"calcVascCaution",
+  sourceKey:"calcVascSource"
+}, {
+  id:"hasbled",
+  nameKey:"calcHbTitle",
+  fields:["age", "hbHt", "hbRenal", "hbLiver", "hbStroke", "hbBleed", "hbInr", "hbDrug", "hbAlcohol"],
+  results:[
+    { key:"hasbled", main:true, labelKey:"calcHbLabel", unitKey:"calcCurbUnit", useKey:"calcHbUse", formulaKey:"calcHbFormula",
+      run:calcHasbled, band:calcHasbledBandKey }
+  ],
+  warns:[
+    { key:"nostop", msgKey:"calcHbNoStop", when:function(){ return true; } },
+    { key:"defs",   msgKey:"calcHbDefs",   when:function(){ return true; } }
+  ],
+  needKey:"calcHbNeed",
+  rangeKey:"calcChadsRange",
+  disclaimerKey:"calcHbCaution",
+  sourceKey:"calcHbSource"
+}, {
+  id:"helt",
+  nameKey:"calcHeltTitle",
+  fields:["age", "heltHt", "bmi", "heltAfType", "heltStroke"],
+  results:[
+    // No band on purpose — see calcHelt.
+    { key:"helt", main:true, labelKey:"calcHeltLabel", unitKey:"calcCurbUnit", useKey:"calcHeltUse", formulaKey:"calcHeltFormula",
+      run:calcHelt }
+  ],
+  warns:[
+    { key:"noth", msgKey:"calcHeltNoTh", when:function(){ return true; } }
+  ],
+  needKey:"calcHeltNeed",
+  rangeKey:"calcHeltRange",
+  disclaimerKey:"calcHeltCaution",
+  sourceKey:"calcHeltSource"
 }];
 
 function calcToolById(id){
@@ -2182,7 +2552,8 @@ function calcCollect(tool, values){
   return tool.results.map(function(r){
     return {
       key:r.key, main:!!r.main, labelKey:r.labelKey, unitKey:r.unitKey,
-      useKey:r.useKey, formulaKey:r.formulaKey, value:calcRound1(r.run(vals)),
+      useKey:r.useKey, formulaKey:r.formulaKey,
+      value:(r.round === 2 ? calcRound2 : calcRound1)(r.run(vals)),
       bandKey:r.band ? r.band(vals) : ""
     };
   });
@@ -2490,6 +2861,23 @@ if (typeof module !== "undefined") {
     calcCurb65:calcCurb65,
     calcCurb65Items:calcCurb65Items,
     calcCurb65BandKey:calcCurb65BandKey,
+    calcRound2:calcRound2,
+    calcChildPugh:calcChildPugh,
+    calcChildPughItems:calcChildPughItems,
+    calcChildPughBandKey:calcChildPughBandKey,
+    calcCpBothCoag:calcCpBothCoag,
+    calcFib4:calcFib4,
+    calcChads2:calcChads2,
+    calcChads2Items:calcChads2Items,
+    calcChads2BandKey:calcChads2BandKey,
+    calcVasc:calcVasc,
+    calcVascItems:calcVascItems,
+    calcVascBandKey:calcVascBandKey,
+    calcHasbled:calcHasbled,
+    calcHasbledItems:calcHasbledItems,
+    calcHasbledBandKey:calcHasbledBandKey,
+    calcHelt:calcHelt,
+    calcHeltItems:calcHeltItems,
     calcToolById:calcToolById,
     ORGAN_FIELDS:ORGAN_FIELDS,
     PF_DOMAINS:PF_DOMAINS,
@@ -2659,6 +3047,122 @@ const STR = {
   calcCurbRange:"入力できる範囲：年齢 1〜120歳／BUN 1〜200mg/dL／呼吸数 4〜80回/分／収縮期血圧 40〜300mmHg／拡張期血圧 20〜200mmHg",
   calcCurbCaution:"療養の場（virtual ward・hospital at home 等）は英国の医療提供体制を前提とした文言のため表示しません。予後予測能は A-DROP・PSI とほぼ同等（AUC 0.78／0.79／0.79・GL2024 CQ01）。",
   calcCurbSource:"出典：Lim WS, et al. Thorax 2003;58:377-82（項目・配点）／NICE guideline NG250（2025-09-02、リスク層別）。1_MKM 監修済 2026-07-29。BUN は単位換算のうえ判定しており、mg/dL の閾値はガイドラインに存在しません",
+  calcLabDate:"採血日",
+  // ---- Child-Pugh
+  calcCpEnceph:"肝性脳症",
+  calcCpEnc1:"なし",
+  calcCpEnc2:"軽度（Ⅰ・Ⅱ）",
+  calcCpEnc3:"昏睡（Ⅲ以上）",
+  calcCpAscites:"腹水",
+  calcCpAsc1:"なし",
+  calcCpAsc2:"軽度",
+  calcCpAsc3:"中度量以上",
+  calcCpAscNote:"保存しません。量の目安は「概ね1L以上を軽度、3L以上を中等度以上」（厚労省の身体障害者手帳診断書の注釈。確定閾値ではありません）",
+  calcTbil:"血清ビリルビン値（mg/dL）",
+  calcAlb:"血清アルブミン値（g/dL）",
+  calcPtPct:"プロトロンビン時間活性値（％）",
+  calcInr:"国際標準比（INR）",
+  calcCoagNote:"プロトロンビン時間活性値と INR は同一項目です。どちらか一方だけ入れてください",
+  calcCpPbc:"胆汁うっ滞（PBC）",
+  calcCpPbcNote:"該当するとビリルビンの基準が変わります（4.0mg/dL未満=1点、10.0mg/dL以上=3点）。ガイドラインの記載は「胆汁うっ滞（PBC）の場合」のみで、PSC・胆道閉塞等への適用は定義されていません",
+  calcCpTitle:"Child-Pugh分類（肝硬変の重症度）",
+  calcCpLabel:"Child-Pugh",
+  calcCpUnit:"点",
+  calcCpUse:"肝硬変の重症度・予後評価に用いる",
+  calcCpFormula:"5項目を各1〜3点：肝性脳症／腹水／T-Bil（2.0未満・2.0〜3.0・3.0超）／Alb（3.5超・2.8〜3.5・2.8未満）／PT活性値%（70超・40〜70・40未満）または INR（1.7未満・1.7〜2.3・2.3超）。境界値ちょうどはすべて2点",
+  calcCpA:"class A（5〜6点・軽度）",
+  calcCpB:"class B（7〜9点・中等度）",
+  calcCpC:"class C（10〜15点・高度）",
+  calcCpBothWarn:"⚠ PT活性値（％）と INR の両方が入っています。これは同一の1項目です。どちらか一方を空にしてください（両方数えると最大18点になり class 判定が壊れます）",
+  calcCpPbcWarn:"胆汁うっ滞（PBC）モードで採点しています（ビリルビン：4.0未満=1点／4.0〜10.0未満=2点／10.0以上=3点）",
+  calcCpNeed:"肝性脳症・腹水・T-Bil・Alb・胆汁うっ滞の有無に加え、PT活性値（％）と INR の「どちらか一方」を入れると判定します",
+  calcCpRange:"入力できる範囲：T-Bil 0.1〜50mg/dL／Alb 0.5〜6.5g/dL／PT活性値 5〜150％／INR 0.5〜10",
+  calcCpCaution:"合計は5〜15点で、全項目が正常でも5点になります（0点にはなりません）。非代償性肝硬変の判定基準のひとつは「7点（class B）以上」。『肝癌取扱い規約』の肝障害度分類とは別物で、あちらは加点方式ではありません。",
+  calcCpSource:"出典：日本消化器病学会・日本肝臓学会『肝硬変診療ガイドライン2020（改訂第3版）』p.141 表1（1_MKM 監修済 2026-07-29）。改訂第4版は2026年春刊行予定・未公開のため2020年版が最新の公開版です",
+  // ---- FIB-4
+  calcAst:"AST（IU/L）",
+  calcAlt:"ALT（IU/L）",
+  calcPlt:"血小板（万/μL）",
+  calcPltNote:"日本の検査報告の単位（万/μL）で入れてください。式が使う ×10⁹/L には自動で換算します",
+  calcFibTitle:"FIB-4 index（肝線維化のスクリーニング）",
+  calcFibLabel:"FIB-4",
+  calcFibUnit:"",
+  calcFibUse:"肝線維化進展のスクリーニング補助に用いる（確定診断ではない）",
+  calcFibFormula:"（年齢 × AST）/（血小板[×10⁹/L] × √ALT）。血小板は 万/μL を10倍して代入しています",
+  calcFibNoBand:"⚠ リスク層別（低/中/高）は表示していません。NAFLD/NASH診療ガイドライン2020 は MASLD診療ガイドライン2026（2026年4月公開）に改訂されており、現行版の基準を逐語で確認できていないためです（紹介基準に年齢条件が加わった可能性があります）。判定はガイドライン本文でご確認ください",
+  calcFibFalseHigh:"アルコール性肝障害・高齢者では、線維化がなくても高値となりやすいので注意（GL2020）",
+  calcFibNeed:"年齢・AST・ALT・血小板を入れると計算します",
+  calcFibRange:"入力できる範囲：AST/ALT 1〜3000IU/L／血小板 0.1〜150万/μL",
+  calcFibCaution:"非侵襲的検査の意義は「肝生検を必要とする症例を減らすこと」であり、確定診断ではありません（GL2020 CQ3-1）。年齢補正（65歳以上でカットオフを上げる）は日本の学会ガイドライン2020年版に採用されておらず、本アプリでも用いていません。",
+  calcFibSource:"出典：日本消化器病学会・日本肝臓学会『NAFLD/NASH診療ガイドライン2020（改訂第2版）』p.31 表1（計算式）。原著 Sterling RK, et al. Hepatology 2006;43:1317-25。1_MKM 監修済 2026-07-29",
+  // ---- CHADS2
+  calcChadsChf:"心不全",
+  calcChadsHt:"高血圧（140/90mmHg以上または既往・治療中を含む）",
+  calcChadsDm:"糖尿病",
+  calcChadsStroke:"脳卒中・TIA の既往",
+  calcChadsTitle:"CHADS2（心房細動の脳梗塞リスク）",
+  calcChadsLabel:"CHADS2",
+  calcChadsUse:"非弁膜症性心房細動（NVAF）の脳梗塞リスク評価と抗凝固療法の開始判断に用いる",
+  calcChadsFormula:"C 心不全1／H 高血圧1／A 75歳以上1／D 糖尿病1／S2 脳卒中・TIA の既往2（0〜6点）",
+  calcChadsB0:"0点",
+  calcChadsB1:"1点以上：DOAC の投与が第一に勧められる（推奨度A）。ワルファリンの投与も妥当（推奨度B）",
+  calcChadsValve:"弁膜症性心房細動（中等度〜重度の僧帽弁狭窄症、機械弁置換術後）には用いません。ワルファリン（PT-INR 2.0〜3.0）が適応で、DOAC は勧められません（推奨度D）",
+  calcChadsHcm:"肥大型心筋症では CHADS2・CHA2DS2-VASc に関係なく抗凝固療法を勘案すべきとされています（心不全診療ガイドライン2025）",
+  calcChadsNeed:"年齢と4項目をすべて入れると判定します（未入力のまま点数は出しません）",
+  calcChadsRange:"入力できる範囲：年齢 1〜120歳",
+  calcChadsCaution:"心不全の定義には議論があり、安定した心不全患者では脳梗塞リスクを過大評価している可能性があります（心不全診療ガイドライン2025）。",
+  calcChadsSource:"出典：日本循環器学会/日本不整脈心電学会「2020年改訂版 不整脈薬物治療ガイドライン」Table 30・Figure 12（英語公式版）／2024年フォーカスアップデートで基準は維持。脳卒中治療ガイドライン2021〔改訂2025〕も一致。1_MKM 監修済 2026-07-29",
+  // ---- CHA2DS2-VASc
+  calcVascChf:"心不全・左室機能不全",
+  calcVascHt:"高血圧（140/90mmHg以上または既往・治療中を含む）",
+  calcVascDm:"糖尿病",
+  calcVascStroke:"脳梗塞・TIA・血栓塞栓症の既往",
+  calcVascVd:"血管疾患（心筋梗塞の既往・末梢動脈疾患・大動脈プラーク）",
+  calcVascTitle:"CHA2DS2-VASc（心房細動の脳梗塞リスク）",
+  calcVascLabel:"CHA2DS2-VASc",
+  calcVascUse:"CHADS2 が0点の症例で、本当に低リスクかを確認する補助に用いる",
+  calcVascFormula:"C 心不全1／H 高血圧1／A2 75歳以上2／D 糖尿病1／S2 脳梗塞・TIA・血栓塞栓症の既往2／V 血管疾患1／A 65〜74歳1／Sc 女性1（0〜9点。年齢は排他）",
+  calcVascB0:"0点（女性を除く）：抗凝固療法は不要と考えられる",
+  calcVascJp:"日本の抗凝固療法の開始基準は CHADS2 1点以上です。本スコアは2024年フォーカスアップデートで推奨クラス IIa → IIb に格下げされており、点数から抗凝固の要否を判断しません",
+  calcVascNoTh:"1点以上には解釈を表示しません。ガイドラインが示しているのは「0点なら不要」という除外方向のみで、「◯点以上で適応」という閾値は日本のガイドライン本文にありません",
+  calcVascNeed:"年齢・性別と5項目をすべて入れると判定します（未入力のまま点数は出しません）",
+  calcVascCaution:"欧州（ESC 2024）は女性項目を外した CHA2DS2-VA という別スコアに移行しており、その「2点以上で推奨」を本スコアの閾値として用いることはできません。心不全・血管疾患・糖尿病の厳密な定義は原著本文が入手できておらず、画面には記載していません。",
+  calcVascSource:"出典：日本循環器学会/日本不整脈心電学会「2020年改訂版 不整脈薬物治療ガイドライン」Table 31・§3.1.1e（英語公式版）／2024年フォーカスアップデート Table 19。1_MKM 監修済 2026-07-29",
+  // ---- HAS-BLED
+  calcHbHt:"高血圧（収縮期160mmHg超・コントロール不良）",
+  calcHbRenal:"腎機能障害（慢性透析・腎移植、または血清Cr 2.26mg/dL以上）",
+  calcHbLiver:"肝機能障害（慢性肝障害、またはBil>正常上限×2かつAST/ALT/ALP>正常上限×3）",
+  calcHbStroke:"脳卒中",
+  calcHbBleed:"出血歴・出血傾向（出血素因・貧血など）",
+  calcHbInr:"不安定なINR（高値・不安定、またはTTR 60%未満）",
+  calcHbInrNote:"ワルファリンを内服していない場合は評価できないため「なし」（0点）として計算されます",
+  calcHbDrug:"薬剤併用（抗血小板薬・NSAIDs）",
+  calcHbAlcohol:"アルコール依存症",
+  calcHbTitle:"HAS-BLED（心房細動の出血リスク）",
+  calcHbLabel:"HAS-BLED",
+  calcHbUse:"心房細動患者の出血リスク評価に用いる（抗凝固療法の中止・見送りの基準としては用いない）",
+  calcHbFormula:"H 高血圧1／A 腎機能障害1＋肝機能障害1／S 脳卒中1／B 出血1／L 不安定なINR 1／E 65歳超1／D 薬剤1＋アルコール1（0〜9点）",
+  calcHbB0:"0〜2点",
+  calcHbB3:"3点以上：出血高リスク。修正可能な出血リスク因子への対応と、より早期・高頻度のフォローアップを検討する",
+  calcHbNoStop:"⚠ 点数が高いことは抗凝固療法をやめる理由にはなりません。出血高リスクの患者は血栓塞栓症も高リスクです（ガイドラインが示しているのは修正可能因子への対応とフォロー強化までです）",
+  calcHbDefs:"CHADS2・CHA2DS2-VASc とは項目の定義が違います（高血圧＝収縮期160超／年齢＝65歳超で1点）。65歳ちょうどでは CHA2DS2-VASc は加点され、本スコアは加点されません",
+  calcHbNeed:"年齢と8項目をすべて入れると判定します（未入力のまま点数は出しません）",
+  calcHbCaution:"出血の「主要リスク因子」は本スコアとは別に定義されています（75歳以上・低体重50kg以下・CCr 50mL/min以下・抗血小板薬併用・コントロール不良の高血圧）。あわせて評価してください。",
+  calcHbSource:"出典：日本循環器学会/日本不整脈心電学会「2020年改訂版 不整脈薬物治療ガイドライン」Table 34・§3.1.2a（英語公式版）／2024 ESC AF Guidelines §6.7。1_MKM 監修済 2026-07-29",
+  // ---- HELT-E2S2
+  calcHeltHt:"高血圧",
+  calcHeltAf:"持続性・永続性心房細動",
+  calcHeltStroke:"脳卒中の既往",
+  calcBmi:"BMI（kg/m²）",
+  calcHeltTitle:"HELT-E2S2（心房細動の脳梗塞リスク・日本独自）",
+  calcHeltLabel:"HELT-E2S2",
+  calcHeltUse:"日本人の心房細動における脳梗塞リスクの層別化（推奨クラス IIa）",
+  calcHeltFormula:"H 高血圧1／E 75〜84歳1／L BMI 18.5未満1／T 持続性・永続性AF 1／E2 85歳以上2／S2 脳卒中の既往2（0〜7点。年齢は排他）",
+  calcHeltNoTh:"⚠ 解釈は表示しません。本スコアの抗凝固開始閾値はガイドライン自身が「未確定」と明記しています。抗凝固療法の開始基準は CHADS2 1点以上（推奨クラス I）です",
+  calcHeltNeed:"年齢・BMI と3項目をすべて入れると判定します（未入力のまま点数は出しません）",
+  calcHeltRange:"入力できる範囲：年齢 1〜120歳／BMI 10〜60",
+  calcHeltCaution:"日本の5レジストリのメタ解析（J-RISK）に基づく日本独自のスコアで、2024年フォーカスアップデートで推奨クラス IIa として追加されました。点数の解釈（何点で何をするか）は未確定です。",
+  calcHeltSource:"出典：Iwasaki Y, et al. JCS/JHRS 2024 Guideline Focused Update. Circ J 2025;89(7):1012-1073 Table 18・§1.2。1_MKM 監修済 2026-07-29",
   calcPickTitle:"計算を選ぶ",
   calcNoCase:"患者に紐づけない計算です。入力は保存されません",
   calcBackToList:"一覧へ",
@@ -4142,6 +4646,12 @@ function calcFieldValue(def, value){
   // Three states on purpose: "" (not assessed) is not the same as "no". A score
   // must refuse to compute from an unanswered item rather than assume normal.
   if (def.type === "bool3") return raw === "true" ? true : raw === "false" ? false : "";
+  // Ordered grades (Child-Pugh's encephalopathy / ascites). Same three-state
+  // rule as bool3: "" means not assessed, and a score must refuse to compute.
+  if (def.type === "grade") {
+    var g = Math.round(Number(raw));
+    return (isFinite(g) && g >= 1 && g <= (def.choices || []).length) ? g : "";
+  }
   if (!raw) return null;
   var n = Number(raw);
   if (!isFinite(n) || n < 0) return undefined;
@@ -5917,6 +6427,16 @@ function calcToolBody(tool){
       }
       return '<div class="field"><div class="fieldlabel">' + label + '</div><div class="chips">' +
         triChip("", STR.unset) + triChip("true", STR.calcYes) + triChip("false", STR.calcNo) + '</div>' +
+        (def.noteKey ? '<div class="faint">' + esc(STR[def.noteKey]) + '</div>' : '') + '</div>';
+    }
+    if (def.type === "grade") {
+      var curG = value === 1 || value === 2 || value === 3 ? String(value) : "";
+      var chips = '<button class="chipbtn' + (curG === "" ? ' on' : '') + '" onclick="updateCaseBio(\'' + esc(caseId) + '\',\'' + esc(key) + '\',\'\')">' + esc(STR.unset) + '</button>';
+      (def.choices || []).forEach(function(ck, i){
+        var code = String(i + 1);
+        chips += '<button class="chipbtn' + (curG === code ? ' on' : '') + '" onclick="updateCaseBio(\'' + esc(caseId) + '\',\'' + esc(key) + '\',\'' + code + '\')">' + esc(STR[ck]) + '</button>';
+      });
+      return '<div class="field"><div class="fieldlabel">' + label + '</div><div class="chips">' + chips + '</div>' +
         (def.noteKey ? '<div class="faint">' + esc(STR[def.noteKey]) + '</div>' : '') + '</div>';
     }
     var type = def.type === "date" ? "date" : "number";

@@ -419,6 +419,65 @@ const adropReopen = vm.runInContext("renderCalcSheet()", sandbox);
 if (!adropReopen.includes(vm.runInContext("STR.calcAdropNeed", sandbox))) fail("reopening must clear SpO2/BP and refuse to score");
 // Restore the fixture for later checks.
 vm.runInContext("updateCaseBio('c1','age',''); updateCaseSex('c1',''); updateCaseBio('c1','bun',''); closeSheet();", sandbox);
+// Every registered calculator must be reachable from the picker and must draw
+// a body. A tool added to the registry but unreachable is the failure mode the
+// registry was built to prevent.
+vm.runInContext("openCalcSheet('c1');", sandbox);
+const calcPicker = vm.runInContext("renderCalcSheet()", sandbox);
+const toolIds = JSON.parse(vm.runInContext("JSON.stringify(CALC_TOOLS.map(t=>t.id))", sandbox));
+// 9 tools carry the 10 scores CEO approved for the HOKUTO-replacement scope
+// (kidney holds CCr and eGFR together; qSOFA is still on clover-pages and
+// needs its own 1_MKM sign-off before it can move here).
+if (toolIds.length !== 9) fail("expected 9 calculators, found " + toolIds.length);
+toolIds.forEach(function(id){
+  if (!calcPicker.includes("openCalcTool('" + id + "')")) fail("calc picker missing tool " + id);
+  vm.runInContext("openCalcTool(" + JSON.stringify(id) + ");", sandbox);
+  const body = vm.runInContext("renderCalcSheet()", sandbox);
+  if (!body || body.length < 200) fail("calculator drew nothing: " + id);
+  // Source and use captions are the shipping gate — never let one render bare.
+  const tool = vm.runInContext("JSON.stringify({s:STR[calcToolById(" + JSON.stringify(id) + ").sourceKey],u:STR[calcToolById(" + JSON.stringify(id) + ").results[0].useKey]})", sandbox);
+  const caps = JSON.parse(tool);
+  if (!body.includes(caps.s)) fail("calculator missing its source line: " + id);
+  if (!body.includes(caps.u)) fail("calculator missing its use line: " + id);
+  vm.runInContext("openCalcTool('');", sandbox);
+});
+// Child-Pugh: the graded chips are a new input type, so check they actually
+// draw, and that the coagulation item refuses when both boxes are filled.
+vm.runInContext("openCalcTool('childpugh');", sandbox);
+const cpEmpty = vm.runInContext("renderCalcSheet()", sandbox);
+for (const code of ["1", "2", "3"]) {
+  if (!cpEmpty.includes(`updateCaseBio('c1','cpEnceph','${code}'`)) fail("Child-Pugh missing encephalopathy grade chip " + code);
+  if (!cpEmpty.includes(`updateCaseBio('c1','cpAscites','${code}'`)) fail("Child-Pugh missing ascites grade chip " + code);
+}
+if (!cpEmpty.includes(vm.runInContext("STR.calcCpNeed", sandbox))) fail("empty Child-Pugh must ask for input");
+// 1_MKM fixture CP-4: every boundary value at once -> 10 points, class C.
+vm.runInContext("updateCaseBio('c1','cpEnceph','2'); updateCaseBio('c1','cpAscites','2'); updateCaseBio('c1','tbil','2.0'); updateCaseBio('c1','alb','3.5'); updateCaseBio('c1','ptPct','70'); updateCaseBio('c1','cpPbc','false');", sandbox);
+const cpFilled = vm.runInContext("renderCalcSheet()", sandbox);
+if (!cpFilled.includes(vm.runInContext("STR.calcCpC", sandbox))) fail("Child-Pugh must render class C for the MKM boundary fixture");
+// Filling INR as well must stop the score and say why: PT% and INR are ONE item.
+vm.runInContext("updateCaseBio('c1','inr','1.2');", sandbox);
+const cpBoth = vm.runInContext("renderCalcSheet()", sandbox);
+if (!cpBoth.includes(vm.runInContext("STR.calcCpBothWarn", sandbox))) fail("both coagulation boxes must warn");
+if (cpBoth.includes(vm.runInContext("STR.calcCpC", sandbox))) fail("both coagulation boxes must stop the score, not pick one");
+vm.runInContext("updateCaseBio('c1','inr',''); updateCaseBio('c1','tbil',''); updateCaseBio('c1','alb',''); updateCaseBio('c1','ptPct','');", sandbox);
+// FIB-4 and HELT-E2S2 ship without an interpretation on purpose; the notice
+// that says so must be on screen, and no band may appear.
+vm.runInContext("openCalcTool('fib4'); updateCaseBio('c1','age','60'); updateCaseBio('c1','ast','50'); updateCaseBio('c1','alt','50'); updateCaseBio('c1','plt','15.0');", sandbox);
+const fibBody = vm.runInContext("renderCalcSheet()", sandbox);
+if (!fibBody.includes("2.83")) fail("FIB-4 must render two decimals (2.83), not 2.8");
+if (!fibBody.includes(vm.runInContext("STR.calcFibNoBand", sandbox))) fail("FIB-4 must state why no risk band is shown");
+vm.runInContext("openCalcTool('helt'); updateCaseBio('c1','heltHt','true'); updateCaseBio('c1','bmi','22'); updateCaseBio('c1','heltAfType','false'); updateCaseBio('c1','heltStroke','false');", sandbox);
+const heltBody = vm.runInContext("renderCalcSheet()", sandbox);
+if (!heltBody.includes(vm.runInContext("STR.calcHeltNoTh", sandbox))) fail("HELT-E2S2 must state that its threshold is unsettled");
+// HAS-BLED must never read as a reason to stop anticoagulation.
+vm.runInContext("openCalcTool('hasbled');", sandbox);
+const hbBody = vm.runInContext("renderCalcSheet()", sandbox);
+if (!hbBody.includes(vm.runInContext("STR.calcHbNoStop", sandbox))) fail("HAS-BLED must carry the do-not-stop warning");
+// CHA2DS2-VASc must always say Japan starts from CHADS2, not from this score.
+vm.runInContext("openCalcTool('vasc');", sandbox);
+if (!vm.runInContext("renderCalcSheet()", sandbox).includes(vm.runInContext("STR.calcVascJp", sandbox))) fail("CHA2DS2-VASc must state the Japanese starting rule");
+// Restore the fixture for later checks.
+vm.runInContext("['age','ast','alt','plt','bmi','cpEnceph','cpAscites','cpPbc','heltHt','heltAfType','heltStroke'].forEach(function(k){ updateCaseBio('c1',k,''); }); closeSheet();", sandbox);
 // Tab layer: every registered tab must have a body and a chip. This is what
 // makes "adding a screen" a data change — a tab declared without a body would
 // otherwise render blank only when tapped.

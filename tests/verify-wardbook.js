@@ -1236,9 +1236,15 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   // Field declarations are the only allowlist that reaches storage.
   for (const key of Object.keys(L.CALC_FIELDS)) {
     const def = L.CALC_FIELDS[key];
-    assert.ok(["int", "num", "date", "sex", "bool", "bool3"].includes(def.type), key + ": unknown field type " + def.type);
+    assert.ok(["int", "num", "date", "sex", "bool", "bool3", "grade"].includes(def.type), key + ": unknown field type " + def.type);
     assert.ok(["case", "none"].includes(def.store), key + ": unknown store " + def.store);
     assert.ok(def.labelKey, key + ": needs a label");
+    // A graded field is a chip row built from its own choices: without them the
+    // renderer would draw a label and nothing to press.
+    if (def.type === "grade") {
+      assert.ok(Array.isArray(def.choices) && def.choices.length >= 2, key + ": grade needs choices");
+      for (const ck of def.choices) assert.ok(html.includes(ck + ':"'), key + ": missing choice string " + ck);
+    }
   }
   // Bounds stay tied to CALC_LIMITS so the guards can never drift apart.
   assert.strictEqual(L.CALC_FIELDS.age.min, L.CALC_LIMITS.ageMin, "age bounds share one source");
@@ -1376,6 +1382,170 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   for (const banned of ["virtual ward", "SDEC", "hospital at home", "入院", "外来", "ICU"]) {
     assert.strictEqual(curbBandText.indexOf(banned), -1, "CURB-65 bands must not name a care setting: " + banned);
   }
+
+  // ---- Child-Pugh (1_MKM 2026-07-29, 肝硬変診療GL2020 p.141 表1) ------------
+  // FIVE items. The Vault note used to split PT% and INR into separate rows,
+  // which tops out at 18 and destroys the A/B/C bands — hence the both-filled
+  // refusal below, and the max-15 assertion.
+  const CP_BASE = { cpEnceph:1, cpAscites:1, tbil:1.0, alb:4.0, ptPct:90, inr:null, cpPbc:false };
+  const cpOf = (over) => L.calcChildPugh(Object.assign({}, CP_BASE, over));
+  const cpBandOf = (over) => L.calcChildPughBandKey(Object.assign({}, CP_BASE, over));
+  assert.strictEqual(cpOf({}), 5, "MKM CP-1: everything normal -> 5 (never 0)");
+  assert.strictEqual(cpBandOf({}), "calcCpA", "MKM CP-1 band: class A");
+  const cp2 = { cpAscites:2, tbil:2.5, alb:3.0, ptPct:null, inr:1.50 };
+  assert.strictEqual(cpOf(cp2), 8, "MKM CP-2: scored via INR instead of PT% -> 8");
+  assert.strictEqual(cpBandOf(cp2), "calcCpB", "MKM CP-2 band: class B");
+  const cp3 = { cpEnceph:3, cpAscites:3, tbil:5.0, alb:2.5, ptPct:30 };
+  assert.strictEqual(cpOf(cp3), 15, "MKM CP-3: maximum -> 15");
+  assert.strictEqual(cpBandOf(cp3), "calcCpC", "MKM CP-3 band: class C");
+  // CP-4 is the one that matters: every boundary value at once, all landing on
+  // 2 points. The guideline never writes that in words; it falls out of the
+  // three bands being complementary.
+  const cp4 = { cpEnceph:2, cpAscites:2, tbil:2.0, alb:3.5, ptPct:70 };
+  assert.strictEqual(cpOf(cp4), 10, "MKM CP-4: every boundary sits on 2 points -> 10");
+  assert.strictEqual(cpBandOf(cp4), "calcCpC", "MKM CP-4 band: class C");
+  // CP-5 pins the PBC exception by CONTRAST: the same bilirubin scores 2 in
+  // cholestatic mode and 3 normally, so the toggle must move the total.
+  const cp5 = { tbil:6.0, alb:3.2, ptPct:75, cpPbc:true };
+  assert.strictEqual(cpOf(cp5), 7, "MKM CP-5: PBC mode, T-Bil 6.0 scores 2 -> 7");
+  assert.strictEqual(cpOf(Object.assign({}, cp5, { cpPbc:false })), 8, "same bilirubin scores 3 in normal mode -> 8");
+  assert.strictEqual(L.calcChildPughItems({ ...CP_BASE, tbil:3.9, cpPbc:true }).bil, 1, "PBC: 3.9 is 1 point");
+  assert.strictEqual(L.calcChildPughItems({ ...CP_BASE, tbil:4.0, cpPbc:true }).bil, 2, "PBC: 4.0 exactly is 2 points");
+  assert.strictEqual(L.calcChildPughItems({ ...CP_BASE, tbil:9.9, cpPbc:true }).bil, 2, "PBC: 9.9 is 2 points");
+  assert.strictEqual(L.calcChildPughItems({ ...CP_BASE, tbil:10.0, cpPbc:true }).bil, 3, "PBC: 10.0 exactly is 3 points");
+  // Every boundary, both sides.
+  const cpItem = (over, key) => L.calcChildPughItems(Object.assign({}, CP_BASE, over))[key];
+  assert.strictEqual(cpItem({ tbil:1.99 }, "bil"), 1, "T-Bil 1.99 -> 1");
+  assert.strictEqual(cpItem({ tbil:3.0 }, "bil"), 2, "T-Bil 3.0 exactly -> 2");
+  assert.strictEqual(cpItem({ tbil:3.01 }, "bil"), 3, "T-Bil 3.01 -> 3");
+  assert.strictEqual(cpItem({ alb:3.51 }, "alb"), 1, "Alb 3.51 -> 1");
+  assert.strictEqual(cpItem({ alb:2.8 }, "alb"), 2, "Alb 2.8 exactly -> 2");
+  assert.strictEqual(cpItem({ alb:2.79 }, "alb"), 3, "Alb 2.79 -> 3");
+  assert.strictEqual(cpItem({ ptPct:70.1 }, "coag"), 1, "PT 70.1% -> 1");
+  assert.strictEqual(cpItem({ ptPct:40 }, "coag"), 2, "PT 40% exactly -> 2");
+  assert.strictEqual(cpItem({ ptPct:39.9 }, "coag"), 3, "PT 39.9% -> 3");
+  assert.strictEqual(cpItem({ ptPct:null, inr:1.69 }, "coag"), 1, "INR 1.69 -> 1");
+  assert.strictEqual(cpItem({ ptPct:null, inr:2.3 }, "coag"), 2, "INR 2.3 exactly -> 2 (GL2020, not StatPearls' 2.2)");
+  assert.strictEqual(cpItem({ ptPct:null, inr:2.31 }, "coag"), 3, "INR 2.31 -> 3");
+  // PT% and INR are ONE item: both filled or neither must refuse to score.
+  assert.strictEqual(cpOf({ ptPct:90, inr:1.2 }), null, "both coagulation boxes filled -> refuse");
+  assert.strictEqual(L.calcCpBothCoag(Object.assign({}, CP_BASE, { inr:1.2 })), true, "both-filled drives the on-screen warning");
+  assert.strictEqual(L.calcCpBothCoag(CP_BASE), false, "one box filled is the normal case");
+  assert.strictEqual(cpOf({ ptPct:null, inr:null }), null, "neither coagulation box filled -> refuse");
+  for (const missing of [{ cpEnceph:"" }, { cpAscites:"" }, { tbil:null }, { alb:null }, { cpPbc:"" }]) {
+    assert.strictEqual(cpOf(missing), null, "unanswered item must not score: " + JSON.stringify(missing));
+    assert.strictEqual(cpBandOf(missing), "", "no band without a score: " + JSON.stringify(missing));
+  }
+
+  // ---- FIB-4 (1_MKM 2026-07-29, NAFLD/NASH GL2020 p.31 表1) ----------------
+  const fibOf = (over) => L.calcFib4(Object.assign({ age:40, ast:25, alt:30, plt:25.0 }, over));
+  const r2 = (n) => L.calcRound2(n);
+  assert.strictEqual(r2(fibOf({})), 0.73, "MKM FIB-1 -> 0.73");
+  assert.strictEqual(r2(fibOf({ age:50, ast:40, alt:30, plt:20.0 })), 1.83, "MKM FIB-2 -> 1.83");
+  assert.strictEqual(r2(fibOf({ age:70, ast:60, alt:40, plt:12.0 })), 5.53, "MKM FIB-3 -> 5.53");
+  // The unit test. 万/uL must be multiplied by 10; forget it and every FIB-4 is
+  // ten times too big, which still looks like a plausible number.
+  assert.strictEqual(r2(fibOf({ age:60, ast:50, alt:50, plt:15.0 })), 2.83, "MKM FIB-4t -> 2.83 (a x10 slip gives 28.28)");
+  assert.strictEqual(L.calcRound1(2.8284), 2.8, "the one-decimal helper would have lost the second digit");
+  for (const missing of [{ age:null }, { ast:null }, { alt:null }, { plt:null }]) {
+    assert.strictEqual(fibOf(missing), null, "FIB-4 needs every input: " + JSON.stringify(missing));
+  }
+  // 1_MKM: no risk band ships while MASLD GL2026's verbatim text is unread.
+  const fibTool = L.calcToolById("fib4");
+  assert.ok(fibTool, "FIB-4 tool registered");
+  assert.strictEqual(fibTool.results[0].band, undefined, "FIB-4 must ship without a band (GL2026 not verifiable)");
+  assert.strictEqual(fibTool.results[0].round, 2, "FIB-4 rounds to two decimals");
+  assert.strictEqual(L.calcCollect(fibTool, { age:60, ast:50, alt:50, plt:15.0 })[0].bandKey, "", "no band key is produced");
+
+  // ---- CHADS2 / CHA2DS2-VASc / HAS-BLED / HELT-E2S2 (1_MKM 2026-07-29) -----
+  const CH_BASE = { age:60, chadsChf:false, chadsHt:false, chadsDm:false, chadsStroke:false };
+  const chOf = (over) => L.calcChads2(Object.assign({}, CH_BASE, over));
+  assert.strictEqual(chOf({}), 0, "MKM CH-1: 60yo, nothing -> 0");
+  assert.strictEqual(L.calcChads2BandKey(CH_BASE), "calcChadsB0", "0 gets the plain band");
+  assert.strictEqual(chOf({ age:76, chadsHt:true }), 2, "MKM CH-2 -> 2");
+  assert.strictEqual(L.calcChads2BandKey(Object.assign({}, CH_BASE, { age:76, chadsHt:true })), "calcChadsB1", "1+ recommends a DOAC");
+  assert.strictEqual(chOf({ age:80, chadsChf:true, chadsHt:true, chadsDm:true, chadsStroke:true }), 6, "MKM CH-3: maximum -> 6");
+  assert.strictEqual(chOf({ age:74 }), 0, "CHADS2 age 74 does not count");
+  assert.strictEqual(chOf({ age:75 }), 1, "CHADS2 age 75 exactly counts (1 point, not 2)");
+  assert.strictEqual(chOf({ chadsStroke:true }), 2, "stroke is worth 2");
+
+  const VA_BASE = { age:55, sex:"M", vascChf:false, vascHt:false, vascDm:false, vascStroke:false, vascVd:false };
+  const vaOf = (over) => L.calcVasc(Object.assign({}, VA_BASE, over));
+  assert.strictEqual(vaOf({ age:78, sex:"F", vascChf:true, vascHt:true }), 5, "MKM T1: 78yo woman -> 5");
+  assert.strictEqual(vaOf({ age:68, vascHt:true, vascDm:true, vascStroke:true, vascVd:true }), 6, "MKM T2: 68yo man -> 6");
+  assert.strictEqual(vaOf({}), 0, "MKM T3: 55yo man, nothing -> 0");
+  assert.strictEqual(L.calcVascBandKey(VA_BASE), "calcVascB0", "0 is the only score with an interpretation");
+  assert.strictEqual(L.calcVascBandKey(Object.assign({}, VA_BASE, { age:70 })), "", "1+ gets a number and no words");
+  // Age is exclusive, which is why the maximum stays 9 rather than 10.
+  assert.strictEqual(vaOf({ age:64 }), 0, "64 -> 0");
+  assert.strictEqual(vaOf({ age:65 }), 1, "65 -> 1 (the 65-74 band)");
+  assert.strictEqual(vaOf({ age:74 }), 1, "74 -> 1");
+  assert.strictEqual(vaOf({ age:75 }), 2, "75 -> 2 and the 65-74 point is NOT added as well");
+  assert.strictEqual(vaOf({ age:80, sex:"F", vascChf:true, vascHt:true, vascDm:true, vascStroke:true, vascVd:true }), 9, "maximum is 9");
+  assert.strictEqual(vaOf({ sex:"" }), null, "sex is required (it is a scored item here)");
+
+  const HB_BASE = { age:64, hbHt:false, hbRenal:false, hbLiver:false, hbStroke:false, hbBleed:false, hbInr:false, hbDrug:false, hbAlcohol:false };
+  const hbOf = (over) => L.calcHasbled(Object.assign({}, HB_BASE, over));
+  assert.strictEqual(hbOf({ age:70, hbHt:true, hbRenal:true, hbStroke:true, hbBleed:true, hbDrug:true }), 6, "MKM T4 -> 6");
+  assert.strictEqual(hbOf({ age:60, hbInr:true }), 1, "MKM T5: labile INR alone -> 1");
+  assert.strictEqual(hbOf({}), 0, "MKM T6: all negative, 64yo -> 0");
+  assert.strictEqual(hbOf({ hbRenal:true, hbLiver:true }), 2, "renal and liver score a point each");
+  assert.strictEqual(hbOf({ hbDrug:true, hbAlcohol:true }), 2, "drugs and alcohol score a point each");
+  assert.strictEqual(hbOf({ age:70, hbHt:true, hbRenal:true, hbLiver:true, hbStroke:true, hbBleed:true, hbInr:true, hbDrug:true, hbAlcohol:true }), 9, "maximum is 9");
+  assert.strictEqual(L.calcHasbledBandKey(Object.assign({}, HB_BASE, { hbHt:true, hbBleed:true })), "calcHbB0", "2 is not yet high risk");
+  assert.strictEqual(L.calcHasbledBandKey(Object.assign({}, HB_BASE, { hbHt:true, hbBleed:true, hbStroke:true })), "calcHbB3", "3 is high risk");
+
+  // THE cross-score test. Age 65 exactly: CHA2DS2-VASc adds a point, HAS-BLED
+  // does not (">65"). If a refactor ever merges these into one shared flag or
+  // one shared age rule, this is the assertion that fails.
+  assert.strictEqual(vaOf({ age:65 }), 1, "65 scores in CHA2DS2-VASc");
+  assert.strictEqual(hbOf({ age:65 }), 0, "65 does NOT score in HAS-BLED");
+  assert.strictEqual(hbOf({ age:66 }), 1, "66 does");
+  // ...and the flags themselves are separate declarations, never one field.
+  for (const [a, b] of [["chadsHt", "vascHt"], ["chadsHt", "hbHt"], ["vascHt", "hbHt"], ["chadsStroke", "vascStroke"], ["vascStroke", "hbStroke"], ["chadsStroke", "hbStroke"]]) {
+    assert.ok(L.CALC_FIELDS[a] && L.CALC_FIELDS[b], "both flags declared: " + a + " / " + b);
+    assert.notStrictEqual(a, b, "scores must not share a flag: " + a);
+  }
+  for (const tool of L.CALC_TOOLS) {
+    const own = tool.fields.filter((f) => !["age", "sex"].includes(f));
+    for (const other of L.CALC_TOOLS) {
+      if (other.id === tool.id) continue;
+      const shared = own.filter((f) => other.fields.includes(f) && L.CALC_FIELDS[f].type === "bool3");
+      // length, not deepStrictEqual: sandbox arrays have a foreign prototype.
+      assert.strictEqual(shared.length, 0, tool.id + " and " + other.id + " must not share a yes/no flag: " + shared.join(","));
+    }
+  }
+
+  const HE_BASE = { age:60, heltHt:false, bmi:24.0, heltAfType:false, heltStroke:false };
+  const heOf = (over) => L.calcHelt(Object.assign({}, HE_BASE, over));
+  assert.strictEqual(heOf({ age:78, heltHt:true, bmi:22.0 }), 2, "MKM HE-1 -> 2");
+  assert.strictEqual(heOf({ age:88, heltHt:true, bmi:17.0, heltAfType:true, heltStroke:true }), 7, "MKM HE-2: maximum -> 7");
+  assert.strictEqual(heOf({}), 0, "MKM HE-3 -> 0");
+  assert.strictEqual(heOf({ age:74 }), 0, "74 -> 0");
+  assert.strictEqual(heOf({ age:75 }), 1, "75 -> 1");
+  assert.strictEqual(heOf({ age:84 }), 1, "84 -> 1");
+  assert.strictEqual(heOf({ age:85 }), 2, "85 -> 2 and the 75-84 point is NOT added as well");
+  assert.strictEqual(heOf({ bmi:18.5 }), 0, "BMI 18.5 exactly does not count");
+  assert.strictEqual(heOf({ bmi:18.4 }), 1, "BMI 18.4 counts");
+  // 1_MKM: the guideline that introduced HELT-E2S2 says its own anticoagulation
+  // threshold is unsettled, so no band may be invented for it.
+  const heltTool = L.calcToolById("helt");
+  assert.strictEqual(heltTool.results[0].band, undefined, "HELT-E2S2 must ship without a band");
+  assert.strictEqual(L.calcCollect(heltTool, HE_BASE)[0].bandKey, "", "no band key is produced");
+
+  // Unanswered items refuse to score, across all four AF tools.
+  assert.strictEqual(chOf({ chadsChf:"" }), null, "CHADS2 refuses an unanswered flag");
+  assert.strictEqual(vaOf({ vascVd:"" }), null, "CHA2DS2-VASc refuses an unanswered flag");
+  assert.strictEqual(hbOf({ hbAlcohol:"" }), null, "HAS-BLED refuses an unanswered flag");
+  assert.strictEqual(heOf({ heltStroke:"" }), null, "HELT-E2S2 refuses an unanswered flag");
+  assert.strictEqual(heOf({ bmi:null }), null, "HELT-E2S2 needs a BMI");
+  // Three-state flags must survive a normalize round trip: collapsing "not
+  // assessed" into "no" would let a score compute from an unanswered item.
+  const flagCase = L.normalizeCase({ id:"cbio", bio:{ chadsChf:true, chadsHt:false, chadsDm:"", vascVd:true } });
+  assert.strictEqual(flagCase.bio.chadsChf, true, "true survives");
+  assert.strictEqual(flagCase.bio.chadsHt, false, "false survives");
+  assert.strictEqual(flagCase.bio.chadsDm, "", "unanswered stays unanswered");
+  assert.strictEqual(L.normalizeCase({ id:"c2", bio:{ chadsChf:true } }).bio.chadsChf, true, "round trip is idempotent");
 
   // Home-screen icons (CEO 2026-07-29). Android crops "maskable" itself, so an
   // icon declared as both purposes is cropped twice and the corners fray. Keep
