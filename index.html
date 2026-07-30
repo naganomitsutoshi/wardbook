@@ -432,6 +432,19 @@
   .courserow.cr-stage .coursetext{color:var(--accent);font-weight:700}
   .courserow.cr-admit .coursetext,.courserow.cr-discharge .courselabel{font-weight:700}
   .courserow.cr-waitClose .courselabel{color:var(--ok)}
+  .courserow.cr-why .coursetext{color:var(--accent)}
+  /* The nudge mark: present enough to notice on a round, quiet enough to ignore
+     for three days without feeling nagged. */
+  .nudgedot{
+    flex:none;font-size:11px;font-weight:700;line-height:1;
+    color:var(--accent);border:1px solid var(--accent);border-radius:999px;
+    padding:2px 6px;
+  }
+  .nudge{
+    border:1px solid var(--accent);border-radius:8px;
+    padding:10px;margin-top:10px;
+  }
+  .nudgeq{font-size:14px;font-weight:700;margin-bottom:8px}
   .weekgrid,.chartgrid{border-collapse:separate;border-spacing:0;min-width:max-content}
   .weekgrid th,.weekgrid td,.chartgrid th,.chartgrid td{
     border:1px solid var(--line);
@@ -820,6 +833,21 @@ function normalizeEntryContent(raw, ctx){
     var calcDate = safeDate(row.date, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
     return { kind:"calc", id:id, text:text, date:calcDate };
   }
+  if (row.kind === "q") {
+    // A nudge and what came back (2026-07-31). `key` is the question's identity
+    // (trigger + what triggered it) so the same moment is never asked twice;
+    // `skipped` parks it, an answer retires it. text carries the answer, which
+    // is why an empty answer is legal here — a skip has none.
+    var qKey = typeof row.key === "string" ? row.key : "";
+    if (!qKey) return null;
+    var qDate = safeDate(row.date, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
+    return {
+      kind:"q", id:id, key:qKey, text:text,
+      prompt: typeof row.prompt === "string" ? row.prompt : "",
+      skipped: row.skipped === true,
+      date:qDate
+    };
+  }
   if (row.kind === "ref") {
     if (!text) return null;
     // Reference opened from a case (2026-07-31): the title of a clover-pages
@@ -927,6 +955,7 @@ function entriesFromMirrors(c, ctx){
   cloneArr(c && c.aiLogs).forEach(function(x){ rows.push({ kind:"ai", id:x.id, text:x.text, date:x.date, field:x.field, province:x.province, domain:x.domain, mastered:x.mastered, reviewCount:x.reviewCount, lastReviewedOn:x.lastReviewedOn }); });
   cloneArr(c && c.calcLogs).forEach(function(x){ rows.push({ kind:"calc", id:x.id, text:x.text, date:x.date }); });
   cloneArr(c && c.refLogs).forEach(function(x){ rows.push({ kind:"ref", id:x.id, text:x.text, date:x.date }); });
+  cloneArr(c && c.qLogs).forEach(function(x){ rows.push({ kind:"q", id:x.id, key:x.key, text:x.text, prompt:x.prompt, skipped:x.skipped, date:x.date }); });
   cloneArr(c && c.chart && c.chart.items).forEach(function(x){
     var kind = x.kind === "band" ? "chartBand" : x.kind === "event" ? "chartEvent" : "chartValue";
     var row = { kind:kind, id:x.id, catId:x.catId, name:x.name };
@@ -955,6 +984,7 @@ function entryRebuildMirrors(c){
   c.aiLogs = live.filter(function(e){ return e.kind === "ai"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date, field:e.field, province:e.province, domain:e.domain, mastered:e.mastered, reviewCount:e.reviewCount, lastReviewedOn:e.lastReviewedOn }; });
   c.calcLogs = live.filter(function(e){ return e.kind === "calc"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
   c.refLogs = live.filter(function(e){ return e.kind === "ref"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
+  c.qLogs = live.filter(function(e){ return e.kind === "q"; }).map(function(e){ return { id:e.id, key:e.key, text:e.text, prompt:e.prompt, skipped:e.skipped, date:e.date }; });
   c.chart = { items: live.filter(function(e){ return e.kind === "chartValue" || e.kind === "chartBand" || e.kind === "chartEvent"; }).map(function(e){
     if (e.kind === "chartValue") return { id:e.id, catId:e.catId, kind:"value", name:e.name, values:JSON.parse(JSON.stringify(e.values)), planned:JSON.parse(JSON.stringify(e.planned)) };
     if (e.kind === "chartBand") return { id:e.id, catId:e.catId, kind:"band", name:e.name, startDate:e.startDate, endDate:e.endDate };
@@ -1101,6 +1131,7 @@ function normalizeCase(raw, nowIso, todayIso){
   out.aiLogs = mirrorRows(src.aiLogs, "ai");
   out.calcLogs = mirrorRows(src.calcLogs, "calc");
   out.refLogs = mirrorRows(src.refLogs, "ref");
+  out.qLogs = mirrorRows(src.qLogs, "q");
   out.discharge = {
     checklist:isObj(src.discharge && src.discharge.checklist) ? src.discharge.checklist : {},
     plannedOn:src.discharge && src.discharge.plannedOn ? safeDate(src.discharge.plannedOn, null) : null
@@ -1224,7 +1255,8 @@ function normalizeState(raw, nowIso, todayIso){
     config: {
       stages: stages,
       labels: normalizeLabels(cfg.labels),
-      chartCats: chartCats
+      chartCats: chartCats,
+      nudge: normalizeNudgeCfg(cfg.nudge)
     },
     trash: cloneArr(src.trash).map(function(entry){
       return normalizeTrashEntry(entry, nowStamp);
@@ -2922,13 +2954,88 @@ function normalizeViewTab(id){
   return viewTabById(String(id || "")) ? String(id) : VIEW_TABS[0].id;
 }
 
+// ---- nudges (2026-07-31, Phase 2) -----------------------------------------
+// Footprints give the course "what happened". The one thing they cannot give is
+// "why" — and asking for it is where every previous attempt died (夕の棚卸し,
+// 種: both required the user to start). So the app starts instead, and only
+// ever as a mark on the card. Nothing interrupts, nothing is due, everything is
+// skippable, and one case shows at most ONE open question at a time.
+var NUDGE_DEFAULTS = { staleDays:3, reaskDays:3, taskStallDays:3 };
+
+function normalizeNudgeCfg(raw){
+  var src = isObj(raw) ? raw : {};
+  var out = {};
+  Object.keys(NUDGE_DEFAULTS).forEach(function(k){
+    var n = Math.floor(toNum(src[k], NUDGE_DEFAULTS[k]));
+    // 0 would mean "ask again the same day", which is nagging. 1 is the floor.
+    out[k] = n >= 1 && n <= 30 ? n : NUDGE_DEFAULTS[k];
+  });
+  return out;
+}
+
+function daysBetween(fromIso, toIso){
+  var a = Date.parse(String(fromIso || "") + "T00:00:00Z");
+  var b = Date.parse(String(toIso || "") + "T00:00:00Z");
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  return Math.round((b - a) / 86400000);
+}
+
+// key -> the answer/skip already recorded for it.
+function nudgeAnswers(c){
+  var map = {};
+  cloneArr(c && c.qLogs).forEach(function(q){ if (q && q.key) map[q.key] = q; });
+  return map;
+}
+
+// The single open question for this case, or null. Priority runs from the most
+// information-rich moment down: a result landing and a turn in the course are
+// worth more than "nothing has moved".
+function pendingNudge(c, todayIso, cfg){
+  if (!c || c.status === "discharged") return null;
+  var conf = normalizeNudgeCfg(cfg);
+  var answered = nudgeAnswers(c);
+  var candidates = [];
+  var stageLog = cloneArr(c.stageLog);
+  var last = stageLog[stageLog.length - 1];
+  // A turn in the course: the phase moved today or recently and nobody said why.
+  if (stageLog.length > 1 && last && last.date <= todayIso) {
+    candidates.push({ key:"stageChanged:" + last.date, trigger:"stageChanged", subject:last.stageId });
+  }
+  // A wait came back: the moment the plan either changes or is confirmed.
+  cloneArr(c.pendings).forEach(function(p){
+    if (p && p.closedOn) candidates.push({ key:"waitClosed:" + p.id, trigger:"waitClosed", subject:p.text });
+  });
+  // The phase has not been touched for a while. The CEO updates it "気づいた
+  // ときだけ", so forgetting is the norm — that is the app's job to cover.
+  if (last && daysBetween(last.date, todayIso) >= conf.staleDays) {
+    candidates.push({ key:"stageStale:" + last.date + ":" + todayIso, trigger:"stageStale", subject:last.stageId });
+  }
+  // Nothing has moved: either the patient is parked, or something is stuck.
+  var lastMove = "";
+  cloneArr(c.todos).forEach(function(t){ if (t && t.doneOn && t.doneOn > lastMove) lastMove = t.doneOn; });
+  cloneArr(c.pendings).forEach(function(p){ if (p && p.closedOn && p.closedOn > lastMove) lastMove = p.closedOn; });
+  if (!lastMove) lastMove = c.admittedAt;
+  if (daysBetween(lastMove, todayIso) >= conf.taskStallDays) {
+    candidates.push({ key:"taskStalled:" + lastMove + ":" + todayIso, trigger:"taskStalled", subject:lastMove });
+  }
+  for (var i = 0; i < candidates.length; i++) {
+    var prev = answered[candidates[i].key];
+    if (!prev) return candidates[i];
+    // Skipping is not "no". It parks the question for a few days; answering
+    // retires it for good.
+    if (prev.skipped && daysBetween(prev.date, todayIso) >= conf.reaskDays) return candidates[i];
+  }
+  return null;
+}
+
 // Trashed entry kind -> the case mirror it is restored into. Adding a new entry
 // kind means adding a row here as well, or restore silently does nothing (see
 // restoreTrash, and the test that walks every kind). "chartItem" is deliberately
 // absent: it lives under c.chart.items and is handled separately.
 var TRASH_RESTORE_MIRRORS = {
   next:"next", todo:"todos", pending:"pendings", seed:"seeds",
-  problem:"problems", note:"notes", ai:"aiLogs", calc:"calcLogs", ref:"refLogs"
+  problem:"problems", note:"notes", ai:"aiLogs", calc:"calcLogs", ref:"refLogs",
+  q:"qLogs"
 };
 
 // ---- course timeline (2026-07-31) -----------------------------------------
@@ -2944,7 +3051,9 @@ var TRASH_RESTORE_MIRRORS = {
 // Items finished before doneOn/closedOn existed carry no date. They are dropped
 // rather than guessed onto a day — a made-up date in a clinical course is worse
 // than a gap — and courseHasUndated lets the UI say so.
-var COURSE_RANK = { admit:0, stage:1, taskDone:2, waitOpen:3, waitClose:4, calc:5, ref:6, note:7, discharge:8 };
+// "why" sits directly under the phase change it explains — that pairing is the
+// whole point of the nudges.
+var COURSE_RANK = { admit:0, stage:1, why:2, taskDone:3, waitOpen:4, waitClose:5, calc:6, ref:7, note:8, discharge:9 };
 
 // stageName maps a stageId to its display name; the caller owns the stage
 // registry, so this stays free of UI state and is unit-testable.
@@ -2970,6 +3079,11 @@ function courseRows(c, stageName){
   cloneArr(c && c.calcLogs).forEach(function(item){ if (item) push(item.date, "calc", item.text); });
   cloneArr(c && c.refLogs).forEach(function(item){ if (item) push(item.date, "ref", item.text); });
   cloneArr(c && c.notes).forEach(function(item){ if (item) push(item.date, "note", item.text); });
+  // Answered nudges. A skip leaves no row: the course records what the ward
+  // round produced, not which questions were declined.
+  cloneArr(c && c.qLogs).forEach(function(item){
+    if (item && !item.skipped && item.text) push(item.date, "why", item.text);
+  });
   if (c && c.dischargedAt) push(c.dischargedAt, "discharge", "");
   // Chronological: a course is read forwards. Ties break on a fixed kind order
   // then on text, so identical data always draws in an identical order — no
@@ -3073,6 +3187,10 @@ if (typeof module !== "undefined") {
     TRASH_RESTORE_MIRRORS:TRASH_RESTORE_MIRRORS,
     courseRows:courseRows,
     courseHasUndated:courseHasUndated,
+    pendingNudge:pendingNudge,
+    normalizeNudgeCfg:normalizeNudgeCfg,
+    NUDGE_DEFAULTS:NUDGE_DEFAULTS,
+    daysBetween:daysBetween,
     boardOrder:boardOrder,
     stalenessLevel:stalenessLevel,
     unsentSeeds:unsentSeeds,
@@ -3346,6 +3464,24 @@ const STR = {
   statsExports:"書き出し回数",
   statsCases:"登録した症例",
   statsFootprints:"足あとの件数",
+  nudgeBadge:"？",
+  nudgeStageChanged:"局面が変わりました。何が変わりましたか？",
+  nudgeWaitClosed:"「{0}」が返ってきました。方針は変えましたか？",
+  nudgeStageStale:"局面は今も「{0}」のままですか？",
+  nudgeTaskStalled:"数日動いていません。何待ちですか？",
+  nudgeAnswerPh:"一行でどうぞ（空でも送れます）",
+  nudgeSend:"残す",
+  nudgeSkip:"あとで",
+  nudgeChanged:"変えた",
+  nudgeUnchanged:"変えない",
+  nudgeStageSame:"そのまま",
+  nudgeStageUpdate:"局面を変える",
+  nudgeNote:"答えは経過に「なぜ」として残ります。飛ばしても記録は消えません",
+  courseWhy:"なぜ",
+  nudgeSettings:"問いかけの間隔（日）",
+  nudgeStaleDaysLabel:"局面が動かないと聞くまで",
+  nudgeReaskDaysLabel:"「あとで」のあと再び聞くまで",
+  nudgeTaskStallDaysLabel:"何も動かないと聞くまで",
   ageExactLabel:"年齢（任意・具体値）",
   ageExactNote:"書類作成時に使います。空のままで構いません（腎機能の計算にも同じ値が使われます）",
   learnView:"input",
@@ -5913,6 +6049,9 @@ function renderBoardCard(c){
       '<span class="bid">' + esc(c.label || '—') + ' D' + computeDay(c.admittedAt, today) + '</span>' +
       (compactMeta(c) ? '<span class="bmeta">' + esc(compactMeta(c)) + '</span>' : '') +
       '<span class="bstage">' + stageDot(stage) + esc(stage.name) + '</span>' + aiCardBadge(c) +
+      // The entire push half of the nudge design: one small mark. No count, no
+      // colour alarm, no notification — open the patient when you feel like it.
+      (caseNudge(c) ? '<span class="nudgedot" title="' + esc(STR.coursePanel) + '">' + esc(STR.nudgeBadge) + '</span>' : '') +
     '</div>' +
     (c.dxTags.length ? '<div class="bdx">' + esc(c.dxTags.join('・')) + '</div>' : '') +
     taskHtml +
@@ -6271,7 +6410,31 @@ function renderStatsSection(){
     rows.map(function(r){
       return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(r[0]) + '</div></div><div class="one">' + esc(String(r[1])) + '</div></div>';
     }).join('') +
-    '<div class="note">' + esc(STR.statsNote) + '</div></div></section>';
+    '<div class="note">' + esc(STR.statsNote) + '</div></div></section>' +
+    renderNudgeSettings();
+}
+
+// How patient the app is. Raise these if it feels like it is tapping your
+// shoulder; the questions do not disappear, they just wait longer.
+function renderNudgeSettings(){
+  var cfg = normalizeNudgeCfg(DB.config && DB.config.nudge);
+  var rows = [
+    ["staleDays", STR.nudgeStaleDaysLabel],
+    ["taskStallDays", STR.nudgeTaskStallDaysLabel],
+    ["reaskDays", STR.nudgeReaskDaysLabel]
+  ];
+  return '<section class="settingssec"><div class="one">' + esc(STR.nudgeSettings) + '</div><div class="stack">' +
+    rows.map(function(r){
+      return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(r[1]) + '</div></div>' +
+        '<input class="input" style="max-width:80px" type="number" inputmode="numeric" min="1" max="30" value="' + esc(String(cfg[r[0]])) + '" onchange="updateNudgeCfg(\'' + r[0] + '\',this.value)"></div>';
+    }).join('') + '</div></section>';
+}
+
+function updateNudgeCfg(key, value){
+  var next = normalizeNudgeCfg(Object.assign({}, DB.config.nudge, (function(){ var o = {}; o[key] = value; return o; })()));
+  DB.config.nudge = next;
+  persist();
+  render();
 }
 
 function renderSettingsSheet(){
@@ -6597,13 +6760,77 @@ function resetAiPrompt(){
 var COURSE_LABEL_KEYS = {
   admit:"courseAdmit", stage:"courseStage", taskDone:"courseTaskDone",
   waitOpen:"courseWaitOpen", waitClose:"courseWaitClosed", calc:"courseCalc",
-  ref:"courseRef", note:"courseNote", discharge:"courseDischarge"
+  ref:"courseRef", note:"courseNote", discharge:"courseDischarge", why:"courseWhy"
 };
 function courseLabel(kind){ return STR[COURSE_LABEL_KEYS[kind]] || ""; }
 
+// ---- nudge UI (Phase 2) ---------------------------------------------------
+// A mark on the card, a single question at the top of the course panel, and two
+// taps to be rid of it. Deliberately NOT a modal, a notification, or a nightly
+// ritual: 夕の棚卸し died because it asked the user to show up at a fixed time.
+function caseNudge(c){
+  return pendingNudge(c, todayISO(), DB.config && DB.config.nudge);
+}
+
+function nudgePromptText(c, nudge){
+  if (!nudge) return "";
+  if (nudge.trigger === "stageChanged") return STR.nudgeStageChanged;
+  if (nudge.trigger === "waitClosed") return STR.nudgeWaitClosed.replace("{0}", String(nudge.subject || ""));
+  if (nudge.trigger === "stageStale") return STR.nudgeStageStale.replace("{0}", stageNameFor(nudge.subject));
+  return STR.nudgeTaskStalled;
+}
+
+function recordNudge(caseId, key, prompt, answer, skipped){
+  addListItem("qLogs", caseId, key, null, function(){
+    return { id:uid(), key:key, text:String(answer || ""), prompt:String(prompt || ""), skipped:!!skipped, date:todayISO() };
+  });
+  render();
+}
+
+function answerNudge(caseId, key, prompt, fixedAnswer){
+  var box = document.getElementById("nudgeInput");
+  var typed = box && box.value ? String(box.value).trim() : "";
+  // A fixed choice (変えた/変えない/そのまま) and free text are complementary:
+  // the choice is the answer, anything typed refines it.
+  var answer = [fixedAnswer || "", typed].filter(Boolean).join("：");
+  recordNudge(caseId, key, prompt, answer, false);
+}
+
+function skipNudge(caseId, key, prompt){
+  recordNudge(caseId, key, prompt, "", true);
+}
+
+// "局面を変える" answers the question by doing the thing: the picker opens and
+// the question is retired as answered, because changing the phase IS the reply.
+function nudgeOpenStage(caseId, key, prompt){
+  recordNudge(caseId, key, prompt, STR.nudgeStageUpdate, false);
+  openStagePicker(caseId);
+}
+
+function renderNudgeBlock(c){
+  var nudge = caseNudge(c);
+  if (!nudge) return '';
+  var prompt = nudgePromptText(c, nudge);
+  var args = "'" + esc(c.id) + "','" + esc(nudge.key) + "'," + JSON.stringify(prompt).replace(/"/g, "&quot;");
+  var choices = '';
+  if (nudge.trigger === "waitClosed") {
+    choices = '<button class="chipbtn" onclick="answerNudge(' + args + ',' + JSON.stringify(STR.nudgeChanged).replace(/"/g, "&quot;") + ')">' + esc(STR.nudgeChanged) + '</button>' +
+      '<button class="chipbtn" onclick="answerNudge(' + args + ',' + JSON.stringify(STR.nudgeUnchanged).replace(/"/g, "&quot;") + ')">' + esc(STR.nudgeUnchanged) + '</button>';
+  } else if (nudge.trigger === "stageStale") {
+    choices = '<button class="chipbtn" onclick="nudgeOpenStage(' + args + ')">' + esc(STR.nudgeStageUpdate) + '</button>' +
+      '<button class="chipbtn" onclick="answerNudge(' + args + ',' + JSON.stringify(STR.nudgeStageSame).replace(/"/g, "&quot;") + ')">' + esc(STR.nudgeStageSame) + '</button>';
+  }
+  return '<div class="nudge"><div class="nudgeq">' + esc(prompt) + '</div>' +
+    '<input id="nudgeInput" class="input" placeholder="' + esc(STR.nudgeAnswerPh) + '">' +
+    '<div class="row wrap" style="margin-top:6px">' + choices +
+      '<button class="smallbtn" onclick="answerNudge(' + args + ',\'\')">' + esc(STR.nudgeSend) + '</button>' +
+      '<button class="smallbtn" onclick="skipNudge(' + args + ')">' + esc(STR.nudgeSkip) + '</button>' +
+    '</div><div class="faint">' + esc(STR.nudgeNote) + '</div></div>';
+}
+
 function renderCoursePanel(c){
   var rows = courseRows(c, stageNameFor);
-  var head = '<div class="one">' + esc(STR.coursePanel) + '</div>';
+  var head = '<div class="one">' + esc(STR.coursePanel) + '</div>' + renderNudgeBlock(c);
   if (!rows.length) {
     return '<section class="panelcard anchor" id="anc-course">' + head +
       '<div class="faint" style="margin-top:10px">' + esc(STR.courseEmpty) + '</div></section>';

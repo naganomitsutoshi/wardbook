@@ -16,6 +16,14 @@
 > and `rolloverTodos` — miss one and the value disappears on the next sync round trip or the
 > item cannot be restored from the trash.
 >
+> **SUPERSEDED IN PART (2026-07-31), nudges:** entry kind `q` (`c.qLogs`) records a question the
+> app asked and what came back — `key` (trigger + subject, so a moment is never asked twice),
+> `prompt`, `text` (the answer), `skipped`. `pendingNudge()` returns at most ONE open question
+> per case; answering retires it, skipping parks it for `config.nudge.reaskDays`. Answered
+> questions become `why` rows on the course, directly under the change they explain. Discharged
+> cases are never nudged. Intervals live in `config.nudge` (staleDays / taskStallDays /
+> reaskDays, default 3, clamped 1–30) and sync with the rest of the config.
+>
 > The five requirements above are covered by tests in `tests/verify-wardbook.js` (round trip /
 > idempotence / restore targets / course ordering) and `tests/smoke-render.js` (tick stamps a
 > date, un-tick clears it, resolved wait leaves the outstanding list, panel renders, AI payload

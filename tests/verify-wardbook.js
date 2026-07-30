@@ -765,6 +765,88 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(L.courseHasUndated(courseCase), false);
   assert.strictEqual(L.courseRows({ admittedAt:"" }, null).length, 0, "a case with no dates yields no rows");
 
+  // --- nudges (Phase 2, 2026-07-31) ----------------------------------------
+  // The two failure modes that would kill this feature are asking again after
+  // it was answered (nagging) and never asking at all (silence). Both are here.
+  const nudgeCase = (over) => L.normalizeCase(Object.assign({
+    id:"nz", label:"肺炎", admittedAt:"2026-07-20", status:"active",
+    lastTouchedAt:"2026-07-25T10:00:00.000Z",
+    stageLog:[{ date:"2026-07-20", stageId:"s1" }]
+  }, over), "2026-07-25T10:00:00.000Z", "2026-07-25");
+
+  // A wait coming back is the highest-value moment, so it wins the single slot.
+  const closedCase = nudgeCase({
+    pendings:[{ id:"p1", text:"喀痰培養", openedOn:"2026-07-24", closedOn:"2026-07-25" }],
+    stageLog:[{ date:"2026-07-20", stageId:"s1" }, { date:"2026-07-25", stageId:"s2" }]
+  });
+  const firstNudge = L.pendingNudge(closedCase, "2026-07-25", null);
+  assert.strictEqual(firstNudge.trigger, "stageChanged", "a turn in the course outranks the other prompts");
+  // Answering retires it and lets the next one through — one question at a time.
+  closedCase.qLogs = [{ id:"q1", key:firstNudge.key, text:"解熱した", prompt:"p", skipped:false, date:"2026-07-25" }];
+  const secondNudge = L.pendingNudge(
+    L.normalizeCase(closedCase, "2026-07-25T11:00:00.000Z", "2026-07-25"), "2026-07-25", null);
+  assert.strictEqual(secondNudge.trigger, "waitClosed", "answering one question lets exactly one more through");
+
+  // Answered = gone for good. This is the nagging guard.
+  const answered = L.normalizeCase(Object.assign({}, closedCase, {
+    qLogs:[
+      { id:"q1", key:firstNudge.key, text:"解熱した", prompt:"p", skipped:false, date:"2026-07-25" },
+      { id:"q2", key:secondNudge.key, text:"変えない", prompt:"p", skipped:false, date:"2026-07-25" }
+    ]
+  }), "2026-07-25T11:00:00.000Z", "2026-07-25");
+  assert.strictEqual(L.pendingNudge(answered, "2026-07-25", null), null, "an answered question must never come back");
+
+  // Skipping parks it: silent for reaskDays, then back once.
+  const skipped = L.normalizeCase(Object.assign({}, closedCase, {
+    qLogs:[{ id:"q1", key:firstNudge.key, text:"", prompt:"p", skipped:true, date:"2026-07-25" }]
+  }), "2026-07-25T11:00:00.000Z", "2026-07-25");
+  assert.strictEqual(L.pendingNudge(skipped, "2026-07-26", null).trigger, "waitClosed",
+    "a skipped question stays quiet and does not block the queue");
+  assert.strictEqual(L.pendingNudge(skipped, "2026-07-28", null).key, firstNudge.key,
+    "a skipped question returns once after reaskDays");
+
+  // The phase not moving is the case the CEO described: 気づいたときだけ更新
+  // するので、忘れているだけ。5 days of silence must produce a prompt.
+  const stale = nudgeCase({ stageLog:[{ date:"2026-07-20", stageId:"s1" }] });
+  assert.strictEqual(L.pendingNudge(stale, "2026-07-25", null).trigger, "stageStale",
+    "a phase untouched for days is asked about — forgetting is the norm, not the exception");
+  // With only the admission stage entry there is no "changed" moment to ask about.
+  const bareStale = { id:"b", status:"active", admittedAt:"2026-07-20",
+    stageLog:[{ date:"2026-07-20", stageId:"s1" }], todos:[], pendings:[], qLogs:[] };
+  assert.strictEqual(L.pendingNudge(bareStale, "2026-07-22", null), null, "two quiet days is not yet worth asking");
+  assert.strictEqual(L.pendingNudge(bareStale, "2026-07-23", { staleDays:3 }).trigger, "stageStale",
+    "after staleDays the app asks whether the phase still holds");
+  // The interval is the user's dial, not a constant.
+  assert.strictEqual(L.pendingNudge(bareStale, "2026-07-23", { staleDays:10, taskStallDays:10 }), null,
+    "raising the intervals must actually quieten the app");
+  // Each interval governs its own prompt: relaxing one must not silence another.
+  assert.strictEqual(L.pendingNudge(bareStale, "2026-07-23", { staleDays:10 }).trigger, "taskStalled",
+    "a quiet phase and a stalled patient are separate questions with separate dials");
+  // A discharged case is finished; it must never be nagged.
+  assert.strictEqual(L.pendingNudge(Object.assign({}, bareStale, { status:"discharged" }), "2026-08-30", null), null,
+    "a discharged case is never nudged");
+  assert.strictEqual(L.normalizeNudgeCfg({ staleDays:0 }).staleDays, L.NUDGE_DEFAULTS.staleDays,
+    "0 would mean asking again the same day, so it falls back to the default");
+  assert.strictEqual(L.normalizeNudgeCfg({ staleDays:"7" }).staleDays, 7);
+
+  // An answer becomes a "why" row on the course; a skip leaves no trace.
+  const whyCase = L.normalizeCase(Object.assign({}, closedCase, {
+    qLogs:[
+      { id:"q1", key:"k1", text:"解熱し酸素も切れた", prompt:"p", skipped:false, date:"2026-07-25" },
+      { id:"q2", key:"k2", text:"", prompt:"p", skipped:true, date:"2026-07-25" }
+    ]
+  }), "2026-07-25T11:00:00.000Z", "2026-07-25");
+  const whyRows = L.courseRows(whyCase, (id) => id);
+  assert.strictEqual(whyRows.filter((r) => r.kind === "why").length, 1, "only answered questions reach the course");
+  assert.strictEqual(whyRows.find((r) => r.kind === "why").text, "解熱し酸素も切れた");
+  // "why" must sit directly under the phase change it explains.
+  const sameDay = whyRows.filter((r) => r.date === "2026-07-25").map((r) => r.kind);
+  assert.ok(sameDay.indexOf("stage") < sameDay.indexOf("why"), "the reason follows the change it explains");
+  assert.ok(L.TRASH_RESTORE_MIRRORS.q, "nudge answers must be restorable from the trash");
+  // Round trip: an answer that vanishes on sync is worse than never asking.
+  const qTwice = L.normalizeCase(JSON.parse(JSON.stringify(whyCase)), "2026-07-25T12:00:00.000Z", "2026-07-25");
+  assert.strictEqual(JSON.stringify(qTwice), JSON.stringify(whyCase), "nudge answers must round-trip byte-stable");
+
   // --- learning conquest maps (2026-07-27, 大陸+州) -------------------------
   // Tag parsing from the coach's 分野:/疾患群:/領域: lines (position-independent).
   assert.strictEqual(L.learnFieldFromText("良い点...\n分野: 循環器\n領域: なし"), "循環器");

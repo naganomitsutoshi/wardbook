@@ -941,6 +941,35 @@ if (vm.runInContext("typeof flushCalcAutoSave", sandbox) !== "function") fail("c
 
 // PoC instrument on screen (QA P0-1): the numbers 企画書 改善策② asked for must
 // be readable without the PC collector that was never set up.
+// ---- nudges (Phase 2, 2026-07-31) -----------------------------------------
+// The wait resolved above is an unanswered question, so the mark must be on the
+// card and the question at the top of the course panel.
+const nudgeDetail = vm.runInContext("renderDetail('c1')", sandbox);
+if (!nudgeDetail.includes("nudgeq")) fail("course panel is not showing the open question");
+const boardWithNudge = vm.runInContext("renderBoard()", sandbox);
+if (!boardWithNudge.includes("nudgedot")) fail("board card is missing the nudge mark");
+// Answering retires it: mark gone, and the reply lands on the course as "why".
+const openKey = vm.runInContext("JSON.stringify(caseNudge(DB.cases.find(c=>c.id==='c1')).key)", sandbox);
+vm.runInContext("recordNudge('c1'," + openKey + ",'p','解熱したため',false);", sandbox);
+const afterAnswer = vm.runInContext("JSON.stringify(DB.cases.find(c=>c.id==='c1').qLogs)", sandbox);
+if (!afterAnswer.includes("解熱したため")) fail("the answer was not stored");
+const answeredDetail = vm.runInContext("renderDetail('c1')", sandbox);
+if (!answeredDetail.includes("解熱したため")) fail("an answered nudge must appear on the course as why");
+if (!answeredDetail.includes(vm.runInContext("STR.courseWhy", sandbox))) fail("course missing the why label");
+// Skipping must not create a course row (the course records work, not refusals).
+const nextKey = vm.runInContext("caseNudge(DB.cases.find(c=>c.id==='c1')) ? JSON.stringify(caseNudge(DB.cases.find(c=>c.id==='c1')).key) : ''", sandbox);
+if (nextKey) {
+  vm.runInContext("recordNudge('c1'," + nextKey + ",'p','',true);", sandbox);
+  const skipHtml = vm.runInContext("renderDetail('c1')", sandbox);
+  const whyCount = (skipHtml.match(/cr-why/g) || []).length;
+  if (whyCount !== 1) fail("a skipped nudge must not add a course row (why rows: " + whyCount + ")");
+}
+// Nudge answers must not widen the AI boundary either.
+const aiAfterNudge = vm.runInContext("JSON.stringify(aiFeedbackPayload(DB.cases.find(c=>c.id==='c1')))", sandbox);
+["解熱したため", "qLogs", "skipped"].forEach((leak) => {
+  if (aiAfterNudge.includes(leak)) fail("nudge answer leaked into the AI payload: " + leak);
+});
+
 const statsHtml = vm.runInContext("renderStatsSection()", sandbox);
 [ "statsPanel", "statsOpenedDays", "statsFootprints" ].forEach((key) => {
   if (!statsHtml.includes(vm.runInContext("STR." + key, sandbox))) fail("stats section missing " + key);
