@@ -413,6 +413,25 @@
   }
   .jumprow{display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px}
   .anchor{scroll-margin-top:64px}
+  /* Course timeline: day headings carry the weight,每 row is one footprint.
+     The label column is fixed-width so the kinds line up down the page and the
+     eye can skim one column instead of reading every row. */
+  .courseday{
+    font-size:12px;font-weight:700;color:var(--muted);
+    border-top:1px solid var(--line);padding-top:8px;margin-top:6px;
+  }
+  .courseday:first-child{border-top:0;margin-top:0;padding-top:0}
+  .courserow{display:flex;gap:8px;align-items:baseline;padding:2px 0}
+  /* Wide enough for the longest label (返ってきた, 5 full-width chars) so every
+     row's text starts on the same x and the column can be skimmed. */
+  .courselabel{
+    font-size:11px;color:var(--muted);
+    flex:0 0 5.4em;text-align:right;white-space:nowrap;
+  }
+  .coursetext{flex:1;font-size:14px;word-break:break-word}
+  .courserow.cr-stage .coursetext{color:var(--accent);font-weight:700}
+  .courserow.cr-admit .coursetext,.courserow.cr-discharge .courselabel{font-weight:700}
+  .courserow.cr-waitClose .courselabel{color:var(--ok)}
   .weekgrid,.chartgrid{border-collapse:separate;border-spacing:0;min-width:max-content}
   .weekgrid th,.weekgrid td,.chartgrid th,.chartgrid td{
     border:1px solid var(--line);
@@ -741,12 +760,26 @@ function normalizeEntryContent(raw, ctx){
     if (!text) return null;
     var createdOn = safeDate(row.createdOn, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
     var time = typeof row.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(row.time) ? row.time : null;
-    return { kind:"todo", id:id, text:text, done:row.done === true, createdOn:createdOn, due:due, time:time };
+    // doneOn (2026-07-31): the day the Task was ticked, so the course panel can
+    // place it on a timeline. Never invented — rows finished before this field
+    // existed stay null and the panel shows them without a date. Un-ticking
+    // clears it, so done/doneOn can never disagree.
+    var doneFlag = row.done === true;
+    var doneOn = doneFlag && row.doneOn ? safeDate(row.doneOn, "") : "";
+    return { kind:"todo", id:id, text:text, done:doneFlag, createdOn:createdOn, due:due, time:time, doneOn:doneOn };
   }
   if (row.kind === "pending") {
     if (!text) return null;
     var backOn = row.backOn === null || row.backOn === undefined ? null : safeDate(row.backOn, null);
-    return { kind:"pending", id:id, text:text, backOn:backOn };
+    // openedOn/closedOn (2026-07-31): a wait used to vanish when it came back,
+    // so "what was I waiting for, and when did it land" left no trace. Resolving
+    // now sets closedOn instead of deleting. closedOn non-empty IS the resolved
+    // state (no second flag to disagree with). openedOn falls back to createdAt
+    // for legacy rows — deterministic, never today, so both devices rewrite to
+    // byte-identical content.
+    var openedOn = safeDate(row.openedOn, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
+    var closedOn = row.closedOn ? safeDate(row.closedOn, "") : "";
+    return { kind:"pending", id:id, text:text, backOn:backOn, openedOn:openedOn, closedOn:closedOn };
   }
   if (row.kind === "problem") {
     if (!text) return null;
@@ -786,6 +819,15 @@ function normalizeEntryContent(raw, ctx){
     // like AI logs (E2E-encrypted sync). Never enters aiFeedbackPayload.
     var calcDate = safeDate(row.date, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
     return { kind:"calc", id:id, text:text, date:calcDate };
+  }
+  if (row.kind === "ref") {
+    if (!text) return null;
+    // Reference opened from a case (2026-07-31): the title of a clover-pages
+    // sheet the user opened while this patient was in front of them. It is the
+    // footprint of a question — the thing that used to evaporate. Title only:
+    // no patient data, no URL, and never sent to the AI.
+    var refDate = safeDate(row.date, safeDate(String(row.createdAt || "").slice(0, 10), ctx.todayIso));
+    return { kind:"ref", id:id, text:text, date:refDate };
   }
   if (row.kind === "seed") {
     if (!text) return null;
@@ -877,13 +919,14 @@ function entriesFromMirrors(c, ctx){
   // Legacy absorption path: c.next rows (old trash restores / old backups)
   // ride the same "next"->"todo" conversion in normalizeEntryContent.
   cloneArr(c && c.next).forEach(function(x){ rows.push({ kind:"next", id:x.id, text:x.text, due:x.due, done:x.done, createdOn:x.createdOn, time:x.time }); });
-  cloneArr(c && c.todos).forEach(function(x){ rows.push({ kind:"todo", id:x.id, text:x.text, done:x.done, createdOn:x.createdOn, due:x.due, time:x.time }); });
-  cloneArr(c && c.pendings).forEach(function(x){ rows.push({ kind:"pending", id:x.id, text:x.text, backOn:x.backOn }); });
+  cloneArr(c && c.todos).forEach(function(x){ rows.push({ kind:"todo", id:x.id, text:x.text, done:x.done, createdOn:x.createdOn, due:x.due, time:x.time, doneOn:x.doneOn }); });
+  cloneArr(c && c.pendings).forEach(function(x){ rows.push({ kind:"pending", id:x.id, text:x.text, backOn:x.backOn, openedOn:x.openedOn, closedOn:x.closedOn }); });
   cloneArr(c && c.seeds).forEach(function(x){ rows.push({ kind:"seed", id:x.id, text:x.text, createdOn:x.createdOn, snapshot:x.snapshot, sentAt:x.sentAt }); });
   cloneArr(c && c.problems).forEach(function(x){ rows.push({ kind:"problem", id:x.id, text:x.text, status:x.status }); });
   cloneArr(c && c.notes).forEach(function(x){ rows.push({ kind:"note", id:x.id, text:x.text, date:x.date }); });
   cloneArr(c && c.aiLogs).forEach(function(x){ rows.push({ kind:"ai", id:x.id, text:x.text, date:x.date, field:x.field, province:x.province, domain:x.domain, mastered:x.mastered, reviewCount:x.reviewCount, lastReviewedOn:x.lastReviewedOn }); });
   cloneArr(c && c.calcLogs).forEach(function(x){ rows.push({ kind:"calc", id:x.id, text:x.text, date:x.date }); });
+  cloneArr(c && c.refLogs).forEach(function(x){ rows.push({ kind:"ref", id:x.id, text:x.text, date:x.date }); });
   cloneArr(c && c.chart && c.chart.items).forEach(function(x){
     var kind = x.kind === "band" ? "chartBand" : x.kind === "event" ? "chartEvent" : "chartValue";
     var row = { kind:kind, id:x.id, catId:x.catId, name:x.name };
@@ -902,8 +945,8 @@ function entryRebuildMirrors(c){
   // No live "next" entries can exist post-merge; keep the empty mirror so
   // stray legacy readers see [] instead of undefined.
   c.next = [];
-  c.todos = live.filter(function(e){ return e.kind === "todo"; }).map(function(e){ return { id:e.id, text:e.text, done:e.done, createdOn:e.createdOn, due:e.due, time:e.time }; });
-  c.pendings = live.filter(function(e){ return e.kind === "pending"; }).map(function(e){ return { id:e.id, text:e.text, backOn:e.backOn }; });
+  c.todos = live.filter(function(e){ return e.kind === "todo"; }).map(function(e){ return { id:e.id, text:e.text, done:e.done, createdOn:e.createdOn, due:e.due, time:e.time, doneOn:e.doneOn }; });
+  c.pendings = live.filter(function(e){ return e.kind === "pending"; }).map(function(e){ return { id:e.id, text:e.text, backOn:e.backOn, openedOn:e.openedOn, closedOn:e.closedOn }; });
   c.seeds = live.filter(function(e){ return e.kind === "seed"; }).map(function(e){
     return { id:e.id, text:e.text, createdOn:e.createdOn, snapshot:JSON.parse(JSON.stringify(e.snapshot)), sentAt:e.sentAt };
   });
@@ -911,6 +954,7 @@ function entryRebuildMirrors(c){
   c.notes = live.filter(function(e){ return e.kind === "note"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
   c.aiLogs = live.filter(function(e){ return e.kind === "ai"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date, field:e.field, province:e.province, domain:e.domain, mastered:e.mastered, reviewCount:e.reviewCount, lastReviewedOn:e.lastReviewedOn }; });
   c.calcLogs = live.filter(function(e){ return e.kind === "calc"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
+  c.refLogs = live.filter(function(e){ return e.kind === "ref"; }).map(function(e){ return { id:e.id, text:e.text, date:e.date }; });
   c.chart = { items: live.filter(function(e){ return e.kind === "chartValue" || e.kind === "chartBand" || e.kind === "chartEvent"; }).map(function(e){
     if (e.kind === "chartValue") return { id:e.id, catId:e.catId, kind:"value", name:e.name, values:JSON.parse(JSON.stringify(e.values)), planned:JSON.parse(JSON.stringify(e.planned)) };
     if (e.kind === "chartBand") return { id:e.id, catId:e.catId, kind:"band", name:e.name, startDate:e.startDate, endDate:e.endDate };
@@ -1056,6 +1100,7 @@ function normalizeCase(raw, nowIso, todayIso){
   out.notes = mirrorRows(src.notes, "note");
   out.aiLogs = mirrorRows(src.aiLogs, "ai");
   out.calcLogs = mirrorRows(src.calcLogs, "calc");
+  out.refLogs = mirrorRows(src.refLogs, "ref");
   out.discharge = {
     checklist:isObj(src.discharge && src.discharge.checklist) ? src.discharge.checklist : {},
     plannedOn:src.discharge && src.discharge.plannedOn ? safeDate(src.discharge.plannedOn, null) : null
@@ -1200,26 +1245,51 @@ function hasStageId(stages, stageId){
   return cloneArr(stages).some(function(s){ return s.id === stageId; });
 }
 
+// Shape normaliser for the todo mirror. Until 2026-07-31 this ALSO deleted
+// every task completed on an earlier day — tombstoned into the entries store,
+// so the row was destroyed on both devices. That is the literal mechanism
+// behind the CEO's "タスク完了後にそれを見直す方法がなく刹那的な情報となって
+// いる": the record was not merely undated, it was gone by morning.
+//
+// Completed tasks are now kept. Hiding them from the working list is a display
+// concern (visibleTodos), not a reason to destroy the history the course panel
+// is built from.
 function rolloverTodos(c, todayIso){
-  return cloneArr(c && c.todos).filter(function(item){
-    if (!item || item.done !== true) return true;
-    return !(item.createdOn && item.createdOn < todayIso);
-  }).map(function(item){
+  return cloneArr(c && c.todos).map(function(item){
     return {
       id:item.id,
       text:item.text,
       done:item.done === true,
       createdOn:item.createdOn,
       due:item.due === undefined ? null : item.due,
-      time:item.time === undefined ? null : item.time
+      time:item.time === undefined ? null : item.time,
+      doneOn:item.done === true && item.doneOn ? item.doneOn : ""
     };
+  });
+}
+
+// What the Task panel should still be showing: everything unfinished, plus
+// whatever was ticked today (so a tick does not make the row vanish under your
+// finger). Yesterday's completed tasks live on in the course panel.
+function visibleTodos(c, todayIso){
+  return cloneArr(c && c.todos).filter(function(item){
+    if (!item || item.done !== true) return true;
+    var when = item.doneOn || item.createdOn || "";
+    return !(when && when < todayIso);
   });
 }
 
 // A case with any open pending floats to the top for as long as the wait
 // lasts (backOn is optional: most waits have no known return date).
+// Waits still being waited on. A resolved wait keeps its row (that is the whole
+// point of closedOn, 2026-07-31) but must not keep floating the card to the top
+// of the board or counting as outstanding.
+function openPendings(c){
+  return cloneArr(c && c.pendings).filter(function(x){ return x && !x.closedOn; });
+}
+
 function hasPendingHold(c){
-  return cloneArr(c && c.pendings).length > 0;
+  return openPendings(c).length > 0;
 }
 
 function boardOrder(cases, todayIso){
@@ -1317,7 +1387,7 @@ function buildWeekGrid(cases, todayIso, pastDays, futureDays){
     var overdue = overdueEntries(c, todayIso);
     dates.forEach(function(date){
       var markers = [];
-      cloneArr(c.pendings).forEach(function(item){ if (item && item.backOn === date && date > todayIso) markers.push({ kind:"pending", text:"\u5f85 " + String(item.text || "") }); });
+      openPendings(c).forEach(function(item){ if (item && item.backOn === date && date > todayIso) markers.push({ kind:"pending", text:"\u5f85 " + String(item.text || "") }); });
       if (c.discharge && c.discharge.plannedOn === date && date > todayIso) markers.push({ kind:"planned", text:"\u2605" });
       cloneArr(c.todos).forEach(function(item){
         if (!item || item.done) return;
@@ -1374,7 +1444,7 @@ function buildDayPlan(cases, date, todayIso){
         : (date > todayIso && (item.due ? item.due === date : item.createdOn === date));
       if (visible) items.push({ type:"todo", id:String(item.id || ""), text:String(item.text || ""), time:item.time || null, due:item.due || null });
     });
-    cloneArr(c.pendings).forEach(function(item){
+    openPendings(c).forEach(function(item){
       if (item && item.backOn === date) items.push({ type:"pending", id:String(item.id || ""), text:String(item.text || "") });
     });
     cloneArr(c.chart && c.chart.items).forEach(function(item){
@@ -2852,6 +2922,73 @@ function normalizeViewTab(id){
   return viewTabById(String(id || "")) ? String(id) : VIEW_TABS[0].id;
 }
 
+// Trashed entry kind -> the case mirror it is restored into. Adding a new entry
+// kind means adding a row here as well, or restore silently does nothing (see
+// restoreTrash, and the test that walks every kind). "chartItem" is deliberately
+// absent: it lives under c.chart.items and is handled separately.
+var TRASH_RESTORE_MIRRORS = {
+  next:"next", todo:"todos", pending:"pendings", seed:"seeds",
+  problem:"problems", note:"notes", ai:"aiLogs", calc:"calcLogs", ref:"refLogs"
+};
+
+// ---- course timeline (2026-07-31) -----------------------------------------
+// The problem this solves, in the CEO's words: "退院した後にその患者のカードを
+// 見ても、入院中の経過がわからない。タスク欄がもっとも使用するのに、タスク完了
+// 後にそれを見直す方法がなく刹那的な情報となっている."
+//
+// So it invents nothing and asks for nothing. It is a projection of footprints
+// the ward round already leaves: ticking a Task, a wait coming back, changing
+// the phase, scoring the patient, opening a reference. stageLog in particular
+// has been stored since day one and had never been drawn anywhere.
+//
+// Items finished before doneOn/closedOn existed carry no date. They are dropped
+// rather than guessed onto a day — a made-up date in a clinical course is worse
+// than a gap — and courseHasUndated lets the UI say so.
+var COURSE_RANK = { admit:0, stage:1, taskDone:2, waitOpen:3, waitClose:4, calc:5, ref:6, note:7, discharge:8 };
+
+// stageName maps a stageId to its display name; the caller owns the stage
+// registry, so this stays free of UI state and is unit-testable.
+function courseRows(c, stageName){
+  var rows = [];
+  var nameOf = typeof stageName === "function" ? stageName : function(id){ return String(id || ""); };
+  function push(date, kind, text){
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) return;
+    rows.push({ date:date, kind:kind, text:String(text || "") });
+  }
+  push(c && c.admittedAt, "admit", (c && c.label) || "");
+  cloneArr(c && c.stageLog).forEach(function(item){
+    if (item) push(item.date, "stage", nameOf(item.stageId));
+  });
+  cloneArr(c && c.todos).forEach(function(item){
+    if (item && item.done && item.doneOn) push(item.doneOn, "taskDone", item.text);
+  });
+  cloneArr(c && c.pendings).forEach(function(item){
+    if (!item) return;
+    push(item.openedOn, "waitOpen", item.text);
+    if (item.closedOn) push(item.closedOn, "waitClose", item.text);
+  });
+  cloneArr(c && c.calcLogs).forEach(function(item){ if (item) push(item.date, "calc", item.text); });
+  cloneArr(c && c.refLogs).forEach(function(item){ if (item) push(item.date, "ref", item.text); });
+  cloneArr(c && c.notes).forEach(function(item){ if (item) push(item.date, "note", item.text); });
+  if (c && c.dischargedAt) push(c.dischargedAt, "discharge", "");
+  // Chronological: a course is read forwards. Ties break on a fixed kind order
+  // then on text, so identical data always draws in an identical order — no
+  // jitter between devices, and the ordering is assertable in a test.
+  rows.sort(function(a, b){
+    if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+    var ra = COURSE_RANK[a.kind] || 0, rb = COURSE_RANK[b.kind] || 0;
+    if (ra !== rb) return ra - rb;
+    return String(a.text).localeCompare(String(b.text));
+  });
+  return rows;
+}
+
+// True when the case holds items finished before this feature existed, so the
+// panel can explain the gap instead of looking lossy.
+function courseHasUndated(c){
+  return cloneArr(c && c.todos).some(function(x){ return x && x.done && !x.doneOn; });
+}
+
 function todayISOFallback(){
   return "2000-01-01";
 }
@@ -2930,7 +3067,12 @@ if (typeof module !== "undefined") {
     fmtMonthDay:fmtMonthDay,
     computeDay:computeDay,
     rolloverTodos:rolloverTodos,
+    visibleTodos:visibleTodos,
     hasPendingHold:hasPendingHold,
+    openPendings:openPendings,
+    TRASH_RESTORE_MIRRORS:TRASH_RESTORE_MIRRORS,
+    courseRows:courseRows,
+    courseHasUndated:courseHasUndated,
     boardOrder:boardOrder,
     stalenessLevel:stalenessLevel,
     unsentSeeds:unsentSeeds,
@@ -3175,9 +3317,37 @@ const STR = {
   calcPickTitle:"計算を選ぶ",
   calcNoCase:"患者に紐づけない計算です。入力は保存されません",
   calcBackToList:"一覧へ",
-  calcSaveBtn:"この計算を記録に残す",
-  calcSavedNote:"算出日つきで記録に残します（詳細画面の「計算の記録」で見返せます）",
+  calcAutoSavedNote:"症例を選んで算出した結果は、算出日つきで自動的に記録に残ります（下の「経過」で見返せます）",
   calcLogPanel:"計算の記録",
+  refLogPanel:"開いた資料",
+  refOpenBtn:"資料を開く",
+  refSheetNote:"ここから開いた資料は、この症例の経過に「開いた資料」として日付つきで残ります（ページ名のみ。患者情報は送りません）",
+  coursePanel:"経過",
+  courseEmpty:"まだ足あとがありません。Taskを完了する・待ちが返ってくる・局面を変える・計算する・資料を開く——このどれかをすると、ここに日付つきで積み上がります。",
+  courseLegacyNote:"※ この記録が始まる前に完了したTaskと、返ってきた待ちは日付を持っていないため、ここには出ません。",
+  courseDayLabel:"D",
+  courseStage:"局面",
+  courseTaskDone:"済",
+  courseWaitOpen:"待ち開始",
+  courseWaitClosed:"返ってきた",
+  courseCalc:"計算",
+  courseRef:"資料",
+  courseNote:"記録",
+  courseAdmit:"入院",
+  courseDischarge:"退院",
+  courseUndated:"日付なし",
+  pendingResolveBtn:"返ってきた",
+  pendingClosedGroup:"返ってきた待ち",
+  pendingClosedOn:"返り",
+  pendingReopenBtn:"戻す",
+  statsPanel:"使用の記録（計器）",
+  statsNote:"数値は判定材料であって合否基準ではありません（企画書 改善策②）。端末ごとの記録です。",
+  statsOpenedDays:"開いた日数",
+  statsExports:"書き出し回数",
+  statsCases:"登録した症例",
+  statsFootprints:"足あとの件数",
+  ageExactLabel:"年齢（任意・具体値）",
+  ageExactNote:"書類作成時に使います。空のままで構いません（腎機能の計算にも同じ値が使われます）",
   learnView:"input",
   learnEmpty:"まだ学びがありません。症例の「指導医AI」を実行すると、ここに自動で集まります",
   learnMasteredUnit:"身についた",
@@ -3507,6 +3677,7 @@ function trashTypeLabel(type){
   if (type === "note") return STR.notesLabel;
   if (type === "ai") return STR.aiPanel;
   if (type === "calc") return STR.calcLogPanel;
+  if (type === "ref") return STR.refLogPanel;
   if (type === "chartItem") return STR.chartPanel;
   return type;
 }
@@ -3546,17 +3717,19 @@ function restoreTrash(trashId){
   }
   var restoredSub = false;
   mutateCase(entry.caseId, function(c){
-    if (entry.type === "next") c.next.push(JSON.parse(JSON.stringify(entry.payload)));
-    else if (entry.type === "todo") c.todos.push(JSON.parse(JSON.stringify(entry.payload)));
-    else if (entry.type === "pending") c.pendings.push(JSON.parse(JSON.stringify(entry.payload)));
-    else if (entry.type === "seed") c.seeds.push(JSON.parse(JSON.stringify(entry.payload)));
-    else if (entry.type === "problem") c.problems.push(JSON.parse(JSON.stringify(entry.payload)));
-    else if (entry.type === "note") c.notes.push(JSON.parse(JSON.stringify(entry.payload)));
-    else if (entry.type === "ai") c.aiLogs.push(JSON.parse(JSON.stringify(entry.payload)));
-    else if (entry.type === "calc") c.calcLogs.push(JSON.parse(JSON.stringify(entry.payload)));
-    else if (entry.type === "chartItem") {
+    // One row per trashable kind. A kind missing from this table used to fall
+    // through the if/else chain silently: the item was dropped from the trash
+    // and never restored (QA P1-2, 2026-07-31). Now an unhandled kind leaves the
+    // trash untouched and says so, so the failure is loud and recoverable.
+    var mirror = TRASH_RESTORE_MIRRORS[entry.type] || "";
+    if (mirror) {
+      if (!Array.isArray(c[mirror])) c[mirror] = [];
+      c[mirror].push(JSON.parse(JSON.stringify(entry.payload)));
+    } else if (entry.type === "chartItem") {
       c.chart = normalizeChart(c.chart);
       c.chart.items.push(JSON.parse(JSON.stringify(entry.payload)));
+    } else {
+      return; // unknown kind: keep it in the trash rather than lose it
     }
     removeTrashEntry(entry.id);
     restoredSub = true;
@@ -4387,6 +4560,8 @@ function openAdmissionSheet(){
 }
 
 function closeSheet(){
+  // Leaving the calculator is what records the result (2026-07-31).
+  if (SHEET.name === "calc") flushCalcAutoSave();
   if (SHEET.name && NAV.stack.length && NAV.stack[NAV.stack.length - 1].kind === "sheet") {
     NAV.stack.pop();
     NAV.ignore += 1;
@@ -4437,11 +4612,13 @@ function calcRerender(){
 }
 
 function openCalcTool(id){
+  flushCalcAutoSave(); // record the tool being left before switching
   VIEW.calcTool = calcToolById(id) ? id : "";
   calcRerender();
 }
 
 function backToCalcList(){
+  flushCalcAutoSave();
   VIEW.calcTool = "";
   calcRerender();
 }
@@ -4695,26 +4872,47 @@ function updateCaseBio(caseId, key, value){
   });
 }
 
-// Save the calculator result on screen as a dated record (2026-07-26). Stored
-// as a kind:"calc" entry (E2E-encrypted sync, like AI logs). It carries the
-// day it was computed, so a saved score is a snapshot and not a stale-looking
-// live value. Never fed to aiFeedbackPayload — the AI boundary stays admission
-// text + notes (CEO 2026-07-21). Only reachable from a case sheet (the tab has
-// no case), so a result is always present; closing the sheet reveals the record
-// under the calc button and is the "it saved" signal.
-function saveCalcResult(caseId, toolId){
+// The calculator result on screen, as the one-line record text — or "" when
+// there is nothing to record (no case, no tool, no computable result).
+function calcResultText(caseId, toolId){
   var tool = calcToolById(toolId);
-  if (!tool || !caseId) return;
+  if (!tool || !caseId) return "";
   var values = calcValuesFor(caseId);
-  if (values === null) return;
+  if (values === null) return "";
   var parts = calcCollect(tool, values).filter(function(r){ return r.value !== null; }).map(function(r){
     var band = r.bandKey && STR[r.bandKey] ? " " + STR[r.bandKey] : "";
     return STR[r.labelKey] + " " + r.value + " " + STR[r.unitKey] + band;
   });
-  if (!parts.length) return;
-  var text = STR[tool.nameKey] + "：" + parts.join(" / ");
-  addListItem("calcLogs", caseId, text, null, function(t){ return { id:uid(), text:t, date:todayISO() }; });
-  if (SHEET.name === "calc") closeSheet();
+  if (!parts.length) return "";
+  return STR[tool.nameKey] + "：" + parts.join(" / ");
+}
+
+// Dated record of a calculation (kind:"calc", E2E-encrypted sync like AI logs).
+// It carries the day it was computed, so a saved score is a snapshot and not a
+// stale-looking live value. Never fed to aiFeedbackPayload — the AI boundary
+// stays admission text + notes (CEO 2026-07-21).
+//
+// 2026-07-31: the "この計算を記録に残す" button is gone. Scoring a patient is
+// itself the record, and a button you must remember to press is exactly the
+// kind of extra step that never survives a ward round. Saving now happens when
+// you leave the tool. Re-opening the same score on the same day with the same
+// numbers does NOT stack a duplicate; different numbers DO record separately,
+// because a score that moved during the day is the interesting part.
+function autoSaveCalcResult(caseId, toolId){
+  var text = calcResultText(caseId, toolId);
+  if (!text) return false;
+  var today = todayISO();
+  var c = DB.cases.find(function(x){ return x.id === caseId; });
+  if (!c) return false;
+  var dup = cloneArr(c.calcLogs).some(function(x){ return x && x.date === today && x.text === text; });
+  if (dup) return false;
+  return addListItem("calcLogs", caseId, text, null, function(t){ return { id:uid(), text:t, date:today }; });
+}
+
+// Called on every exit from an open tool (close, back to list, switch tool).
+function flushCalcAutoSave(){
+  if (!VIEW.calcFor || !VIEW.calcTool) return;
+  autoSaveCalcResult(VIEW.calcFor, VIEW.calcTool);
 }
 
 // Saved results are cheap to recompute, so clutter control wins over the
@@ -4796,8 +4994,17 @@ function removeDxTag(caseId, index){
   });
 }
 
+// One factory per kind. Rows used to be built inline at five call sites, which
+// is exactly how a new field (doneOn/openedOn) ends up missing from one of them.
+function makeTodo(text, due, time){
+  return { id:uid(), text:text, done:false, createdOn:todayISO(), due:due || null, time:time || null, doneOn:"" };
+}
+function makePending(text, backOn){
+  return { id:uid(), text:text, backOn:backOn || null, openedOn:todayISO(), closedOn:"" };
+}
+
 function addTask(caseId, value){
-  addListItem("todos", caseId, value, "taskInput", function(text){ return { id:uid(), text:text, done:false, createdOn:todayISO(), due:null, time:null }; });
+  addListItem("todos", caseId, value, "taskInput", function(text){ return makeTodo(text, null, null); });
 }
 
 // Daily notes: a projection of the entries store (kind:"note"). The date is
@@ -4817,7 +5024,12 @@ function deleteNote(caseId, itemId){
 }
 
 function toggleTodo(caseId, itemId){
-  patchListItem("todos", caseId, itemId, function(item){ item.done = !item.done; });
+  // Ticking stamps the day so the course panel can place it on the timeline;
+  // un-ticking clears it so done and doneOn can never disagree.
+  patchListItem("todos", caseId, itemId, function(item){
+    item.done = !item.done;
+    item.doneOn = item.done ? todayISO() : "";
+  });
 }
 
 function updateTodoText(caseId, itemId, value){
@@ -4839,7 +5051,8 @@ function taskToPending(caseId, itemId){
     var item = c.todos.find(function(x){ return x.id === itemId; });
     if (!item) return;
     item.done = true;
-    c.pendings.push({ id:uid(), text:item.text, backOn:null });
+    item.doneOn = todayISO();
+    c.pendings.push(makePending(item.text, null));
   });
 }
 
@@ -4849,7 +5062,18 @@ function deleteTodo(caseId, itemId){
 }
 
 function addPending(caseId, value){
-  addListItem("pendings", caseId, value, "pendingInput", function(text){ return { id:uid(), text:text, backOn:null }; });
+  addListItem("pendings", caseId, value, "pendingInput", function(text){ return makePending(text, null); });
+}
+
+// Resolving a wait is not deleting it (2026-07-31). The row stays with the day
+// it landed, so "what was I waiting for and when did it come back" survives to
+// the course panel. Deleting is still available for typos.
+function resolvePending(caseId, itemId){
+  patchListItem("pendings", caseId, itemId, function(item){ item.closedOn = todayISO(); });
+}
+
+function reopenPending(caseId, itemId){
+  patchListItem("pendings", caseId, itemId, function(item){ item.closedOn = ""; });
 }
 
 function updatePendingText(caseId, itemId, value){
@@ -4973,7 +5197,7 @@ function addPlanFromSheet(){
   if (!text) return;
   var time = /^\d{2}:\d{2}$/.test(String(d.time || "")) ? d.time : null;
   mutateCase(d.caseId, function(c){
-    c.todos.push({ id:uid(), text:text, done:false, createdOn:todayISO(), due:dateOk ? d.date : null, time:time });
+    c.todos.push(makeTodo(text, dateOk ? d.date : null, time));
   });
   closeSheet();
 }
@@ -4994,8 +5218,8 @@ function addCellItem(caseId, date){
   var text = String(SHEET.draft && SHEET.draft.text || "").trim();
   if (!text) return;
   mutateCase(caseId, function(c){
-    if (itemType === "pending") c.pendings.push({ id:uid(), text:text, backOn:date });
-    else if (itemType === "todo") c.todos.push({ id:uid(), text:text, done:false, createdOn:todayISO(), due:date, time:null });
+    if (itemType === "pending") c.pendings.push(makePending(text, date));
+    else if (itemType === "todo") c.todos.push(makeTodo(text, date, null));
     else if (itemType.indexOf("cat:") === 0) {
       var cat = chartCatById(itemType.slice(4));
       if (!cat) return;
@@ -5013,7 +5237,7 @@ function addCellItem(caseId, date){
         item.planned[date] = true;
       }
     }
-    else c.todos.push({ id:uid(), text:text, done:false, createdOn:todayISO(), due:date, time:null });
+    else c.todos.push(makeTodo(text, date, null));
   });
   SHEET.draft.text = "";
   renderSheet();
@@ -5450,7 +5674,11 @@ function fmtTaskLine(item){
   var when = [item.due, item.time].filter(Boolean).join(" ");
   return "- " + item.text + (when ? " (" + when + ")" : "") + (item.done ? " [done]" : "");
 }
-function fmtPendingLine(item){ return "- " + item.text + (item.backOn ? " (" + item.backOn + ")" : ""); }
+function fmtPendingLine(item){ return "- " + item.text + (item.backOn ? " (" + item.backOn + ")" : "") + (item.closedOn ? " [closed " + item.closedOn + "]" : ""); }
+// The course, flattened for the export: one line per footprint under its day.
+// This is the section that makes a discharged case readable months later, so it
+// carries the same rows the panel draws — no summarising, no interpretation.
+function fmtCourseLine(row){ return "- D" + row.day + " " + row.date + " [" + row.label + "] " + row.text; }
 function fmtNoteLine(item){ return "- " + item.date + " " + item.text; }
 function fmtCalcLine(item){ return "- " + item.date + " " + item.text; }
 
@@ -5498,6 +5726,9 @@ function dischargeExportText(caseId){
   });
   lines.push("", "## Phase", c.phaseNote || "-");
   lines.push("", "## Admission note", admOf(c).text || "-");
+  pushSection(lines, "Course", courseRows(c, stageNameFor).map(function(row){
+    return { day:computeDay(c.admittedAt, row.date), date:row.date, label:courseLabel(row.kind), text:row.text };
+  }), fmtCourseLine);
   pushSection(lines, "Daily notes", notesChrono(c), fmtNoteLine);
   pushSection(lines, "Calculations", calcLogsChrono(c), fmtCalcLine);
   pushSection(lines, "Remaining Task", cloneArr(c.todos).filter(function(item){ return item && !item.done; }), fmtTaskLine);
@@ -5669,7 +5900,7 @@ function renderBoardCard(c){
       var when = (item.due ? item.due.slice(5) : '') + (item.time ? ' ' + item.time : '');
       return (when ? esc(when) + '　' : '') + esc(item.text);
     })),
-    pending:quietRow(DB.config.labels.pending, c.pendings.map(function(item){
+    pending:quietRow(DB.config.labels.pending, openPendings(c).map(function(item){
       var urgent = item.backOn && item.backOn <= today;
       var tail = urgent ? '<span class="hot">' + esc(STR.backTodayBadge) + '</span>' : (item.backOn ? esc(item.backOn.slice(5)) : '');
       return esc(item.text) + (tail ? '　' + tail : '');
@@ -6018,6 +6249,31 @@ function renderChartEventCellSheet(){
     '<div class="plain">' + (rows.length ? rows.join('') : '<div class="faint">-</div>') + '</div><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
+// The PoC instrument, on screen (2026-07-31, QA P0-1). 企画書 §5 改善策② asked
+// for "KPIは置かないが計器は残す" and the numbers HAVE been counted here since
+// M3 — but the only way out of the device was the PC collector, which was never
+// set up, so 計器ログ stayed empty for three weeks. Reading them here needs no
+// pipeline at all, which is why the collector can now be retired without losing
+// the CEO's decision. Numbers are 判定材料であって合否基準ではない.
+function renderStatsSection(){
+  var s = STATS || loadStats();
+  var openedDays = isObj(s.openedDays) ? Object.keys(s.openedDays).length : 0;
+  var footprints = cloneArr(DB.cases).reduce(function(sum, c){
+    return sum + courseRows(c).length;
+  }, 0);
+  var rows = [
+    [STR.statsOpenedDays, openedDays],
+    [STR.statsCases, cloneArr(DB.cases).length],
+    [STR.statsFootprints, footprints],
+    [STR.statsExports, toNum(s.exportsDone, 0)]
+  ];
+  return '<section class="settingssec"><div class="one">' + esc(STR.statsPanel) + '</div><div class="stack">' +
+    rows.map(function(r){
+      return '<div class="lineitem"><div class="linegrow"><div class="text">' + esc(r[0]) + '</div></div><div class="one">' + esc(String(r[1])) + '</div></div>';
+    }).join('') +
+    '<div class="note">' + esc(STR.statsNote) + '</div></div></section>';
+}
+
 function renderSettingsSheet(){
   var stageColors = ["#8b5cf6", "#ef4444", "#f97316", "#eab308", "#3b82f6", "#16a34a", "#ec4899", "#64748b"];
   var cardSettings = SETTINGS || defaultSettings();
@@ -6025,6 +6281,7 @@ function renderSettingsSheet(){
     return String(b.deletedAt || "").localeCompare(String(a.deletedAt || ""));
   });
   return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.settingsRow) + '</div><div class="stack">' +
+    renderStatsSection() +
     '<section class="settingssec"><div class="one">' + esc(STR.stageEditor) + '</div><div class="stack">' + DB.config.stages.map(function(stage, index){
       var useCount = stageUseCount(stage.id);
       return '<div class="panelcard"><div class="row"><input class="input" value="' + esc(stage.name) + '" onchange="updateStageName(' + index + ',this.value)"></div><div class="chips">' + stageColors.map(function(color){
@@ -6076,7 +6333,14 @@ function renderMetaEditor(c){
       '<button class="chipbtn' + (!c.sex ? ' on' : '') + '" onclick="updateCaseSex(\'' + esc(c.id) + '\',\'\')">' + esc(STR.unset) + '</button>' +
       '<button class="chipbtn' + (c.sex === "M" ? ' on' : '') + '" onclick="updateCaseSex(\'' + esc(c.id) + '\',\'M\')">' + esc(STR.sexM) + '</button>' +
       '<button class="chipbtn' + (c.sex === "F" ? ' on' : '') + '" onclick="updateCaseSex(\'' + esc(c.id) + '\',\'F\')">' + esc(STR.sexF) + '</button>' +
-    '</div></div>';
+    '</div></div>' +
+    // Exact age, optional (CEO 2026-07-31). Deliberately NOT a new field: the
+    // renal calculators have stored bio.age since the PII boundary moved on
+    // 2026-07-21, so this only surfaces the value that already exists. A second
+    // age field would be two truths for one fact.
+    '<div class="field" style="margin-top:8px"><div class="fieldlabel">' + esc(STR.ageExactLabel) + '</div>' +
+    '<input class="input" type="number" inputmode="numeric" step="1" min="0" value="' + esc(c.bio && c.bio.age !== null && c.bio.age !== undefined ? String(c.bio.age) : "") + '" onchange="updateCaseBio(\'' + esc(c.id) + '\',\'age\',this.value)">' +
+    '<div class="faint">' + esc(STR.ageExactNote) + '</div></div>';
 }
 
 // Unified Task rows (Next+Today merged): checkbox / text / scheduled date
@@ -6086,7 +6350,9 @@ function renderMetaEditor(c){
 // heavy. Tapping the text (or 編集) opens the full editor for that row only;
 // VIEW.taskOpen is screen-local state — never stored, never synced.
 function renderTaskList(c){
-  return c.todos.map(function(item){
+  // Unfinished work plus today's ticks. Everything completed earlier is still
+  // stored — it is read in the course panel, not here.
+  return visibleTodos(c, todayISO()).map(function(item){
     var open = VIEW.taskOpen === item.id;
     var check = '<input class="check" type="checkbox" ' + (item.done ? 'checked ' : '') + 'onclick="toggleTodo(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">';
     if (!open) {
@@ -6105,14 +6371,28 @@ function renderTaskList(c){
   }).join('');
 }
 
+// Open waits stay editable at the top; resolved ones drop to a quiet list
+// underneath instead of disappearing (2026-07-31). "返ってきた" is the normal
+// end of a wait — × remains for typos, and 戻す undoes a mis-tap.
 function renderPendingList(c){
-  return c.pendings.map(function(item){
+  var open = openPendings(c);
+  var closed = cloneArr(c.pendings).filter(function(x){ return x && x.closedOn; })
+    .sort(function(a, b){ return String(b.closedOn).localeCompare(String(a.closedOn)); });
+  var openHtml = open.map(function(item){
     var urgent = item.backOn && item.backOn <= todayISO();
     return '<div class="lineitem"><div class="linegrow"><input class="input subedit" value="' + esc(item.text) + '" onchange="updatePendingText(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
       '<div class="row wrap" style="margin-top:6px"><span class="fieldlabel">' + esc(STR.backOnLabel) + '</span><input class="date" type="date" value="' + esc(item.backOn || '') + '" onchange="updatePendingBackOn(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\',this.value)">' +
-      (urgent ? '<span class="badge">' + esc(STR.backTodayBadge) + '</span>' : '') + '</div></div>' +
+      (urgent ? '<span class="badge">' + esc(STR.backTodayBadge) + '</span>' : '') +
+      '<button class="smallbtn" onclick="resolvePending(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' + esc(STR.pendingResolveBtn) + '</button></div></div>' +
       '<button class="iconbtn" onclick="deletePending(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">×</button></div>';
   }).join('');
+  if (!closed.length) return openHtml;
+  return openHtml + '<div class="fieldlabel" style="margin-top:8px">' + esc(STR.pendingClosedGroup) + '</div>' +
+    closed.map(function(item){
+      return '<div class="lineitem"><div class="linegrow"><div class="text faint">' + esc(item.text) + '</div>' +
+        '<div class="faint">' + esc(STR.pendingClosedOn + " " + (item.closedOn || "")) + '</div></div>' +
+        '<button class="smallbtn" onclick="reopenPending(\'' + esc(c.id) + '\',\'' + esc(item.id) + '\')">' + esc(STR.pendingReopenBtn) + '</button></div>';
+    }).join('');
 }
 
 // Admission record: collapsible panel at the top of the detail (day-0 context).
@@ -6234,6 +6514,50 @@ function openCloverPage(path){
   var url = cloverUrl(path);
   if (url) window.open(url, "_blank", "noopener");
 }
+
+// Same pages, opened from a patient (2026-07-31). Opening a reference is the
+// visible end of a clinical question, and that question is the thing that used
+// to evaporate — so the title (never the URL, never patient data) is recorded
+// as a kind:"ref" entry on the case. Opened from the tab instead? Then no case
+// is involved and nothing is recorded: the link is NOT guessed onto whichever
+// patient was last on screen.
+function openCloverPageForCase(caseId, linkId){
+  var link = CLOVER_LINKS.find(function(x){ return x.id === linkId; });
+  if (!link) return;
+  openCloverPage(link.path);
+  var c = DB.cases.find(function(x){ return x.id === caseId; });
+  if (!c) return;
+  var today = todayISO();
+  var name = STR[link.nameKey] || link.id;
+  // Re-opening the same sheet for the same patient on the same day is one
+  // question, not two.
+  if (cloneArr(c.refLogs).some(function(x){ return x && x.date === today && x.text === name; })) return;
+  addListItem("refLogs", caseId, name, null, function(t){ return { id:uid(), text:t, date:today }; });
+}
+
+function openCaseRefSheet(caseId){
+  navNoteSheetOpen();
+  SHEET.name = "caseRef";
+  SHEET.draft = { caseId:caseId };
+  renderSheet();
+}
+
+function renderCaseRefSheet(){
+  var caseId = (SHEET.draft && SHEET.draft.caseId) || "";
+  var rows = '', group = '';
+  CLOVER_LINKS.forEach(function(link){
+    if (link.groupKey !== group) {
+      group = link.groupKey;
+      rows += '<div class="fieldlabel">' + esc(STR[group] || group) + '</div>';
+    }
+    rows += cloverRow(link.nameKey, "openCloverPageForCase('" + esc(caseId) + "','" + esc(link.id) + "')");
+  });
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.refLogPanel) + '</div><div class="stack">' + rows +
+    cloverRow("cloverIndexRow", "openVaultHtml()") +
+    '<div class="note">' + esc(STR.refSheetNote) + '</div>' +
+    '<div class="row wrap"><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div>' +
+  '</div></div>';
+}
 var AI = { caseId:"", status:"", text:"" };
 
 function aiToken(){
@@ -6267,6 +6591,37 @@ function saveAiPrompt(value){
 
 function resetAiPrompt(){
   saveAiPrompt("");
+}
+
+// Kind -> the short label drawn in the left column of the course panel.
+var COURSE_LABEL_KEYS = {
+  admit:"courseAdmit", stage:"courseStage", taskDone:"courseTaskDone",
+  waitOpen:"courseWaitOpen", waitClose:"courseWaitClosed", calc:"courseCalc",
+  ref:"courseRef", note:"courseNote", discharge:"courseDischarge"
+};
+function courseLabel(kind){ return STR[COURSE_LABEL_KEYS[kind]] || ""; }
+
+function renderCoursePanel(c){
+  var rows = courseRows(c, stageNameFor);
+  var head = '<div class="one">' + esc(STR.coursePanel) + '</div>';
+  if (!rows.length) {
+    return '<section class="panelcard anchor" id="anc-course">' + head +
+      '<div class="faint" style="margin-top:10px">' + esc(STR.courseEmpty) + '</div></section>';
+  }
+  var body = '', day = '';
+  rows.forEach(function(row){
+    if (row.date !== day) {
+      day = row.date;
+      body += '<div class="courseday">' + esc(STR.courseDayLabel + computeDay(c.admittedAt, row.date)) +
+        '<span class="faint"> ' + esc(row.date.slice(5)) + '</span></div>';
+    }
+    body += '<div class="courserow cr-' + esc(row.kind) + '"><span class="courselabel">' + esc(courseLabel(row.kind)) + '</span>' +
+      '<span class="coursetext">' + esc(row.text) + '</span></div>';
+  });
+  return '<section class="panelcard anchor" id="anc-course">' + head +
+    '<div class="stack" style="margin-top:10px">' + body + '</div>' +
+    (courseHasUndated(c) ? '<div class="faint" style="margin-top:8px">' + esc(STR.courseLegacyNote) + '</div>' : '') +
+    '</section>';
 }
 
 function runAiFeedback(caseId){
@@ -6509,7 +6864,7 @@ function calcToolBody(tool){
     calcWarnKeys(tool, values).map(function(msgKey){ return '<div class="note warn">' + esc(STR[msgKey]) + '</div>'; }).join('') +
     results.map(resultBlock).join('') +
     tool.fields.map(field).join('') +
-    ((caseId && anyResult) ? '<button class="ghostbtn" onclick="saveCalcResult(\'' + esc(caseId) + '\',\'' + esc(tool.id) + '\')">' + esc(STR.calcSaveBtn) + '</button><div class="faint">' + esc(STR.calcSavedNote) + '</div>' : '') +
+    ((caseId && anyResult) ? '<div class="faint">' + esc(STR.calcAutoSavedNote) + '</div>' : '') +
     (tool.rangeKey ? '<div class="note">' + esc(STR[tool.rangeKey]) + '</div>' : '') +
     '<div class="note warn">' + esc(STR[tool.disclaimerKey]) + '</div>' +
     '<div class="faint">' + esc(STR[tool.sourceKey]) + '</div>';
@@ -6803,6 +7158,7 @@ renderDetail = function(caseId){
       { id:"anc-adm", label:STR.admPanel },
       { id:"anc-task", label:DB.config.labels.task },
       { id:"anc-pending", label:DB.config.labels.pending },
+      { id:"anc-course", label:STR.coursePanel },
       { id:"anc-notes", label:STR.notesLabel },
       { id:"anc-ai", label:STR.aiPanel },
       { id:"anc-chart", label:STR.chartPanel },
@@ -6812,11 +7168,14 @@ renderDetail = function(caseId){
     }).join('') + '</nav>' +
     renderAdmissionPanel(c) +
     '<section class="panelcard sec-phase"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
-    '<section class="panelcard"><div class="row"><button class="ghostbtn" style="flex:1" onclick="openPlanSheet(\'' + esc(c.id) + '\')">' + esc(STR.addPlanBtn) + '</button><button class="ghostbtn" style="flex:1" onclick="openCalcSheet(\'' + esc(c.id) + '\')">' + esc(STR.calcBtn) + '</button></div></section>' +
+    '<section class="panelcard"><div class="row"><button class="ghostbtn" style="flex:1" onclick="openPlanSheet(\'' + esc(c.id) + '\')">' + esc(STR.addPlanBtn) + '</button><button class="ghostbtn" style="flex:1" onclick="openCalcSheet(\'' + esc(c.id) + '\')">' + esc(STR.calcBtn) + '</button><button class="ghostbtn" style="flex:1" onclick="openCaseRefSheet(\'' + esc(c.id) + '\')">' + esc(STR.refOpenBtn) + '</button></div></section>' +
     renderCalcPanel(c) +
     (dischargeInline ? dischargePanel : '') +
     renderSectionCard(DB.config.labels.task, renderTaskList(c), "taskInput", STR.taskPh, "addTask", c.id, "sec-task", "anc-task") +
     renderSectionCard(DB.config.labels.pending, renderPendingList(c), "pendingInput", STR.pendingPh, "addPending", c.id, "sec-pending", "anc-pending") +
+    // The course sits directly under Task/Pending — the two panels whose
+    // footprints it is made of — and above 日々の記録, which is barely used.
+    renderCoursePanel(c) +
     renderSectionCard(STR.notesLabel, renderNoteList(c) + '<button class="ghostbtn" onclick="openNoteEditSheet(\'' + esc(c.id) + '\',\'\')">' + esc(STR.noteAddBtn) + '</button>', "", "", "", c.id, "sec-note", "anc-notes") +
     renderAiPanel(c) +
     '<section class="panelcard"><button class="ghostbtn" style="width:100%" onclick="openChartDaySheet(\'' + esc(c.id) + '\')">' + esc(STR.chartDayBtn) + '</button></section>' +
@@ -6837,7 +7196,8 @@ renderSheet = function(){
     chartItem:renderChartItemSheet, chartValue:renderChartValueSheet, chartEventCell:renderChartEventCellSheet,
     chartDay:renderChartDaySheet,
     plan:renderPlanSheet,
-    calc:renderCalcSheet
+    calc:renderCalcSheet,
+    caseRef:renderCaseRefSheet
   };
   var html = renderers[SHEET.name] ? renderers[SHEET.name]() : "";
   el.className = "sheet" + (html ? " open" : "");

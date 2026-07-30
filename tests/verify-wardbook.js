@@ -66,12 +66,19 @@ assert.strictEqual(L.computeDay("2026-07-07", "2026-07-07"), 1);
 assert.strictEqual(L.computeDay("2026-07-05", "2026-07-07"), 3);
 assert.strictEqual(L.computeDay("2026-07-09", "2026-07-07"), 1);
 
-const rolled = L.rolloverTodos({ todos:[
-  { id:"a", text:"done-yesterday", done:true, createdOn:"2026-07-06" },
+// 2026-07-31: completing a task no longer destroys it overnight. rolloverTodos
+// keeps every row (the course panel is built from them); hiding yesterday's
+// finished work is now a display decision made by visibleTodos.
+const rolloverSample = { todos:[
+  { id:"a", text:"done-yesterday", done:true, createdOn:"2026-07-06", doneOn:"2026-07-06" },
   { id:"b", text:"undone-yesterday", done:false, createdOn:"2026-07-06" },
-  { id:"c", text:"done-today", done:true, createdOn:"2026-07-07" }
-] }, "2026-07-07");
-assert.deepStrictEqual(rolled.map((x) => x.id), ["b", "c"]);
+  { id:"c", text:"done-today", done:true, createdOn:"2026-07-07", doneOn:"2026-07-07" }
+] };
+const rolled = L.rolloverTodos(rolloverSample, "2026-07-07");
+assert.strictEqual(rolled.map((x) => x.id).join(","), "a,b,c", "a completed task must survive the day it was finished");
+assert.strictEqual(rolled.find((x) => x.id === "a").doneOn, "2026-07-06", "rollover must not strip the completion date");
+assert.strictEqual(L.visibleTodos(rolloverSample, "2026-07-07").map((x) => x.id).join(","), "b,c",
+  "the Task panel shows unfinished work plus today's ticks");
 
 // Any open pending floats the case - even with no backOn date (most waits
 // have no known return date, 2026-07-15 redesign).
@@ -671,6 +678,92 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
   assert.strictEqual(calcCase.calcLogs.find((x) => x.id === "cl3").date, "2026-07-08");
   const calcTwice = L.normalizeCase(JSON.parse(JSON.stringify(calcCase)), "2026-07-08T11:00:00.000Z", "2026-07-08");
   assert.strictEqual(JSON.stringify(calcTwice), JSON.stringify(calcCase));
+
+  // --- footprints: doneOn / openedOn / closedOn / kind:"ref" (2026-07-31) ---
+  // The failure this guards against is silent: a field that survives the UI but
+  // is dropped by one of the four places an entry kind has to be declared, so
+  // the value vanishes on the next sync round trip.
+  const fpCase = L.normalizeCase({
+    id:"fp", label:"cap", admittedAt:"2026-07-01", lastTouchedAt:"2026-07-09T10:00:00.000Z",
+    todos:[
+      { id:"t1", text:"血培2セット提出", done:true, createdOn:"2026-07-01", doneOn:"2026-07-02" },
+      { id:"t2", text:"酸素を1Lに", done:false, createdOn:"2026-07-03" },
+      { id:"t3", text:"旧データ（完了日なし）", done:true, createdOn:"2026-07-01" }
+    ],
+    pendings:[
+      { id:"p1", text:"喀痰培養", openedOn:"2026-07-01", closedOn:"2026-07-03" },
+      { id:"p2", text:"循環器コンサル返事", openedOn:"2026-07-04" }
+    ],
+    refLogs:[
+      { id:"r1", text:"市中肺炎", date:"2026-07-02" },
+      { id:"r2", text:"" }
+    ]
+  }, "2026-07-09T10:00:00.000Z", "2026-07-09");
+  const fpTodo = (id) => fpCase.todos.find((x) => x.id === id);
+  assert.strictEqual(fpTodo("t1").doneOn, "2026-07-02", "doneOn must survive normalize");
+  assert.strictEqual(fpTodo("t2").doneOn, "", "an unfinished task carries no completion date");
+  // done without doneOn is legacy data. Inventing today's date here would put a
+  // fabricated day into a clinical course, so it stays empty.
+  assert.strictEqual(fpTodo("t3").doneOn, "", "a pre-existing done task must not gain an invented date");
+  assert.strictEqual(fpCase.pendings.find((x) => x.id === "p1").closedOn, "2026-07-03");
+  assert.strictEqual(fpCase.pendings.find((x) => x.id === "p2").closedOn, "");
+  assert.strictEqual(fpCase.pendings.find((x) => x.id === "p2").openedOn, "2026-07-04");
+  assert.strictEqual(fpCase.refLogs.length, 1, "an empty reference title drops");
+  assert.strictEqual(fpCase.entries.filter((e) => e.kind === "ref").length, 1);
+  // Round trip + idempotence: normalize twice must be byte-identical, or the
+  // two devices keep rewriting each other (dirty ping-pong).
+  const fpTwice = L.normalizeCase(JSON.parse(JSON.stringify(fpCase)), "2026-07-09T11:00:00.000Z", "2026-07-09");
+  assert.strictEqual(JSON.stringify(fpTwice), JSON.stringify(fpCase), "footprint fields must round-trip byte-stable");
+
+  // A resolved wait keeps its row but stops counting as outstanding — otherwise
+  // the card floats at the top of the board forever.
+  assert.strictEqual(fpCase.pendings.length, 2, "a resolved wait is kept, not deleted");
+  assert.strictEqual(L.openPendings(fpCase).length, 1, "only unresolved waits are outstanding");
+  assert.strictEqual(L.hasPendingHold(fpCase), true);
+  assert.strictEqual(L.hasPendingHold({ pendings:[{ id:"x", text:"done", openedOn:"2026-07-01", closedOn:"2026-07-02" }] }), false,
+    "a case whose only wait came back must not keep floating");
+
+  // Every entry kind must have a restore target, or the trash drops the item
+  // and restores nothing (QA P1-2, 2026-07-31).
+  const restorable = ["next", "todo", "pending", "seed", "problem", "note", "ai", "calc", "ref"];
+  for (const kind of restorable) {
+    assert.ok(L.TRASH_RESTORE_MIRRORS[kind], "trash restore has no target for kind " + kind);
+  }
+  assert.ok(!L.TRASH_RESTORE_MIRRORS.chartItem, "chart items restore into c.chart.items, not a mirror list");
+
+  // --- course timeline ordering --------------------------------------------
+  const courseCase = L.normalizeCase({
+    id:"cr", label:"肺炎", admittedAt:"2026-07-01", dischargedAt:"2026-07-05",
+    status:"discharged", lastTouchedAt:"2026-07-05T10:00:00.000Z",
+    stageLog:[{ date:"2026-07-01", stageId:"s-acute" }, { date:"2026-07-03", stageId:"s-better" }],
+    todos:[{ id:"t1", text:"血培提出", done:true, createdOn:"2026-07-01", doneOn:"2026-07-03" }],
+    pendings:[{ id:"p1", text:"喀痰培養", openedOn:"2026-07-01", closedOn:"2026-07-03" }],
+    calcLogs:[{ id:"c1", text:"CURB-65：2点", date:"2026-07-03" }],
+    refLogs:[{ id:"r1", text:"市中肺炎", date:"2026-07-03" }],
+    notes:[{ id:"n1", text:"解熱", date:"2026-07-03" }]
+  }, "2026-07-05T10:00:00.000Z", "2026-07-05");
+  const rows = L.courseRows(courseCase, (id) => (id === "s-acute" ? "急性期" : "改善傾向"));
+  // Compared as a joined string, not deepStrictEqual: rows come out of the vm
+  // sandbox, so their Array.prototype is a different realm's and a deep compare
+  // fails on the prototype rather than the contents.
+  assert.strictEqual(rows.map((r) => r.date + ":" + r.kind).join(" | "), [
+    "2026-07-01:admit", "2026-07-01:stage", "2026-07-01:waitOpen",
+    "2026-07-03:stage", "2026-07-03:taskDone", "2026-07-03:waitClose",
+    "2026-07-03:calc", "2026-07-03:ref", "2026-07-03:note",
+    "2026-07-05:discharge"
+  ].join(" | "), "course rows read forwards, with a fixed order inside a day");
+  assert.strictEqual(rows[1].text, "急性期", "stage rows show the stage name, not its id");
+  // Same input, same output — two devices must not draw the course differently.
+  assert.strictEqual(
+    JSON.stringify(L.courseRows(courseCase, () => "x")),
+    JSON.stringify(L.courseRows(courseCase, () => "x")),
+    "course ordering is deterministic"
+  );
+  // An unfinished task has no place on a timeline of what happened.
+  assert.ok(!rows.some((r) => r.kind === "taskDone" && r.text === "酸素を1Lに"));
+  assert.strictEqual(L.courseHasUndated(fpCase), true, "legacy done-without-date must be reported, not hidden");
+  assert.strictEqual(L.courseHasUndated(courseCase), false);
+  assert.strictEqual(L.courseRows({ admittedAt:"" }, null).length, 0, "a case with no dates yields no rows");
 
   // --- learning conquest maps (2026-07-27, 大陸+州) -------------------------
   // Tag parsing from the coach's 分野:/疾患群:/領域: lines (position-independent).

@@ -53,7 +53,9 @@ const documentStub = {
 const sandbox = {
   console,
   document:documentStub,
-  window:{ innerWidth:1000 },
+  // open() is stubbed rather than omitted so the reference-footprint path can
+  // run headlessly; the URL it was handed is checked below.
+  window:{ innerWidth:1000, opened:[], open:function(url){ this.opened.push(url); } },
   navigator:{
     clipboard:{ writeText(){ return Promise.resolve(); } },
     share(){ return Promise.resolve(); }
@@ -882,6 +884,67 @@ vm.runInContext("setThemeMode('light')", sandbox);
 if (themeMeta.content !== "#0e3252") fail("light status bar must be Mitsuba navy");
 vm.runInContext("setThemeMode('os')", sandbox);
 if (vm.runInContext("SYNC_RT.fb", sandbox) !== null) fail("sync import happened without config");
+
+// ---- course panel (2026-07-31) --------------------------------------------
+// The whole point of the feature: a discharged case must still read as a course
+// months later, built only from footprints the ward round already leaves.
+vm.runInContext("openDetail('c1'); addTask('c1','血培2セット提出');", sandbox);
+const doneTaskId = vm.runInContext("DB.cases.find(c=>c.id==='c1').todos.slice(-1)[0].id", sandbox);
+const readTask = () => vm.runInContext("JSON.stringify(DB.cases.find(c=>c.id==='c1').todos.find(t=>t.id==='" + doneTaskId + "'))", sandbox);
+vm.runInContext("toggleTodo('c1','" + doneTaskId + "');", sandbox);
+if (!/"doneOn":"\d{4}-\d{2}-\d{2}"/.test(readTask())) fail("ticking a Task must stamp the day it was done");
+// Un-ticking clears it: done and doneOn can never disagree.
+vm.runInContext("toggleTodo('c1','" + doneTaskId + "');", sandbox);
+if (!/"doneOn":""/.test(readTask())) fail("un-ticking a Task must clear its completion date");
+vm.runInContext("toggleTodo('c1','" + doneTaskId + "');", sandbox); // leave it done for the course below
+// Resolving a wait keeps the row (that is what makes the course readable) and
+// stops it counting as outstanding.
+vm.runInContext("addPending('c1','喀痰培養');", sandbox);
+const pendId = vm.runInContext("DB.cases.find(c=>c.id==='c1').pendings.slice(-1)[0].id", sandbox);
+vm.runInContext("resolvePending('c1','" + pendId + "');", sandbox);
+const pendRow = vm.runInContext("JSON.stringify(DB.cases.find(c=>c.id==='c1').pendings.find(p=>p.id==='" + pendId + "'))", sandbox);
+if (!/"closedOn":"\d{4}-\d{2}-\d{2}"/.test(pendRow)) fail("resolving a wait must stamp the day it came back");
+if (vm.runInContext("openPendings(DB.cases.find(c=>c.id==='c1')).some(p=>p.id==='" + pendId + "')", sandbox)) {
+  fail("a resolved wait must not stay outstanding");
+}
+const courseHtml = vm.runInContext("renderDetail('c1')", sandbox);
+if (!courseHtml.includes(vm.runInContext("STR.coursePanel", sandbox))) fail("detail missing the course panel");
+if (!courseHtml.includes("anc-course")) fail("course panel missing its jump anchor");
+if (!courseHtml.includes("courseday")) fail("course panel drew no day headings");
+if (!courseHtml.includes(vm.runInContext("STR.courseWaitClosed", sandbox))) fail("course panel missing the resolved wait");
+// The stage history has been stored since day one and was never drawn anywhere.
+if (!courseHtml.includes(vm.runInContext("STR.courseStage", sandbox))) fail("course panel missing the phase history");
+// Opening a reference from a case records its title only — never the URL, and
+// never anything about the patient.
+vm.runInContext("openCloverPageForCase('c1','cap');", sandbox);
+const refRow = vm.runInContext("JSON.stringify(DB.cases.find(c=>c.id==='c1').refLogs)", sandbox);
+if (!refRow.includes(vm.runInContext("STR.cloverCap", sandbox))) fail("opening a reference from a case must record it");
+if (refRow.includes("http") || refRow.includes(".html")) fail("reference log must not store URLs");
+// The page still has to open, and only through the registry-path guard.
+const openedUrl = vm.runInContext("window.opened.slice(-1)[0]", sandbox);
+if (!openedUrl || openedUrl.indexOf("https://clover-pages.") !== 0) fail("reference did not open a clover-pages URL: " + openedUrl);
+// Re-opening the same sheet the same day is one question, not two.
+vm.runInContext("openCloverPageForCase('c1','cap');", sandbox);
+if (vm.runInContext("DB.cases.find(c=>c.id==='c1').refLogs.length", sandbox) !== 1) fail("same reference, same day must not stack duplicates");
+// Footprints must not widen the AI boundary.
+const aiPayloadAfter = JSON.stringify(JSON.parse(vm.runInContext("JSON.stringify(aiFeedbackPayload(DB.cases.find(c=>c.id==='c1')))", sandbox)));
+["doneOn", "closedOn", "openedOn", "refLogs", vm.runInContext("STR.cloverCap", sandbox)].forEach((leak) => {
+  if (aiPayloadAfter.includes(leak)) fail("footprint leaked into the AI payload: " + leak);
+});
+// The export must carry the course, or a discharged case is unreadable outside.
+const dcWithCourse = vm.runInContext("dischargeExportText('c1')", sandbox);
+if (!dcWithCourse.includes("## Course")) fail("discharge export missing the course section");
+
+// The calculator records by being used, not by remembering to press a button.
+if (vm.runInContext("typeof saveCalcResult", sandbox) !== "undefined") fail("the manual save button handler should be gone");
+if (vm.runInContext("typeof flushCalcAutoSave", sandbox) !== "function") fail("calculator auto-save is missing");
+
+// PoC instrument on screen (QA P0-1): the numbers 企画書 改善策② asked for must
+// be readable without the PC collector that was never set up.
+const statsHtml = vm.runInContext("renderStatsSection()", sandbox);
+[ "statsPanel", "statsOpenedDays", "statsFootprints" ].forEach((key) => {
+  if (!statsHtml.includes(vm.runInContext("STR." + key, sandbox))) fail("stats section missing " + key);
+});
 
 const appHtml = vm.runInContext("render()", sandbox);
 if (!appHtml || !els.app.innerHTML) fail("render failed");

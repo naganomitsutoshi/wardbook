@@ -4,6 +4,22 @@
 > MIRRORS of the unified `c.entries` store (see SPEC-F). Board cards show ALL next/today
 > items (the 2-item cap in section 2.1 was removed in `fc1f8a9`), and todos may carry a
 > future `createdOn` (scheduled todos, hidden from the board card until their day).
+>
+> **SUPERSEDED IN PART (2026-07-31), footprints:** three fields were added so a finished case
+> still reads as a course — `todos[].doneOn`, `pendings[].openedOn` / `pendings[].closedOn` —
+> plus a new entry kind `ref` (`c.refLogs`: the title of a clover-pages sheet opened from the
+> case). Two behaviours changed with them: a **completed Task is no longer deleted the next
+> day** (`rolloverTodos` used to drop it and tombstone it on both devices), and **resolving a
+> wait no longer deletes it** (it keeps the row with `closedOn`; `openPendings()` is what
+> "outstanding" now means). Adding any further entry kind means touching FIVE places:
+> `normalizeEntryContent`, `entriesFromMirrors`, `entryRebuildMirrors`, `TRASH_RESTORE_MIRRORS`
+> and `rolloverTodos` — miss one and the value disappears on the next sync round trip or the
+> item cannot be restored from the trash.
+>
+> The five requirements above are covered by tests in `tests/verify-wardbook.js` (round trip /
+> idempotence / restore targets / course ordering) and `tests/smoke-render.js` (tick stamps a
+> date, un-tick clears it, resolved wait leaves the outstanding list, panel renders, AI payload
+> unchanged).
 
 Wardbook is the successor of Casebook (`C:\Users\nagan\Documents\dev\casebook\index.html`, 3537 lines).
 It is a personal inpatient tool for one physician. The core unit is NOT a problem list but the

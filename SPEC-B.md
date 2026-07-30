@@ -1,5 +1,20 @@
 # Wardbook — SPEC Phase B (evening review, staleness, prediction-miss hook, manual export fallback)
 
+> **LARGELY REMOVED (2026-07-25, CEO decision).** 夕の棚卸し / Seeds (種) / プロブレム欄 /
+> 日次書き出し were withdrawn after two-plus weeks in which none of them stuck; the learning
+> loop had moved outside the app. Everything below describing 棚卸し, 種, 種の送信 and the
+> 予測外れ→種 hook is **historical design record, not current behaviour**. Old seed/problem
+> rows are still normalised, synced and restorable so no existing device loses data, and the
+> boot-time outbox flush still drains any never-sent seeds. Staleness (くすみ) and the manual
+> export fallback survive.
+>
+> **Superseded by (2026-07-31):** the course panel. What the ward round already leaves behind —
+> a ticked Task, a wait coming back, a phase change, a score, an opened reference — is now
+> projected onto a per-case timeline instead of asking for a separate 種. See
+> `5_開発部/設計/Wardbook_経過が残る設計` in the Vault. Note in particular that completing a
+> Task no longer deletes it the following day (`rolloverTodos` was destructive until then);
+> hiding finished work is now `visibleTodos`, a display decision.
+
 Phase B extends the existing `index.html` (Phase A, ~1030 lines). **Read `index.html`,
 `tests/verify-wardbook.js`, `tests/smoke-render.js` first** and follow their conventions exactly.
 `SPEC-A.md` documents the Phase A baseline.
