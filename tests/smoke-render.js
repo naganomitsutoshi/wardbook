@@ -218,13 +218,22 @@ vm.runInContext(`
 `, sandbox);
 
 const boardHtml = vm.runInContext("renderBoard()", sandbox);
-// Bottom bar is one row (B-2, 2026-07-22): sync/data/search/settings moved into
-// the "menu" sheet. All four entry points must stay reachable from there.
-if (!boardHtml.includes("openMenuSheet()")) fail("board missing menu button");
+// Bottom bar = the tab row (CEO 2026-07-31). 入院を登録 and the four organising
+// screens moved into the hamburger, which rides the top bar on every screen so
+// they stay reachable from the detail view too.
+if (!vm.runInContext("renderTopbar()", sandbox).includes("openMenuSheet()")) fail("top bar missing the hamburger");
+if (!boardHtml.includes('<div class="bottom"><div class="bottomin"><div class="seg">')) fail("bottom bar must hold the tab row");
+if (boardHtml.includes("openAdmissionSheet()")) fail("入院を登録 must leave the bottom bar for the hamburger");
+if (boardHtml.includes("openMenuSheet()")) fail("the その他 button must leave the bottom bar");
 const menuHtml = vm.runInContext("renderMenuSheet()", sandbox);
+// 入院を登録 is the one action in the sheet and must sit above the four rows.
+if (!menuHtml.includes("openAdmissionSheet()")) fail("menu missing 入院を登録");
+if (menuHtml.indexOf("openAdmissionSheet()") > menuHtml.indexOf("openSearch()")) fail("入院を登録 must be the first row of the menu");
 if (!menuHtml.includes("openSyncSheet()") || !menuHtml.includes("openDataSheet()")) fail("menu missing sync/data row");
 if (!menuHtml.includes("openSearch()") || !menuHtml.includes("openSettingsSheet()")) fail("menu missing search/settings row");
 if (!menuHtml.includes("data-sync-status")) fail("menu missing live sync status");
+// clover-pages is a tab now; a second entry point here is what made it hard to find.
+if (menuHtml.includes("openVaultHtml()")) fail("clover-pages must not sit in the menu as well");
 if (!boardHtml.includes("haien")) fail("board missing case");
 if (!boardHtml.includes("stale1") && !boardHtml.includes("stale2")) fail("board missing staleness class");
 if (!boardHtml.includes('data-drop-index="0"')) fail("board missing dropzone index");

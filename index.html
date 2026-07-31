@@ -288,6 +288,10 @@
   }
   .bottomin{max-width:720px;margin:0 auto}
   .bottom .primary{width:100%;min-height:44px}
+  /* Tab row as the bottom bar (2026-07-31): no gap under it, and the chips grow
+     to the 44px touch target now that they are the main navigation. */
+  .bottom .seg{margin-bottom:0}
+  .bottom .chipbtn{min-height:44px}
   .detailhead,.row,.field,.chips,.inline{display:flex;gap:8px}
   .detailhead{align-items:flex-start;flex-wrap:wrap}
   .stack{display:flex;flex-direction:column;gap:12px}
@@ -3531,8 +3535,8 @@ const STR = {
   toPendingBtn:"済→待ちに",
   taskEditBtn:"編集",
   taskEditClose:"閉じる",
-  menuRow:"その他",
-  vaultHtmlRow:"早見表（clover-pages）",
+  menuTitle:"メニュー",
+  menuBtn:"☰",
   cloverView:"clover-pages",
   cloverGroupAdm:"\u5165\u9662\u5bfe\u5fdc",
   cloverGroupRef:"\u30d5\u30ed\u30fc\u30fb\u65e9\u898b\u8868",
@@ -4663,9 +4667,11 @@ function openSettingsSheet(){
   renderSheet();
 }
 
-// "その他" sheet (B-2, CEO 2026-07-22): the second bottom-bar row (sync / data /
-// search / settings) moved here so the fixed bar is one row tall. Sync status
-// stays visible as the row's subtitle via the same data-sync-status hook.
+// The hamburger sheet (CEO 2026-07-31, was the "その他" sheet of 2026-07-22):
+// 入院を登録 sits at the top as the one action, then the four organising screens
+// (search / sync / data / settings). Sync status stays visible as the row's
+// subtitle via the same data-sync-status hook. The clover-pages row left when
+// clover-pages became a tab — a second entry point is what made it hard to find.
 function openMenuSheet(){
   navNoteSheetOpen();
   SHEET.name = "menu";
@@ -4677,12 +4683,12 @@ function renderMenuSheet(){
   function row(label, action, sub){
     return '<button class="lineitem" style="width:100%;text-align:left" onclick="' + action + '"><span class="text" style="flex:1">' + esc(label) + '</span>' + (sub || '') + '</button>';
   }
-  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.menuRow) + '</div><div class="stack">' +
+  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.menuTitle) + '</div><div class="stack">' +
+    '<button class="primary" style="min-height:44px" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button>' +
+    row(STR.searchRow, 'closeSheet();openSearch()') +
     row(STR.syncRow, 'openSyncSheet()', '<span class="faint" data-sync-status>' + esc(syncStatusLabel()) + '</span>') +
     row(STR.dataRow, 'openDataSheet()') +
-    row(STR.searchRow, 'closeSheet();openSearch()') +
     row(STR.settingsRow, 'openSettingsSheet()') +
-    row(STR.vaultHtmlRow, 'openVaultHtml()', '<span class="faint">↗</span>') +
     '<button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div></div>';
 }
 
@@ -5987,10 +5993,14 @@ function cancelDrag(){
   render();
 }
 
+// The hamburger rides the top bar on every screen (CEO 2026-07-31), so 入院を登録
+// and the four organising screens are reachable from the detail view too — the
+// bottom bar now belongs to the tabs.
 function renderTopbar(){
   return '<div class="topbar"><div class="toprow">' +
     (VIEW.name === "detail" ? '<button class="ghostbtn smallbtn" onclick="openBoard()">' + esc(STR.back) + '</button>' : '') +
     '<div class="title">Wardbook</div><div class="grow"></div>' +
+    '<button class="ghostbtn smallbtn" onclick="openMenuSheet()" aria-label="' + esc(STR.menuTitle) + '">' + esc(STR.menuBtn) + '</button>' +
     '</div></div>';
 }
 
@@ -7356,11 +7366,14 @@ function renderTabBar(mode){
   }).join('') + '</div>';
 }
 
+// The tab row is the fixed bottom bar (CEO 2026-07-31): thumb-reachable, and the
+// only thing down there, so switching screens never lands on 入院を登録 by
+// mistake. 入院を登録 and the organising screens moved to the hamburger.
 renderBoard = function(){
   var mode = normalizeViewTab(VIEW.boardMode);
   var body = (TAB_BODY[mode] || TAB_BODY[VIEW_TABS[0].id])();
-  return '<section class="screen">' + renderTabBar(mode) + body +
-  '</section><div class="bottom"><div class="bottomin"><div class="bottomrow"><button class="primary" onclick="openAdmissionSheet()">' + esc(STR.addAdmission) + '</button><button class="ghostbtn" onclick="openMenuSheet()">' + esc(STR.menuRow) + '</button></div></div></div>';
+  return '<section class="screen">' + body +
+  '</section><div class="bottom"><div class="bottomin">' + renderTabBar(mode) + '</div></div>';
 };
 
 renderDetail = function(caseId){
