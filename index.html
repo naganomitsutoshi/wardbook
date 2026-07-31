@@ -134,7 +134,7 @@
   }
   button,input{font:inherit}
   button{cursor:pointer}
-  .app{max-width:720px;margin:0 auto;padding:0 0 88px}
+  .app{max-width:720px;margin:0 auto;padding:0 0 72px}
   .topbar{
     position:sticky;top:0;z-index:20;
     background:linear-gradient(90deg,var(--hdr-a),var(--hdr-b));
@@ -284,14 +284,22 @@
     background:var(--bar);
     backdrop-filter:blur(8px);
     border-top:1px solid var(--line);
-    padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+    padding:6px 12px calc(6px + env(safe-area-inset-bottom));
   }
   .bottomin{max-width:720px;margin:0 auto}
   .bottom .primary{width:100%;min-height:44px}
-  /* Tab row as the bottom bar (2026-08-01): no gap under it, and the chips grow
-     to the 44px touch target now that they are the main navigation. */
+  /* Tab row as the bottom bar (2026-08-01): no gap under it. The chips were 44px
+     tall at first and read as a wall — 38px with a tight line box keeps the bar
+     around 50px (was 65px) while staying comfortably tappable. line-height:1
+     and the flex centring stop the label from growing the button. */
   .bottom .seg{margin-bottom:0}
-  .bottom .chipbtn{min-height:44px}
+  .bottom .chipbtn{
+    min-height:38px;
+    line-height:1;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
   .detailhead,.row,.field,.chips,.inline{display:flex;gap:8px}
   .detailhead{align-items:flex-start;flex-wrap:wrap}
   .stack{display:flex;flex-direction:column;gap:12px}
