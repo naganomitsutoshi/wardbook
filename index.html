@@ -288,7 +288,7 @@
   }
   .bottomin{max-width:720px;margin:0 auto}
   .bottom .primary{width:100%;min-height:44px}
-  /* Tab row as the bottom bar (2026-07-31): no gap under it, and the chips grow
+  /* Tab row as the bottom bar (2026-08-01): no gap under it, and the chips grow
      to the 44px touch target now that they are the main navigation. */
   .bottom .seg{margin-bottom:0}
   .bottom .chipbtn{min-height:44px}
@@ -4667,7 +4667,7 @@ function openSettingsSheet(){
   renderSheet();
 }
 
-// The hamburger sheet (CEO 2026-07-31, was the "その他" sheet of 2026-07-22):
+// The hamburger sheet (CEO 2026-08-01, was the "その他" sheet of 2026-07-22):
 // 入院を登録 sits at the top as the one action, then the four organising screens
 // (search / sync / data / settings). Sync status stays visible as the row's
 // subtitle via the same data-sync-status hook. The clover-pages row left when
@@ -5993,7 +5993,7 @@ function cancelDrag(){
   render();
 }
 
-// The hamburger rides the top bar on every screen (CEO 2026-07-31), so 入院を登録
+// The hamburger rides the top bar on every screen (CEO 2026-08-01), so 入院を登録
 // and the four organising screens are reachable from the detail view too — the
 // bottom bar now belongs to the tabs.
 function renderTopbar(){
@@ -7366,7 +7366,7 @@ function renderTabBar(mode){
   }).join('') + '</div>';
 }
 
-// The tab row is the fixed bottom bar (CEO 2026-07-31): thumb-reachable, and the
+// The tab row is the fixed bottom bar (CEO 2026-08-01): thumb-reachable, and the
 // only thing down there, so switching screens never lands on 入院を登録 by
 // mistake. 入院を登録 and the organising screens moved to the hamburger.
 renderBoard = function(){

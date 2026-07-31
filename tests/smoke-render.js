@@ -218,7 +218,7 @@ vm.runInContext(`
 `, sandbox);
 
 const boardHtml = vm.runInContext("renderBoard()", sandbox);
-// Bottom bar = the tab row (CEO 2026-07-31). 入院を登録 and the four organising
+// Bottom bar = the tab row (CEO 2026-08-01). 入院を登録 and the four organising
 // screens moved into the hamburger, which rides the top bar on every screen so
 // they stay reachable from the detail view too.
 if (!vm.runInContext("renderTopbar()", sandbox).includes("openMenuSheet()")) fail("top bar missing the hamburger");
