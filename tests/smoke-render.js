@@ -286,6 +286,21 @@ const quietValCount = (fullBoardHtml.match(/class="ql"/g) || []).length;
 if (!quietRowCount) fail("board card missing quiet metadata rows");
 if (quietValCount <= quietRowCount) fail("board card repeats the quiet heading for every value");
 
+// 今日のカルテを書いたかの印（CEO 2026-08-05）。見出し行の右端に小さく出て、
+// 押すと今日の日付が入る。持つのは日付1つだけなので、日が変われば表示は自動で
+// 未チェックへ戻る＝毎日リセット。ここで固定するのは「押したのに残らない」と
+// 「昨日の印が今日も付いて見える」の両方。
+const EMR_CHECKED = /class="bemr"[^>]*>\s*<input type="checkbox" checked/;
+if (!fullBoardHtml.includes('class="bemr"')) fail("board card missing the chart-note checkbox");
+if (EMR_CHECKED.test(fullBoardHtml)) fail("chart-note mark starts checked");
+vm.runInContext("toggleEmrWritten('c1')", sandbox);
+if (vm.runInContext("DB.cases.find(c=>c.id==='c1').emrWrittenOn", sandbox) !== vm.runInContext("todayISO()", sandbox)) fail("chart-note check did not record today");
+if (!EMR_CHECKED.test(vm.runInContext("renderBoard()", sandbox))) fail("today's chart-note mark does not render as checked");
+vm.runInContext("DB.cases.find(c=>c.id==='c1').emrWrittenOn='2000-01-01'", sandbox);
+if (EMR_CHECKED.test(vm.runInContext("renderBoard()", sandbox))) fail("an older chart-note mark still shows as checked today");
+vm.runInContext("DB.cases.find(c=>c.id==='c1').emrWrittenOn=todayISO(); toggleEmrWritten('c1')", sandbox);
+if (vm.runInContext("DB.cases.find(c=>c.id==='c1').emrWrittenOn", sandbox) !== "") fail("chart-note check cannot be cleared");
+
 // 今日／週間予定 left the tab row on 2026-07-30 (CEO), but their code stays in
 // the file so either can be restored with one VIEW_TABS line. The views are
 // therefore rendered directly here — going through renderBoard() would now

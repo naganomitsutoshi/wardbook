@@ -193,6 +193,18 @@
     display:inline-flex;align-items:center;gap:5px;flex:none;margin-left:auto;
     font-size:11px;color:var(--soft);white-space:nowrap;
   }
+  /* カルテ記載の印: 局面ファーストを崩さないよう、見出し行のいちばん右に補助色の
+     11px で置く（Task の大きな文字とは競合しない）。押しやすさは上下の余白で稼ぐ
+     ＝ラベル全体が当たり判定なので、文字「カルテ」を触っても入る。 */
+  .bemr{
+    display:inline-flex;align-items:center;gap:4px;
+    /* 見出し行で唯一ちぢむ要素にしておく＝細い端末で行が詰まったとき、部屋番号や
+       局面を押し出さずに「カルテ」の文字だけが先に削れ、四角は必ず残る。 */
+    flex:0 1 auto;min-width:0;
+    font-size:11px;color:var(--soft);white-space:nowrap;padding:6px 0 6px 2px;
+  }
+  .bemr span{overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .bemr input{width:16px;height:16px;margin:0;accent-color:var(--ok);flex-shrink:0}
   .btask{display:flex;gap:12px;align-items:flex-start;padding:7px 0}
   .btask .check{margin-top:2px}
   .btasktext{font-size:17px;line-height:1.35;flex:1;min-width:0;word-break:break-word}
@@ -1193,6 +1205,11 @@ function normalizeCase(raw, nowIso, todayIso){
     }
     return { text: admText };
   })();
+  // その日のカルテ（院内の電子カルテ）を書いたかの印。持つのは「最後に書いた日」
+  // 1つだけで、今日と同じならチェック済み・違えば未チェックになる。日付が変われば
+  // ひとりでに外れるので、毎日リセットのための掃除も予定処理も要らない
+  // （2026-08-05 CEO要望）。カルテ本文はここに入らない＝PII境界は不変。
+  out.emrWrittenOn = safeDate(src.emrWrittenOn, "") || "";
   out.order = toNum(src.order, 0);
   out.lastTouchedAt = typeof src.lastTouchedAt === "string" && src.lastTouchedAt ? src.lastTouchedAt : nowIso;
   // The chart was reintroduced with a new schema (SPEC-E): normalizeChart only
@@ -3476,6 +3493,8 @@ const STR = {
   statsExports:"書き出し回数",
   statsCases:"登録した症例",
   statsFootprints:"足あとの件数",
+  emrWritten:"今日のカルテ記載",
+  emrWrittenShort:"カルテ",
   nudgeBadge:"？",
   nudgeStageChanged:"局面が変わりました。何が変わりましたか？",
   nudgeWaitClosed:"「{0}」が返ってきました。方針は変えましたか？",
@@ -3675,7 +3694,6 @@ let NAV = { stack:[], ignore:0 };
 let PENDING_FOCUS = null;
 let WEEK_SCROLL_RT = { busy:false, pendingLeftAdjust:0, initPending:false, lastLeft:0 };
 let LAST_WIN_WIDTH = 0;
-let LAST_ORIENT_WEEK = false;
 const SYNC_KEY = "wardbook:sync";
 const STATS_KEY = "wardbook:stats";
 let STATS = null;
@@ -4389,26 +4407,12 @@ function resetWeekRange(){
   WEEK_SCROLL_RT.lastLeft = 0;
 }
 
-// The week grid reads best in landscape (wide date span). Lock to landscape
-// while it is on screen and release otherwise, where the platform supports it
-// (installed PWA on Android). Everywhere else this is a harmless no-op — the
-// manifest keeps the app rotatable so portrait board/review/detail are
-// unaffected. Called from render(); only acts when the desired state flips.
-function syncOrientationLock(){
-  var wantLandscape = VIEW.name === "board" && VIEW.boardMode === "week";
-  if (wantLandscape === LAST_ORIENT_WEEK) return;
-  LAST_ORIENT_WEEK = wantLandscape;
-  try {
-    var so = (typeof screen !== "undefined") ? screen.orientation : null;
-    if (!so) return;
-    if (wantLandscape && so.lock) {
-      var p = so.lock("landscape");
-      if (p && p.catch) p.catch(function(){});
-    } else if (so.unlock) {
-      so.unlock();
-    }
-  } catch (e) {}
-}
+// 画面の向きは縦で固定（2026-08-05 CEO決定）。回すつもりがないのに回るのが
+// 邪魔なので、manifest の orientation:"portrait" で端末側に縦固定を宣言する。
+// ここには以前 syncOrientationLock（週間予定タブの間だけ横に倒す仕掛け）が
+// あったが、①その週間予定タブは 2026-07-30 に撤去済みで一度も発火しない
+// ②向きを直接ロックする API はこの宣言より強く、縦固定と正面から矛盾する
+// ため、関数ごと削除した。週間予定を戻すときも横倒しは戻さない。
 
 // What each tab needs done when you arrive on it. A tab with nothing to set up
 // simply has no entry here.
@@ -4980,6 +4984,14 @@ function updateCaseAdm(caseId, value){
   var v = String(value || "");
   if (caseFieldUnchanged(caseId, function(c){ return isObj(c.adm) && c.adm.text === v; })) return;
   mutateCase(caseId, function(c){ c.adm = { text:v }; });
+}
+
+// 今日のカルテ記載の印。入れると今日の日付が入り、外すと空になる。日付を1つ
+// 持つだけなので、日付が変われば表示は自動で未チェックに戻る（＝毎日リセット）。
+// 端末をまたぐときは他の case フィールドと同じ「新しい方が勝つ」で揃う。
+function toggleEmrWritten(caseId){
+  var today = todayISO();
+  mutateCase(caseId, function(c){ c.emrWrittenOn = (c.emrWrittenOn === today) ? "" : today; });
 }
 
 // Calculator inputs persist on the case so the next round only needs the new
@@ -6070,6 +6082,12 @@ function renderBoardCard(c){
       // The entire push half of the nudge design: one small mark. No count, no
       // colour alarm, no notification — open the patient when you feel like it.
       (caseNudge(c) ? '<span class="nudgedot" title="' + esc(STR.coursePanel) + '">' + esc(STR.nudgeBadge) + '</span>' : '') +
+      // 今日のカルテを書いたか。一覧を上から見て「書いていない人」を拾うための印
+      // なので、全カードで同じ位置（見出し行の右端）に、小さく出す。
+      '<label class="bemr" title="' + esc(STR.emrWritten) + '" onclick="event.stopPropagation()">' +
+        '<input type="checkbox" ' + (c.emrWrittenOn === today ? 'checked ' : '') + 'onclick="toggleEmrWritten(\'' + esc(c.id) + '\')">' +
+        '<span>' + esc(STR.emrWrittenShort) + '</span>' +
+      '</label>' +
     '</div>' +
     (c.dxTags.length ? '<div class="bdx">' + esc(c.dxTags.join('・')) + '</div>' : '') +
     taskHtml +
@@ -7461,7 +7479,6 @@ function render(){
   app.innerHTML = html;
   renderSheet();
   ensureWeekWrapBehavior();
-  syncOrientationLock();
   flushQueuedFocus();
   return html;
 }

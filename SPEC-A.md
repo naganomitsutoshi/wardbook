@@ -111,6 +111,10 @@ Case = {
   problems:[ { id, text, status } ],         // "active"|"resolved"; mirror of entries kind:"problem" (added 2026-07-11, 設計書 §14)
   discharge: null,       // later phase
   adm: { trigger, pmh:[], adl, note },       // admission record: half-structured (short fields + pmh tags) (added 2026-07-11)
+  emrWrittenOn,          // "YYYY-MM-DD" | "" — the day the hospital chart note was written for this
+                         // patient (board checkbox, added 2026-08-05). ONE date, no history: the mark
+                         // shows as checked only while it equals today, so the daily reset needs no
+                         // cleanup job. Contains no chart text — the PII boundary is unchanged.
   chart: null,           // later phase
   order,                 // number, manual sort position on the board
   lastTouchedAt          // ISO datetime string; basis for staleness display (later phase)

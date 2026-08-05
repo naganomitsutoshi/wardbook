@@ -1770,5 +1770,23 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
     assert.ok(widest >= 1024, purpose + " icons must go up to at least 1024px for the splash screen");
   }
 
+  // 画面は縦固定（CEO 2026-08-05）。端末側に宣言するのが正で、コードから向きを
+  // ロックし直すと宣言より強く効いてしまうため、そちらは残さない。
+  assert.strictEqual(manifest.orientation, "portrait", "app must stay locked to portrait");
+  assert.ok(!/screen\s*\.\s*orientation/.test(html), "no code may touch the screen orientation API");
+  assert.ok(!/\.lock\(\s*["']landscape/.test(html), "the landscape lock must stay removed");
+
+  // カルテ記載の印は「最後に書いた日」1つだけ。今日と一致するかで表示が決まるので、
+  // 日付でない値が残ると外れない印になる。古い端末のデータには印そのものが無い。
+  assert.strictEqual(L.normalizeCase({ id:"c1", emrWrittenOn:"2026-08-05" }).emrWrittenOn, "2026-08-05", "a valid mark survives");
+  assert.strictEqual(L.normalizeCase({ id:"c1", emrWrittenOn:"きょう" }).emrWrittenOn, "", "garbage must not become a permanent mark");
+  assert.strictEqual(L.normalizeCase({ id:"c1" }).emrWrittenOn, "", "old data simply has no mark");
+  // 端末をまたいでも普通の case フィールドと同じ「新しい方が勝つ」で揃う。
+  const emrMerge = L.syncMergeCase(
+    { id:"c1", emrWrittenOn:"" }, { emrWrittenOn:"2026-08-05T09:00:00.000Z" },
+    { id:"c1", emrWrittenOn:"2026-08-05" }, { emrWrittenOn:"2026-08-05T10:00:00.000Z" }
+  );
+  assert.strictEqual(emrMerge.merged.emrWrittenOn, "2026-08-05", "the newer mark wins across devices");
+
   console.log("ALL TESTS PASSED");
 })().catch((err) => fail(err.stack || err.message));
