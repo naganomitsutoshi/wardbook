@@ -3031,16 +3031,22 @@ function pendingNudge(c, todayIso, cfg){
   });
   // The phase has not been touched for a while. The CEO updates it "気づいた
   // ときだけ", so forgetting is the norm — that is the app's job to cover.
+  // The key must NOT contain today's date. It did until 2026-08-05, which meant
+  // the question became a different question every morning: answering it was
+  // undone overnight and the mark came back daily (QA P1-1). Keyed on the day
+  // the phase last moved, the question is asked once per standstill — and a new
+  // one appears by itself the moment the phase (or the case) moves again.
   if (last && daysBetween(last.date, todayIso) >= conf.staleDays) {
-    candidates.push({ key:"stageStale:" + last.date + ":" + todayIso, trigger:"stageStale", subject:last.stageId });
+    candidates.push({ key:"stageStale:" + last.date, trigger:"stageStale", subject:last.stageId });
   }
   // Nothing has moved: either the patient is parked, or something is stuck.
   var lastMove = "";
   cloneArr(c.todos).forEach(function(t){ if (t && t.doneOn && t.doneOn > lastMove) lastMove = t.doneOn; });
   cloneArr(c.pendings).forEach(function(p){ if (p && p.closedOn && p.closedOn > lastMove) lastMove = p.closedOn; });
   if (!lastMove) lastMove = c.admittedAt;
+  // Same rule as above: keyed on the last thing that moved, never on today.
   if (daysBetween(lastMove, todayIso) >= conf.taskStallDays) {
-    candidates.push({ key:"taskStalled:" + lastMove + ":" + todayIso, trigger:"taskStalled", subject:lastMove });
+    candidates.push({ key:"taskStalled:" + lastMove, trigger:"taskStalled", subject:lastMove });
   }
   for (var i = 0; i < candidates.length; i++) {
     var prev = answered[candidates[i].key];
@@ -6817,45 +6823,69 @@ function recordNudge(caseId, key, prompt, answer, skipped){
   render();
 }
 
-function answerNudge(caseId, key, prompt, fixedAnswer){
+// The open question's identity, read back from the block instead of being
+// baked into every onclick (QA P1-2, 2026-08-05). The prompt contains the
+// user's own text — the wait's wording — and a string spliced into an onclick
+// attribute can be escaped out of with an HTML entity, which broke the buttons
+// (and executed whatever followed). data-* + dataset is the same fix taken for
+// the chart-name suggestions on 2026-07-31; nothing user-written goes into code
+// any more.
+function nudgeCtx(){
+  var el = document.getElementById("nudgeBlock");
+  if (!el || !el.dataset) return null;
+  return { caseId:el.dataset.case || "", key:el.dataset.key || "", prompt:el.dataset.prompt || "" };
+}
+
+function answerNudge(btn){
+  var ctx = nudgeCtx();
+  if (!ctx || !ctx.key) return;
   var box = document.getElementById("nudgeInput");
   var typed = box && box.value ? String(box.value).trim() : "";
   // A fixed choice (変えた/変えない/そのまま) and free text are complementary:
   // the choice is the answer, anything typed refines it.
-  var answer = [fixedAnswer || "", typed].filter(Boolean).join("：");
-  recordNudge(caseId, key, prompt, answer, false);
+  var fixed = btn && btn.dataset ? String(btn.dataset.answer || "") : "";
+  var answer = [fixed, typed].filter(Boolean).join("：");
+  recordNudge(ctx.caseId, ctx.key, ctx.prompt, answer, false);
 }
 
-function skipNudge(caseId, key, prompt){
-  recordNudge(caseId, key, prompt, "", true);
+function skipNudge(){
+  var ctx = nudgeCtx();
+  if (!ctx || !ctx.key) return;
+  recordNudge(ctx.caseId, ctx.key, ctx.prompt, "", true);
 }
 
 // "局面を変える" answers the question by doing the thing: the picker opens and
 // the question is retired as answered, because changing the phase IS the reply.
-function nudgeOpenStage(caseId, key, prompt){
-  recordNudge(caseId, key, prompt, STR.nudgeStageUpdate, false);
-  openStagePicker(caseId);
+function nudgeOpenStage(){
+  var ctx = nudgeCtx();
+  if (!ctx || !ctx.key) return;
+  recordNudge(ctx.caseId, ctx.key, ctx.prompt, STR.nudgeStageUpdate, false);
+  openStagePicker(ctx.caseId);
 }
 
 function renderNudgeBlock(c){
   var nudge = caseNudge(c);
   if (!nudge) return '';
   var prompt = nudgePromptText(c, nudge);
-  var args = "'" + esc(c.id) + "','" + esc(nudge.key) + "'," + JSON.stringify(prompt).replace(/"/g, "&quot;");
+  function choice(labelKey, handler){
+    return '<button class="chipbtn" data-answer="' + esc(STR[labelKey]) + '" onclick="' + handler + '">' + esc(STR[labelKey]) + '</button>';
+  }
   var choices = '';
   if (nudge.trigger === "waitClosed") {
-    choices = '<button class="chipbtn" onclick="answerNudge(' + args + ',' + JSON.stringify(STR.nudgeChanged).replace(/"/g, "&quot;") + ')">' + esc(STR.nudgeChanged) + '</button>' +
-      '<button class="chipbtn" onclick="answerNudge(' + args + ',' + JSON.stringify(STR.nudgeUnchanged).replace(/"/g, "&quot;") + ')">' + esc(STR.nudgeUnchanged) + '</button>';
+    choices = choice("nudgeChanged", "answerNudge(this)") + choice("nudgeUnchanged", "answerNudge(this)");
   } else if (nudge.trigger === "stageStale") {
-    choices = '<button class="chipbtn" onclick="nudgeOpenStage(' + args + ')">' + esc(STR.nudgeStageUpdate) + '</button>' +
-      '<button class="chipbtn" onclick="answerNudge(' + args + ',' + JSON.stringify(STR.nudgeStageSame).replace(/"/g, "&quot;") + ')">' + esc(STR.nudgeStageSame) + '</button>';
+    choices = choice("nudgeStageUpdate", "nudgeOpenStage()") + choice("nudgeStageSame", "answerNudge(this)");
   }
-  return '<div class="nudge"><div class="nudgeq">' + esc(prompt) + '</div>' +
+  return '<div class="nudge" id="nudgeBlock" data-case="' + esc(c.id) + '" data-key="' + esc(nudge.key) + '" data-prompt="' + esc(prompt) + '">' +
+    '<div class="nudgeq">' + esc(prompt) + '</div>' +
     '<input id="nudgeInput" class="input" placeholder="' + esc(STR.nudgeAnswerPh) + '">' +
     '<div class="row wrap" style="margin-top:6px">' + choices +
-      '<button class="smallbtn" onclick="answerNudge(' + args + ',\'\')">' + esc(STR.nudgeSend) + '</button>' +
-      '<button class="smallbtn" onclick="skipNudge(' + args + ')">' + esc(STR.nudgeSkip) + '</button>' +
-    '</div><div class="faint">' + esc(STR.nudgeNote) + '</div></div>';
+      '<button class="smallbtn" onclick="answerNudge(this)">' + esc(STR.nudgeSend) + '</button>' +
+      '<button class="smallbtn" onclick="skipNudge()">' + esc(STR.nudgeSkip) + '</button>' +
+    '</div><div class="faint">' + esc(STR.nudgeNote) + '</div>' +
+    // The answer is free text that is stored and synced, so it carries the same
+    // warning as every other free-text field (SPEC-A hard constraint; QA P1-3).
+    '<div class="note">' + esc(STR.piiWarning) + '</div></div>';
 }
 
 function renderCoursePanel(c){

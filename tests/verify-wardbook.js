@@ -829,6 +829,43 @@ assert.strictEqual(normalized.seeds[0].createdOn, "2026-07-08");
     "0 would mean asking again the same day, so it falls back to the default");
   assert.strictEqual(L.normalizeNudgeCfg({ staleDays:"7" }).staleDays, 7);
 
+  // "Answered = gone for good" must hold ACROSS DAYS, not just within one.
+  // Until 2026-08-05 the stageStale / taskStalled keys carried todayIso, so the
+  // question was reborn under a new key every morning and the answer given
+  // yesterday no longer matched it (QA P1-1). One standstill = one question.
+  const staleAnswer = L.pendingNudge(bareStale, "2026-07-23", { staleDays:3 });
+  const staleAnswered = Object.assign({}, bareStale, {
+    qLogs:[{ id:"q1", key:staleAnswer.key, text:"そのまま", prompt:"p", skipped:false, date:"2026-07-23" }]
+  });
+  ["2026-07-24", "2026-07-26", "2026-08-10"].forEach((day) => {
+    const again = L.pendingNudge(staleAnswered, day, { staleDays:3, taskStallDays:30 });
+    assert.strictEqual(again, null, "an answered stageStale must not come back on " + day);
+  });
+  const stallAnswer = L.pendingNudge(bareStale, "2026-07-23", { staleDays:30 });
+  assert.strictEqual(stallAnswer.trigger, "taskStalled");
+  const stallAnswered = Object.assign({}, bareStale, {
+    qLogs:[{ id:"q1", key:stallAnswer.key, text:"培養待ち", prompt:"p", skipped:false, date:"2026-07-23" }]
+  });
+  ["2026-07-24", "2026-07-27", "2026-08-10"].forEach((day) => {
+    const again = L.pendingNudge(stallAnswered, day, { staleDays:30, taskStallDays:3 });
+    assert.strictEqual(again, null, "an answered taskStalled must not come back on " + day);
+  });
+  // ...but the moment something actually moves, the next standstill is a new
+  // question again: the key follows the last movement, so silence is not permanent.
+  const movedThenQuiet = Object.assign({}, stallAnswered, {
+    todos:[{ id:"t1", text:"抜針", done:true, createdOn:"2026-07-24", doneOn:"2026-07-24", due:null, time:null }]
+  });
+  assert.strictEqual(L.pendingNudge(movedThenQuiet, "2026-07-28", { staleDays:30, taskStallDays:3 }).trigger,
+    "taskStalled", "a new standstill after real movement is a new question");
+  // A skip still parks the recurring questions for reaskDays and then returns.
+  const staleSkipped = Object.assign({}, bareStale, {
+    qLogs:[{ id:"q1", key:staleAnswer.key, text:"", prompt:"p", skipped:true, date:"2026-07-23" }]
+  });
+  assert.strictEqual(L.pendingNudge(staleSkipped, "2026-07-24", { staleDays:3, taskStallDays:30 }), null,
+    "a skipped stageStale stays quiet inside reaskDays");
+  assert.strictEqual(L.pendingNudge(staleSkipped, "2026-07-26", { staleDays:3, taskStallDays:30 }).key,
+    staleAnswer.key, "a skipped stageStale returns once after reaskDays");
+
   // An answer becomes a "why" row on the course; a skip leaves no trace.
   const whyCase = L.normalizeCase(Object.assign({}, closedCase, {
     qLogs:[

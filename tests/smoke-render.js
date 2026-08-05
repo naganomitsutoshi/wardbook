@@ -971,6 +971,41 @@ if (vm.runInContext("typeof flushCalcAutoSave", sandbox) !== "function") fail("c
 // card and the question at the top of the course panel.
 const nudgeDetail = vm.runInContext("renderDetail('c1')", sandbox);
 if (!nudgeDetail.includes("nudgeq")) fail("course panel is not showing the open question");
+// The question's identity travels in data-* attributes, never spliced into an
+// onclick (QA P1-2, 2026-08-05). The prompt quotes the user's own wording, and
+// an HTML entity inside it used to decode back into a quote and end the JS
+// string. Pin both halves: the attributes exist, and no handler takes arguments
+// built from case data.
+["id=\"nudgeBlock\"", "data-case=", "data-key=", "data-prompt="].forEach((needle) => {
+  if (!nudgeDetail.includes(needle)) fail("nudge block missing " + needle);
+});
+if (/onclick="(answerNudge|skipNudge|nudgeOpenStage)\([^)]*['"]/.test(nudgeDetail)) {
+  fail("nudge handlers must not take strings built into the onclick attribute");
+}
+// The free-text answer is stored and synced, so it carries the same warning as
+// every other free-text field (SPEC-A hard constraint; QA P1-3).
+if (!nudgeDetail.includes(vm.runInContext("STR.piiWarning", sandbox))) fail("nudge answer box missing PII warning");
+// A wait whose text contains an HTML entity must not put a bare quote into the
+// attribute — that was the break-out. The prompt only quotes the wait's wording
+// for a waitClosed question, so the higher-priority triggers are parked first.
+vm.runInContext([
+  "var evilCase = DB.cases.find(c=>c.id==='c1');",
+  "var evilSnap = JSON.stringify({ stageLog:evilCase.stageLog, qLogs:evilCase.qLogs, pendings:evilCase.pendings });",
+  "evilCase.stageLog = [evilCase.stageLog[0]];",
+  "evilCase.qLogs = [];",
+  "evilCase.pendings = [{id:'pX',text:'&quot;-alert(1)-&quot;',backOn:null,openedOn:'2026-07-24',closedOn:'2026-07-25'}];"
+].join(""), sandbox);
+const evilNudge = vm.runInContext("JSON.stringify(caseNudge(DB.cases.find(c=>c.id==='c1')))", sandbox);
+if (!evilNudge.includes("waitClosed")) fail("the hostile wait did not become the open question — test is vacuous");
+const nudgeEvil = vm.runInContext("renderDetail('c1')", sandbox);
+const evilAttr = (nudgeEvil.match(/data-prompt="[^"]*"/g) || []).join("");
+if (!evilAttr.includes("alert(1)")) fail("the wait's text did not reach the prompt attribute");
+if (!evilAttr.includes("&amp;quot;")) fail("an HTML entity in a wait's text survived into the attribute undecoded");
+vm.runInContext([
+  "var restored = JSON.parse(evilSnap);",
+  "var rc = DB.cases.find(c=>c.id==='c1');",
+  "rc.stageLog = restored.stageLog; rc.qLogs = restored.qLogs; rc.pendings = restored.pendings;"
+].join(""), sandbox);
 const boardWithNudge = vm.runInContext("renderBoard()", sandbox);
 if (!boardWithNudge.includes("nudgedot")) fail("board card is missing the nudge mark");
 // Answering retires it: mark gone, and the reply lands on the course as "why".
