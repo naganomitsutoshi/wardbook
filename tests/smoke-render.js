@@ -286,12 +286,13 @@ const quietValCount = (fullBoardHtml.match(/class="ql"/g) || []).length;
 if (!quietRowCount) fail("board card missing quiet metadata rows");
 if (quietValCount <= quietRowCount) fail("board card repeats the quiet heading for every value");
 
-// 今日のカルテを書いたかの印（CEO 2026-08-05）。見出し行の右端に小さく出て、
-// 押すと今日の日付が入る。持つのは日付1つだけなので、日が変われば表示は自動で
-// 未チェックへ戻る＝毎日リセット。ここで固定するのは「押したのに残らない」と
-// 「昨日の印が今日も付いて見える」の両方。
+// 今日のカルテを書いたかの印（CEO 2026-08-05）。見出し行の右端に四角ひとつだけ
+// 出て（文字は付けない＝CEO指示）、押すと今日の日付が入る。持つのは日付1つだけ
+// なので、日が変われば表示は自動で未チェックへ戻る＝毎日リセット。ここで固定する
+// のは「押したのに残らない」と「昨日の印が今日も付いて見える」の両方。
 const EMR_CHECKED = /class="bemr"[^>]*>\s*<input type="checkbox" checked/;
 if (!fullBoardHtml.includes('class="bemr"')) fail("board card missing the chart-note checkbox");
+if (!/class="bemr"[^>]*>\s*<input[^>]*>\s*<\/label>/.test(fullBoardHtml)) fail("the chart-note mark must stay a bare checkbox (no label text)");
 if (EMR_CHECKED.test(fullBoardHtml)) fail("chart-note mark starts checked");
 vm.runInContext("toggleEmrWritten('c1')", sandbox);
 if (vm.runInContext("DB.cases.find(c=>c.id==='c1').emrWrittenOn", sandbox) !== vm.runInContext("todayISO()", sandbox)) fail("chart-note check did not record today");

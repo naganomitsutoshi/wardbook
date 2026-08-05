@@ -196,14 +196,9 @@
   /* カルテ記載の印: 局面ファーストを崩さないよう、見出し行のいちばん右に補助色の
      11px で置く（Task の大きな文字とは競合しない）。押しやすさは上下の余白で稼ぐ
      ＝ラベル全体が当たり判定なので、文字「カルテ」を触っても入る。 */
-  .bemr{
-    display:inline-flex;align-items:center;gap:4px;
-    /* 見出し行で唯一ちぢむ要素にしておく＝細い端末で行が詰まったとき、部屋番号や
-       局面を押し出さずに「カルテ」の文字だけが先に削れ、四角は必ず残る。 */
-    flex:0 1 auto;min-width:0;
-    font-size:11px;color:var(--soft);white-space:nowrap;padding:6px 0 6px 2px;
-  }
-  .bemr span{overflow:hidden;text-overflow:ellipsis;min-width:0}
+  /* カルテ記載の印: 四角ひとつだけ（文字なし＝CEO 2026-08-05）。局面ファーストを
+     崩さないよう小さく置き、押しやすさは上下の余白で稼ぐ（当たり判定は約16×28px）。 */
+  .bemr{display:inline-flex;align-items:center;flex:none;padding:6px 0 6px 2px}
   .bemr input{width:16px;height:16px;margin:0;accent-color:var(--ok);flex-shrink:0}
   .btask{display:flex;gap:12px;align-items:flex-start;padding:7px 0}
   .btask .check{margin-top:2px}
@@ -3494,7 +3489,6 @@ const STR = {
   statsCases:"登録した症例",
   statsFootprints:"足あとの件数",
   emrWritten:"今日のカルテ記載",
-  emrWrittenShort:"カルテ",
   nudgeBadge:"？",
   nudgeStageChanged:"局面が変わりました。何が変わりましたか？",
   nudgeWaitClosed:"「{0}」が返ってきました。方針は変えましたか？",
@@ -6083,10 +6077,10 @@ function renderBoardCard(c){
       // colour alarm, no notification — open the patient when you feel like it.
       (caseNudge(c) ? '<span class="nudgedot" title="' + esc(STR.coursePanel) + '">' + esc(STR.nudgeBadge) + '</span>' : '') +
       // 今日のカルテを書いたか。一覧を上から見て「書いていない人」を拾うための印
-      // なので、全カードで同じ位置（見出し行の右端）に、小さく出す。
+      // なので、全カードで同じ位置（見出し行の右端）に、四角ひとつだけ出す
+      // （文字は不要＝CEO 2026-08-05。名前は title に残す）。
       '<label class="bemr" title="' + esc(STR.emrWritten) + '" onclick="event.stopPropagation()">' +
         '<input type="checkbox" ' + (c.emrWrittenOn === today ? 'checked ' : '') + 'onclick="toggleEmrWritten(\'' + esc(c.id) + '\')">' +
-        '<span>' + esc(STR.emrWrittenShort) + '</span>' +
       '</label>' +
     '</div>' +
     (c.dxTags.length ? '<div class="bdx">' + esc(c.dxTags.join('・')) + '</div>' : '') +
