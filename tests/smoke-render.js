@@ -536,10 +536,16 @@ vm.runInContext("setBoardMode('board')", sandbox);
 // registry row must render as its own opener, and the index stays as the escape
 // hatch for pages that are not listed.
 const cloverPaths = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.path))", sandbox));
-const cloverKeys = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.nameKey))", sandbox));
+const cloverNames = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.name))", sandbox));
+const cloverGroups = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.group))", sandbox));
 const cloverIds = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.id))", sandbox));
 if (!cloverPaths.length) fail("clover tab has no links");
 if (new Set(cloverIds).size !== cloverIds.length) fail("clover link ids must be unique");
+// The registry is generated from clover-pages (tools/sync-clover-links.ps1), so
+// labels now travel with the rows instead of living in STR. A blank one would
+// render an unreadable button, and a blank group would drop a heading.
+if (cloverNames.some(function(n){ return !n; })) fail("clover link has no label");
+if (cloverGroups.some(function(g){ return !g; })) fail("clover link has no group heading");
 vm.runInContext("setBoardMode('clover')", sandbox);
 const cloverHtml = vm.runInContext("renderBoard()", sandbox);
 cloverPaths.forEach(function(path, i){
@@ -547,7 +553,6 @@ cloverPaths.forEach(function(path, i){
   // rather than only the markup.
   if (!vm.runInContext("cloverUrl(" + JSON.stringify(path) + ")", sandbox)) fail("clover path refused by the guard: " + path);
   if (!cloverHtml.includes("openCloverPage('" + path + "')")) fail("clover tab missing row: " + path);
-  if (!vm.runInContext("STR[" + JSON.stringify(cloverKeys[i]) + "]", sandbox)) fail("clover link has no label: " + cloverKeys[i]);
 });
 if (!cloverHtml.includes("openVaultHtml()")) fail("clover tab missing the index row");
 if (!cloverHtml.includes(vm.runInContext("STR.cloverNote", sandbox))) fail("clover tab must say it opens an external page");
@@ -940,20 +945,22 @@ if (!courseHtml.includes(vm.runInContext("STR.courseWaitClosed", sandbox))) fail
 // The stage history has been stored since day one and was never drawn anywhere.
 if (!courseHtml.includes(vm.runInContext("STR.courseStage", sandbox))) fail("course panel missing the phase history");
 // Opening a reference from a case records its title only — never the URL, and
-// never anything about the patient.
-vm.runInContext("openCloverPageForCase('c1','cap');", sandbox);
+// never anything about the patient. The registry is generated, so this drives
+// whichever row happens to be first rather than a hand-written id.
+const refLink = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS[0])", sandbox));
+vm.runInContext("openCloverPageForCase('c1'," + JSON.stringify(refLink.id) + ");", sandbox);
 const refRow = vm.runInContext("JSON.stringify(DB.cases.find(c=>c.id==='c1').refLogs)", sandbox);
-if (!refRow.includes(vm.runInContext("STR.cloverCap", sandbox))) fail("opening a reference from a case must record it");
+if (!refRow.includes(refLink.name)) fail("opening a reference from a case must record it");
 if (refRow.includes("http") || refRow.includes(".html")) fail("reference log must not store URLs");
 // The page still has to open, and only through the registry-path guard.
 const openedUrl = vm.runInContext("window.opened.slice(-1)[0]", sandbox);
 if (!openedUrl || openedUrl.indexOf("https://clover-pages.") !== 0) fail("reference did not open a clover-pages URL: " + openedUrl);
 // Re-opening the same sheet the same day is one question, not two.
-vm.runInContext("openCloverPageForCase('c1','cap');", sandbox);
+vm.runInContext("openCloverPageForCase('c1'," + JSON.stringify(refLink.id) + ");", sandbox);
 if (vm.runInContext("DB.cases.find(c=>c.id==='c1').refLogs.length", sandbox) !== 1) fail("same reference, same day must not stack duplicates");
 // Footprints must not widen the AI boundary.
 const aiPayloadAfter = JSON.stringify(JSON.parse(vm.runInContext("JSON.stringify(aiFeedbackPayload(DB.cases.find(c=>c.id==='c1')))", sandbox)));
-["doneOn", "closedOn", "openedOn", "refLogs", vm.runInContext("STR.cloverCap", sandbox)].forEach((leak) => {
+["doneOn", "closedOn", "openedOn", "refLogs", refLink.name].forEach((leak) => {
   if (aiPayloadAfter.includes(leak)) fail("footprint leaked into the AI payload: " + leak);
 });
 // The export must carry the course, or a discharged case is unreadable outside.
