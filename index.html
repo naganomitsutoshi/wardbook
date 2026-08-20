@@ -3479,7 +3479,6 @@ const STR = {
   calcLogPanel:"計算の記録",
   refLogPanel:"開いた資料",
   refOpenBtn:"資料を開く",
-  refSheetNote:"ここから開いた資料は、この症例の経過に「開いた資料」として日付つきで残ります（ページ名のみ。患者情報は送りません）",
   coursePanel:"経過",
   courseEmpty:"まだ足あとがありません。Taskを完了する・待ちが返ってくる・局面を変える・計算する・資料を開く——このどれかをすると、ここに日付つきで積み上がります。",
   courseLegacyNote:"※ この記録が始まる前に完了したTaskと、返ってきた待ちは日付を持っていないため、ここには出ません。",
@@ -3575,7 +3574,6 @@ const STR = {
   menuTitle:"メニュー",
   menuBtn:"☰",
   cloverView:"clover-pages",
-  cloverIndexRow:"\u76ee\u6b21\uff08\u5168\u90e8\uff09\u3092\u898b\u308b",
   backOnLabel:"戻り日（不明なら空欄）",
   editMeta:"年代・性別",
   confirm:"確定",
@@ -6672,124 +6670,16 @@ function openVaultHtml(){
   window.open(VAULT_HTML_URL, "_blank", "noopener");
 }
 
-// The clover-pages tab (CEO 2026-07-30). Every published page gets a row, in
-// the same order and under the same headings as the clover-pages index (CEO
-// 2026-08-19): the hand-picked list of 14 drifted behind what was published,
-// and one registry cannot drift from itself.
+// No list of pages lives in the app any more (CEO 2026-08-19). Both entry
+// points — the tab and the 資料を開く button on a case — open clover-pages
+// itself, where the index, the search box and the ★ favourites already are.
+// 43 rows copied in here were too many to scan, and showing a subset would
+// need a second registry to decide the subset.
 //
-// DO NOT EDIT THE LIST BY HAND. `tools/sync-clover-links.ps1` rewrites the
-// block between the markers from clover-pages' own public/ + meta.json, and
-// publish.ps1 calls it on every publish. Labels are \u-escaped and paths are
-// percent-encoded there, so this file stays pure ASCII. Editing here is lost
-// on the next publish.
-//
-// id is derived from the path (first 8 hex of its SHA-1), so a renamed page is
-// a new id — refLogs keep the name that was recorded at the time, never the id.
-// >>> clover-links (generated)
-var CLOVER_LINKS = [
-  { id:"89d25ece", name:"\u8aa4\u56a5\u6027\u80ba\u708e \u5165\u9662\u5bfe\u5fdc\u30c4\u30fc\u30eb", group:"\u5165\u9662\u5bfe\u5fdc", path:"1_MKM/%E8%AA%A4%E5%9A%A5%E6%80%A7%E8%82%BA%E7%82%8E_%E5%85%A5%E9%99%A2%E5%AF%BE%E5%BF%9C.html" },
-  { id:"3f792398", name:"\u9ad8\u30ca\u30c8\u30ea\u30a6\u30e0\u8840\u75c7 \u5165\u9662\u5bfe\u5fdc\u30c4\u30fc\u30eb", group:"\u5165\u9662\u5bfe\u5fdc", path:"1_MKM/%E9%AB%98%E3%83%8A%E3%83%88%E3%83%AA%E3%82%A6%E3%83%A0%E8%A1%80%E7%97%87_%E5%85%A5%E9%99%A2%E5%AF%BE%E5%BF%9C.html" },
-  { id:"2bbb649a", name:"\u9ad8\u30ab\u30ea\u30a6\u30e0\u8840\u75c7 \u5165\u9662\u5bfe\u5fdc\u30c4\u30fc\u30eb", group:"\u5165\u9662\u5bfe\u5fdc", path:"1_MKM/%E9%AB%98%E3%82%AB%E3%83%AA%E3%82%A6%E3%83%A0%E8%A1%80%E7%97%87_%E5%85%A5%E9%99%A2%E5%AF%BE%E5%BF%9C.html" },
-  { id:"e01d2bb7", name:"\u5165\u9662\u60a3\u8005\u306e\u6804\u990a\u7ba1\u7406\u30c4\u30fc\u30eb", group:"\u5165\u9662\u5bfe\u5fdc", path:"1_MKM/%E5%85%A5%E9%99%A2%E6%82%A3%E8%80%85%E3%81%AE%E6%A0%84%E9%A4%8A%E7%AE%A1%E7%90%86.html" },
-  { id:"3d91f83c", name:"\u4f4e\u30ca\u30c8\u30ea\u30a6\u30e0\u8840\u75c7 \u5165\u9662\u5bfe\u5fdc\u30c4\u30fc\u30eb", group:"\u5165\u9662\u5bfe\u5fdc", path:"1_MKM/%E4%BD%8E%E3%83%8A%E3%83%88%E3%83%AA%E3%82%A6%E3%83%A0%E8%A1%80%E7%97%87_%E5%85%A5%E9%99%A2%E5%AF%BE%E5%BF%9C.html" },
-  { id:"67e185f3", name:"\u4f4e\u30ab\u30ea\u30a6\u30e0\u8840\u75c7 \u5165\u9662\u5bfe\u5fdc\u30c4\u30fc\u30eb", group:"\u5165\u9662\u5bfe\u5fdc", path:"1_MKM/%E4%BD%8E%E3%82%AB%E3%83%AA%E3%82%A6%E3%83%A0%E8%A1%80%E7%97%87_%E5%85%A5%E9%99%A2%E5%AF%BE%E5%BF%9C.html" },
-  { id:"f8547b51", name:"DKA \u5165\u9662\u5bfe\u5fdc\u30c4\u30fc\u30eb", group:"\u5165\u9662\u5bfe\u5fdc", path:"1_MKM/DKA_%E5%85%A5%E9%99%A2%E5%AF%BE%E5%BF%9C.html" },
-  { id:"3d4db8fc", name:"\u5171\u540c\u610f\u601d\u6c7a\u5b9a\uff08SDM\uff093\u30b9\u30c6\u30fc\u30b8\u30d7\u30ed\u30c8\u30b3\u30eb \u8a3a\u7642\u30d5\u30ed\u30fc\u30fb\u30d5\u30ec\u30fc\u30ba\u96c6", group:"\u8a3a\u7642\u30d5\u30ed\u30fc", path:"1_MKM/%E5%85%B1%E5%90%8C%E6%84%8F%E6%80%9D%E6%B1%BA%E5%AE%9A_3%E3%82%B9%E3%83%86%E3%83%BC%E3%82%B8%E3%83%97%E3%83%AD%E3%83%88%E3%82%B3%E3%83%AB_%E3%83%95%E3%83%AD%E3%83%BC%E3%83%81%E3%83%A3%E3%83%BC%E3%83%88.html" },
-  { id:"4e39b093", name:"\u8ca7\u8840 \u8a3a\u7642\u30d5\u30ed\u30fc\u30c4\u30fc\u30eb", group:"\u8a3a\u7642\u30d5\u30ed\u30fc", path:"1_MKM/%E8%B2%A7%E8%A1%80_%E8%A8%BA%E7%99%82%E3%83%95%E3%83%AD%E3%83%BC.html" },
-  { id:"46cc4781", name:"\u8a8d\u77e5\u75c7\u8a3a\u7642\u30d5\u30ed\u30fc \u5916\u6765\u30fb\u75c5\u68df \u65e9\u898b\uff08GL2017\uff0bBPSD\u7b2c3\u72482025\uff09", group:"\u8a3a\u7642\u30d5\u30ed\u30fc", path:"1_MKM/%E8%AA%8D%E7%9F%A5%E7%97%87%E8%A8%BA%E7%99%82%E3%83%95%E3%83%AD%E3%83%BC_%E3%83%95%E3%83%AD%E3%83%BC%E3%83%81%E3%83%A3%E3%83%BC%E3%83%88.html" },
-  { id:"5fb8b62a", name:"\u5e02\u4e2d\u80ba\u708e \u8a3a\u7642\u30d5\u30ed\u30fc\u30fb\u65e9\u898b\u8868\uff08\u5916\u6765\u301cICU\uff09", group:"\u8a3a\u7642\u30d5\u30ed\u30fc", path:"1_MKM/%E5%B8%82%E4%B8%AD%E8%82%BA%E7%82%8E%E8%A8%BA%E7%99%82%E3%83%95%E3%83%AD%E3%83%BC_%E3%83%95%E3%83%AD%E3%83%BC%E3%83%81%E3%83%A3%E3%83%BC%E3%83%88.html" },
-  { id:"e308a951", name:"\u7de9\u548c\u533b\u7642 \u5b9f\u8df5\u30d5\u30ed\u30fc \u2015 \u65e5\u672c\u7de9\u548c\u533b\u7642\u5b66\u4f1a\u30ac\u30a4\u30c9\u30e9\u30a4\u30f3\u6a2a\u65ad\u65e9\u898b", group:"\u8a3a\u7642\u30d5\u30ed\u30fc", path:"1_MKM/%E7%B7%A9%E5%92%8C%E5%8C%BB%E7%99%82_%E5%AE%9F%E8%B7%B5%E3%83%95%E3%83%AD%E3%83%BC_%E3%83%95%E3%83%AD%E3%83%BC%E3%83%81%E3%83%A3%E3%83%BC%E3%83%88.html" },
-  { id:"4545efbf", name:"\u5fc3\u4e0d\u5168\u8a3a\u7642GL2025 \u8a3a\u7642\u30d5\u30ed\u30fc\u30fb\u5b9f\u52d9\u65e9\u898b", group:"\u8a3a\u7642\u30d5\u30ed\u30fc", path:"1_MKM/%E5%BF%83%E4%B8%8D%E5%85%A8%E8%A8%BA%E7%99%82GL2025_%E3%83%95%E3%83%AD%E3%83%BC%E3%83%81%E3%83%A3%E3%83%BC%E3%83%88.html" },
-  { id:"1126825a", name:"\u5931\u795e \u8a3a\u7642\u30d5\u30ed\u30fc\u30fb\u65e9\u898b\u8868\uff08NEJM 2026 \u7dcf\u8aac\u6e96\u62e0\uff09", group:"\u8a3a\u7642\u30d5\u30ed\u30fc", path:"1_MKM/%E5%A4%B1%E7%A5%9E%E8%A8%BA%E7%99%82%E3%83%95%E3%83%AD%E3%83%BC_%E3%83%95%E3%83%AD%E3%83%BC%E3%83%81%E3%83%A3%E3%83%BC%E3%83%88.html" },
-  { id:"2265b0f5", name:"\u3081\u307e\u3044\u8a3a\u7642\u30d5\u30ed\u30fc\u30c1\u30e3\u30fc\u30c8\u30fb\u65e9\u898b\u8868\uff08\u65e5\u672c\u3081\u307e\u3044\u5e73\u8861\u533b\u5b66\u4f1a 2019\uff0f\u65e5\u672c\u795e\u7d4c\u6cbb\u7642\u5b66\u4f1a 2020 \u307b\u304b\uff09", group:"\u8a3a\u7642\u30d5\u30ed\u30fc", path:"1_MKM/%E3%82%81%E3%81%BE%E3%81%84%E8%A8%BA%E7%99%82%E3%83%95%E3%83%AD%E3%83%BC_%E3%83%95%E3%83%AD%E3%83%BC%E3%83%81%E3%83%A3%E3%83%BC%E3%83%88.html" },
-  { id:"6381feac", name:"\u8133\u5352\u4e2d \u8a3a\u7642\u30d5\u30ed\u30fc \u2015 GL2021\u3014\u6539\u8a022025\u3015\u5b9f\u52d9\u7248", group:"\u8a3a\u7642\u30d5\u30ed\u30fc", path:"1_MKM/%E8%84%B3%E5%8D%92%E4%B8%AD%E6%B2%BB%E7%99%82GL2025_%E3%83%95%E3%83%AD%E3%83%BC%E3%83%81%E3%83%A3%E3%83%BC%E3%83%88.html" },
-  { id:"169169b1", name:"\u9ad8\u9f62\u8005\u30dd\u30ea\u30d5\u30a1\u30fc\u30de\u30b7\u30fc \u51e6\u65b9\u898b\u76f4\u3057\u652f\u63f4\u30c4\u30fc\u30eb", group:"\u8a08\u7b97\u30fb\u5224\u65ad\u30c4\u30fc\u30eb", path:"1_MKM/%E3%83%9D%E3%83%AA%E3%83%95%E3%82%A1%E3%83%BC%E3%83%9E%E3%82%B7%E3%83%BC_%E5%87%A6%E6%96%B9%E8%A6%8B%E7%9B%B4%E3%81%97%E3%83%84%E3%83%BC%E3%83%AB.html" },
-  { id:"91673da6", name:"\u98df\u4e8b\u6307\u5c0e\u30dc\u30fc\u30c9", group:"\u8a08\u7b97\u30fb\u5224\u65ad\u30c4\u30fc\u30eb", path:"1_MKM/%E9%A3%9F%E4%BA%8B%E6%8C%87%E5%B0%8E%E3%83%9C%E3%83%BC%E3%83%89.html" },
-  { id:"b887f02c", name:"\u653e\u5c04\u7dda\u88ab\u3070\u304f \u30ea\u30b9\u30af\u7ba1\u7406\u3068\u7dda\u91cf\u65e9\u898b", group:"\u8a08\u7b97\u30fb\u5224\u65ad\u30c4\u30fc\u30eb", path:"1_MKM/%E6%94%BE%E5%B0%84%E7%B7%9A%E8%A2%AB%E3%81%B0%E3%81%8F_%E3%83%AA%E3%82%B9%E3%82%AF%E7%AE%A1%E7%90%86%E3%81%A8%E7%B7%9A%E9%87%8F%E6%97%A9%E8%A6%8B.html" },
-  { id:"990d7f5d", name:"\u598a\u5a20\u3068\u653e\u5c04\u7dda\u691c\u67fb \u5224\u65ad\u30c4\u30fc\u30eb", group:"\u8a08\u7b97\u30fb\u5224\u65ad\u30c4\u30fc\u30eb", path:"1_MKM/%E5%A6%8A%E5%A8%A0%E3%81%A8%E6%94%BE%E5%B0%84%E7%B7%9A%E6%A4%9C%E6%9F%BB_%E5%88%A4%E6%96%AD%E3%83%84%E3%83%BC%E3%83%AB.html" },
-  { id:"48479b6d", name:"\u7cbe\u795e\u79d1\u30fb\u7523\u696d\u4fdd\u5065\u30b9\u30b1\u30fc\u30eb \u63a1\u70b9\u30c4\u30fc\u30eb", group:"\u8a08\u7b97\u30fb\u5224\u65ad\u30c4\u30fc\u30eb", path:"1_MKM/%E7%B2%BE%E7%A5%9E%E7%A7%91%E3%83%BB%E7%94%A3%E6%A5%AD%E4%BF%9D%E5%81%A5%E3%82%B9%E3%82%B1%E3%83%BC%E3%83%AB_%E6%8E%A1%E7%82%B9%E3%83%84%E3%83%BC%E3%83%AB.html" },
-  { id:"9752951b", name:"USPSTF \u4e88\u9632\u533b\u7642 \u65e5\u672c\u8a9e\u65e9\u898b\uff08\u672c\u4eba\u9650\u5b9a\u30fb\u975e\u516c\u5f0f\uff09", group:"\u8a08\u7b97\u30fb\u5224\u65ad\u30c4\u30fc\u30eb", path:"3_%E6%96%B0%E8%A6%8F%E4%BA%8B%E6%A5%AD%E9%83%A8/uspstf-yobo-ja.html" },
-  { id:"642f4134", name:"\u6297\u83cc\u85ac\u6295\u4e0e\u91cf\u30b7\u30df\u30e5\u30ec\u30fc\u30bf\u30fc", group:"\u8a08\u7b97\u30fb\u5224\u65ad\u30c4\u30fc\u30eb", path:"1_MKM/%E6%8A%97%E8%8F%8C%E8%96%AC%E6%8A%95%E4%B8%8E%E9%87%8F%E3%82%B7%E3%83%9F%E3%83%A5%E3%83%AC%E3%83%BC%E3%82%BF%E3%83%BC.html" },
-  { id:"696b4baf", name:"\u6771\u5927\u5f0f\u30a8\u30b4\u30b0\u30e9\u30e0\uff08TEG\uff09\u63a1\u70b9\u30c4\u30fc\u30eb", group:"\u8a08\u7b97\u30fb\u5224\u65ad\u30c4\u30fc\u30eb", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/TEG3_%E6%8E%A1%E7%82%B9%E3%83%84%E3%83%BC%E3%83%AB.html" },
-  { id:"fb2203c1", name:"\u5fc3\u30a8\u30b3\u30fc \u30d9\u30c3\u30c9\u30b5\u30a4\u30c9\u30ac\u30a4\u30c9", group:"\u624b\u6280\u30fb\u30c8\u30ec\u30fc\u30cb\u30f3\u30b0", path:"1_MKM/%E5%BF%83%E3%82%A8%E3%82%B3%E3%83%BC_%E3%83%99%E3%83%83%E3%83%89%E3%82%B5%E3%82%A4%E3%83%89%E3%82%AC%E3%82%A4%E3%83%89.html" },
-  { id:"24570313", name:"ACLS\uff0fPALS \u30e1\u30ac\u30b3\u30fc\u30c9\u30fb\u30c8\u30ec\u30fc\u30ca\u30fc\uff08\u5fc3\u505c\u6b62\u30fb\u8108\u3042\u308a\u4e0d\u6574\u8108\uff09", group:"\u624b\u6280\u30fb\u30c8\u30ec\u30fc\u30cb\u30f3\u30b0", path:"1_MKM/ACLS%E3%83%A1%E3%82%AC%E3%82%B3%E3%83%BC%E3%83%89%E3%83%88%E3%83%AC%E3%83%BC%E3%83%8A%E3%83%BC.html" },
-  { id:"bbbc6a79", name:"\u98f2\u9152\u7fd2\u6163\u306e\u8cea\u554f\u7968\uff08AUDIT\uff09\uff5c\u85e4\u7530\u7dcf\u8a3a \u554f\u8a3a\u7968", group:"\u554f\u8a3a\u7968", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E5%95%8F%E8%A8%BA%E7%A5%A8_AUDIT.html" },
-  { id:"671644bd", name:"\u554f\u8a3a\u7968\u30bb\u30c3\u30c8\uff08\u7dcf\u5408\u8a3a\u7642\u79d1\uff09", group:"\u554f\u8a3a\u7968", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E5%95%8F%E8%A8%BA%E7%A5%A8%E3%82%BB%E3%83%83%E3%83%88.html" },
-  { id:"6e29585f", name:"\u98f2\u9152\u306b\u95a2\u3059\u308b\u8cea\u554f\u7968\uff08CAGE\uff09\uff5c\u85e4\u7530\u7dcf\u8a3a \u554f\u8a3a\u7968", group:"\u554f\u8a3a\u7968", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E5%95%8F%E8%A8%BA%E7%A5%A8_CAGE.html" },
-  { id:"4cf36999", name:"\u98f2\u9152\u7fd2\u6163\u306e\u8cea\u554f\u7968\uff08AUDIT-C\uff09\uff5c\u85e4\u7530\u7dcf\u8a3a \u554f\u8a3a\u7968", group:"\u554f\u8a3a\u7968", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E5%95%8F%E8%A8%BA%E7%A5%A8_AUDIT-C.html" },
-  { id:"feaa893d", name:"\u524d\u7acb\u817a\u75c7\u72b6\u306e\u8cea\u554f\u7968\uff08IPSS\u30fbQOL\u30b9\u30b3\u30a2\uff09\uff5c\u85e4\u7530\u7dcf\u8a3a \u554f\u8a3a\u7968", group:"\u554f\u8a3a\u7968", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E5%95%8F%E8%A8%BA%E7%A5%A8_IPSS-QOL.html" },
-  { id:"20cb6afc", name:"\u904e\u6d3b\u52d5\u8180\u80f1\u306e\u8cea\u554f\u7968\uff08OABSS\uff09\uff5c\u85e4\u7530\u7dcf\u8a3a \u554f\u8a3a\u7968", group:"\u554f\u8a3a\u7968", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E5%95%8F%E8%A8%BA%E7%A5%A8_OABSS.html" },
-  { id:"8b753a20", name:"\u6210\u4ebaADHD\u306e\u8cea\u554f\u7968\uff08ASRS-v1.1 \u30d1\u30fc\u30c8A\uff09\uff5c\u85e4\u7530\u7dcf\u8a3a \u554f\u8a3a\u7968", group:"\u554f\u8a3a\u7968", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E5%95%8F%E8%A8%BA%E7%A5%A8_ASRS.html" },
-  { id:"4cde35c9", name:"\u7761\u7720\u6642\u7121\u547c\u5438\u306e\u8cea\u554f\u7968\uff08STOP-Bang\uff09\uff5c\u85e4\u7530\u7dcf\u8a3a \u554f\u8a3a\u7968", group:"\u554f\u8a3a\u7968", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E5%95%8F%E8%A8%BA%E7%A5%A8_STOP-Bang.html" },
-  { id:"f240a1de", name:"\u304b\u3089\u3060\u306e\u75c7\u72b6\u306e\u8cea\u554f\u7968\uff08PHQ-15\uff09\uff5c\u85e4\u7530\u7dcf\u8a3a \u554f\u8a3a\u7968", group:"\u554f\u8a3a\u7968", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E5%95%8F%E8%A8%BA%E7%A5%A8_PHQ-15.html" },
-  { id:"4efae89b", name:"\u4e0d\u5b89\u306e\u8cea\u554f\u7968\uff08GAD-7\uff09\uff5c\u85e4\u7530\u7dcf\u8a3a \u554f\u8a3a\u7968", group:"\u554f\u8a3a\u7968", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E5%95%8F%E8%A8%BA%E7%A5%A8_GAD-7.html" },
-  { id:"5d982ebd", name:"\u3053\u3053\u308d\u306e\u8cea\u554f\u7968\uff08PHQ-9\uff09\uff5c\u85e4\u7530\u7dcf\u8a3a \u554f\u8a3a\u7968", group:"\u554f\u8a3a\u7968", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E5%95%8F%E8%A8%BA%E7%A5%A8_PHQ-9.html" },
-  { id:"cc2fb0a0", name:"\u6771\u5927\u5f0f\u30a8\u30b4\u30b0\u30e9\u30e0\uff08TEG\uff09\u8a18\u5165\u7528\u7d19", group:"\u554f\u8a3a\u7968", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/TEG3_%E8%A8%98%E5%85%A5%E7%94%A8%E7%B4%99.html" },
-  { id:"18e1d68b", name:"\u5fc3\u623f\u7d30\u52d5 \u2015 \u6cbb\u7642\u3092\u306f\u3058\u3081\u308b\u65b9\u3078", group:"\u60a3\u8005\u8aac\u660e", path:"1_MKM/%E6%82%A3%E8%80%85%E8%AA%AC%E6%98%8E_%E5%BF%83%E6%88%BF%E7%B4%B0%E5%8B%95_%E6%B2%BB%E7%99%82%E3%82%92%E3%81%AF%E3%81%98%E3%82%81%E3%82%8B%E6%96%B9%E3%81%B8.html" },
-  { id:"c5bf1b3f", name:"\u52e4\u6020\u5165\u529b\u30de\u30cb\u30e5\u30a2\u30eb\uff08\u5ca1\u5d0e\uff09", group:"\u53c2\u8003\u8cc7\u6599", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E5%8B%A4%E6%80%A0%E5%85%A5%E5%8A%9B%E3%83%9E%E3%83%8B%E3%83%A5%E3%82%A2%E3%83%AB_%E5%B2%A1%E5%B4%8E.html" },
-  { id:"392bbe37", name:"ER\u81e8\u5e8a\u63a8\u8ad6\u30d5\u30ec\u30fc\u30e0\u30ef\u30fc\u30af", group:"\u53c2\u8003\u8cc7\u6599", path:"1_MKM/ER%E8%87%A8%E5%BA%8A%E6%8E%A8%E8%AB%96%E3%83%95%E3%83%AC%E3%83%BC%E3%83%A0%E3%83%AF%E3%83%BC%E3%82%AF.html" },
-  { id:"75e0aa88", name:"\u7cbe\u795e\u79d1\u30fb\u7523\u696d\u4fdd\u5065\u30b9\u30b1\u30fc\u30eb \u4f7f\u3044\u5206\u3051\u30ac\u30a4\u30c9", group:"\u53c2\u8003\u8cc7\u6599", path:"1_MKM/%E7%B2%BE%E7%A5%9E%E7%A7%91%E3%83%BB%E7%94%A3%E6%A5%AD%E4%BF%9D%E5%81%A5%E3%82%B9%E3%82%B1%E3%83%BC%E3%83%AB_%E4%BD%BF%E3%81%84%E5%88%86%E3%81%91%E3%82%AC%E3%82%A4%E3%83%89.html" },
-  { id:"c9b7fd8b", name:"\u4eba\u751f\u306e\u6700\u7d42\u6bb5\u968e\u306e\u533b\u7642\u3068\u30b1\u30a2\uff5c\u7acb\u5834\u8868\u660e2025 \u5b9f\u8df5\u30ac\u30a4\u30c9", group:"\u53c2\u8003\u8cc7\u6599", path:"1_MKM/%E4%BA%BA%E7%94%9F%E3%81%AE%E6%9C%80%E7%B5%82%E6%AE%B5%E9%9A%8E%E3%81%AE%E5%8C%BB%E7%99%82%E3%81%A8%E3%82%B1%E3%82%A2_%E7%AB%8B%E5%A0%B4%E8%A1%A8%E6%98%8E2025.html" },
-  { id:"57f20b9e", name:"\u30ec\u30b8\u30c7\u30a4\u5e74\u9593\u4e88\u5b9a\u8868 2026\u5e74\u5ea6", group:"\u53c2\u8003\u8cc7\u6599", path:"2_%E8%A8%BA%E7%99%82%E9%83%A8/%E3%83%AC%E3%82%B8%E3%83%87%E3%82%A4%E5%B9%B4%E9%96%93%E4%BA%88%E5%AE%9A%E8%A1%A8_2026%E5%B9%B4%E5%BA%A6.html" }
-];
-// <<< clover-links
-
-// Registry paths only: a value that is not a plain relative path (an absolute
-// URL, a javascript: scheme, a parent-directory hop) is refused rather than
-// handed to window.open.
-function cloverUrl(path){
-  var p = String(path || "");
-  return /^[A-Za-z0-9_%.\-]+(\/[A-Za-z0-9_%.\-]+)*$/.test(p) && p.indexOf("..") < 0 ? VAULT_HTML_URL + p : "";
-}
-
-function openCloverPage(path){
-  var url = cloverUrl(path);
-  if (url) window.open(url, "_blank", "noopener");
-}
-
-// Same pages, opened from a patient (2026-07-31). Opening a reference is the
-// visible end of a clinical question, and that question is the thing that used
-// to evaporate — so the title (never the URL, never patient data) is recorded
-// as a kind:"ref" entry on the case. Opened from the tab instead? Then no case
-// is involved and nothing is recorded: the link is NOT guessed onto whichever
-// patient was last on screen.
-function openCloverPageForCase(caseId, linkId){
-  var link = CLOVER_LINKS.find(function(x){ return x.id === linkId; });
-  if (!link) return;
-  openCloverPage(link.path);
-  var c = DB.cases.find(function(x){ return x.id === caseId; });
-  if (!c) return;
-  var today = todayISO();
-  var name = link.name || link.id;
-  // Re-opening the same sheet for the same patient on the same day is one
-  // question, not two.
-  if (cloneArr(c.refLogs).some(function(x){ return x && x.date === today && x.text === name; })) return;
-  addListItem("refLogs", caseId, name, null, function(t){ return { id:uid(), text:t, date:today }; });
-}
-
-function openCaseRefSheet(caseId){
-  navNoteSheetOpen();
-  SHEET.name = "caseRef";
-  SHEET.draft = { caseId:caseId };
-  renderSheet();
-}
-
-function renderCaseRefSheet(){
-  var caseId = (SHEET.draft && SHEET.draft.caseId) || "";
-  var rows = '', group = '';
-  CLOVER_LINKS.forEach(function(link){
-    if (link.group !== group) {
-      group = link.group;
-      rows += '<div class="fieldlabel">' + esc(group) + '</div>';
-    }
-    rows += cloverRow(link.name, "openCloverPageForCase('" + esc(caseId) + "','" + esc(link.id) + "')");
-  });
-  return '<div class="sheetcard"><div class="sheettitle">' + esc(STR.refLogPanel) + '</div><div class="stack">' + rows +
-    cloverRow(STR.cloverIndexRow, "openVaultHtml()") +
-    '<div class="note">' + esc(STR.refSheetNote) + '</div>' +
-    '<div class="row wrap"><button class="ghostbtn" onclick="closeSheet()">' + esc(STR.cancel) + '</button></div>' +
-  '</div></div>';
-}
+// What this drops: 開いた資料 is no longer recorded when a page is opened
+// from a patient (there is no list to pick from, so there is nothing to
+// name). Entries already stored stay readable in the course panel and in
+// the discharge export — kind:"ref" rows are still rendered everywhere.
 var AI = { caseId:"", status:"", text:"" };
 
 function aiToken(){
@@ -7219,15 +7109,6 @@ function renderCalcTabBody(){
   '</div></section>';
 }
 
-// ---- clover-pages rows (reference sheet only) -------------------------------
-// The tab itself no longer draws a list — it opens clover-pages (VIEW_TABS,
-// 2026-08-19). These rows are still what the reference sheet on a case is made
-// of, because opening a page from a patient is what gets recorded.
-function cloverRow(label, handler){
-  // min-width:0 so a long published title wraps instead of pushing the arrow
-  // off the row — titles now come from clover-pages as-is, up to ~50 characters.
-  return '<button class="lineitem" style="width:100%;text-align:left" onclick="' + handler + '"><span class="text" style="flex:1;min-width:0">' + esc(label) + '</span><span class="faint">↗</span></button>';
-}
 
 // ---- learning conquest map tab (retro-RPG theme, styling under .learnrpg) ---
 // One state per territory: fog (untouched) / frontier (unmastered learnings) /
@@ -7482,7 +7363,7 @@ renderDetail = function(caseId){
     }).join('') + '</nav>' +
     renderAdmissionPanel(c) +
     '<section class="panelcard sec-phase"><div class="one">' + esc(DB.config.labels.phase) + '</div><div class="field" style="margin-top:10px"><input class="input" value="' + esc(c.phaseNote) + '" placeholder="' + esc(STR.firstNotePh) + '" onblur="updateCasePhase(\'' + esc(c.id) + '\',this.value)" onkeydown="if(event.key===\'Enter\'&&!event.isComposing){this.blur()}"></div></section>' +
-    '<section class="panelcard"><div class="row"><button class="ghostbtn" style="flex:1" onclick="openPlanSheet(\'' + esc(c.id) + '\')">' + esc(STR.addPlanBtn) + '</button><button class="ghostbtn" style="flex:1" onclick="openCalcSheet(\'' + esc(c.id) + '\')">' + esc(STR.calcBtn) + '</button><button class="ghostbtn" style="flex:1" onclick="openCaseRefSheet(\'' + esc(c.id) + '\')">' + esc(STR.refOpenBtn) + '</button></div></section>' +
+    '<section class="panelcard"><div class="row"><button class="ghostbtn" style="flex:1" onclick="openPlanSheet(\'' + esc(c.id) + '\')">' + esc(STR.addPlanBtn) + '</button><button class="ghostbtn" style="flex:1" onclick="openCalcSheet(\'' + esc(c.id) + '\')">' + esc(STR.calcBtn) + '</button><button class="ghostbtn" style="flex:1" onclick="openVaultHtml()">' + esc(STR.refOpenBtn) + '</button></div></section>' +
     renderCalcPanel(c) +
     (dischargeInline ? dischargePanel : '') +
     renderSectionCard(DB.config.labels.task, renderTaskList(c), "taskInput", STR.taskPh, "addTask", c.id, "sec-task", "anc-task") +
@@ -7510,8 +7391,7 @@ renderSheet = function(){
     chartItem:renderChartItemSheet, chartValue:renderChartValueSheet, chartEventCell:renderChartEventCellSheet,
     chartDay:renderChartDaySheet,
     plan:renderPlanSheet,
-    calc:renderCalcSheet,
-    caseRef:renderCaseRefSheet
+    calc:renderCalcSheet
   };
   var html = renderers[SHEET.name] ? renderers[SHEET.name]() : "";
   el.className = "sheet" + (html ? " open" : "");

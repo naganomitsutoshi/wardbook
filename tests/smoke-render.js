@@ -541,37 +541,22 @@ vm.runInContext("setBoardMode('board')", sandbox);
 
 // clover-pages tab (CEO 2026-08-19): it has no screen of its own — pressing it
 // opens clover-pages, where the index, the search box and the ★ favourites
-// already are. Copying 43 rows into the app was too many to scan.
-const cloverPaths = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.path))", sandbox));
-const cloverNames = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.name))", sandbox));
-const cloverGroups = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.group))", sandbox));
-const cloverIds = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.id))", sandbox));
-if (!cloverPaths.length) fail("clover registry is empty");
-if (new Set(cloverIds).size !== cloverIds.length) fail("clover link ids must be unique");
-// The registry is generated from clover-pages (tools/sync-clover-links.ps1), so
-// labels now travel with the rows instead of living in STR. A blank one would
-// render an unreadable button, and a blank group would drop a heading.
-if (cloverNames.some(function(n){ return !n; })) fail("clover link has no label");
-if (cloverGroups.some(function(g){ return !g; })) fail("clover link has no group heading");
-// A path the guard refuses would render a dead row, so check the URL builder.
-cloverPaths.forEach(function(path){
-  if (!vm.runInContext("cloverUrl(" + JSON.stringify(path) + ")", sandbox)) fail("clover path refused by the guard: " + path);
-});
-// The tab row: clover opens the site directly and never shows as the current
-// screen, while an ordinary tab still switches screens.
+// already are. Copying the published pages in here produced 43 rows, too many
+// to scan, so the app now holds no list of pages at all.
+if (vm.runInContext("typeof CLOVER_LINKS", sandbox) !== "undefined") fail("the app must not carry a list of published pages");
 vm.runInContext("setBoardMode('board')", sandbox);
 const barHtml = vm.runInContext("renderBoard()", sandbox);
 if (!barHtml.includes('onclick="openVaultHtml()"')) fail("clover tab must open clover-pages itself");
 if (barHtml.includes("setBoardMode('clover')")) fail("clover tab must not switch to a screen of its own");
 if (!barHtml.includes("↗")) fail("the external tab must be marked as leaving the app");
+// Only the index is ever opened, and only over https to clover-pages.
+vm.runInContext("window.opened = []; openVaultHtml();", sandbox);
+const indexUrl = vm.runInContext("window.opened.slice(-1)[0]", sandbox);
+if (indexUrl !== "https://clover-pages.naganomitsutoshi.workers.dev/") fail("openVaultHtml opened the wrong URL: " + indexUrl);
 // A device left on the retired list screen must land on the board, not on an
 // empty panel.
 vm.runInContext("setBoardMode('clover')", sandbox);
 if (vm.runInContext("VIEW.boardMode", sandbox) !== "board") fail("an external tab must not become the current screen");
-// window.open takes registry paths only.
-["https://example.com/x.html", "javascript:alert(1)", "1_MKM/../secret.html", "//evil.test/x"].forEach(function(bad){
-  if (vm.runInContext("cloverUrl(" + JSON.stringify(bad) + ")", sandbox)) fail("cloverUrl accepted a non-registry path: " + bad);
-});
 vm.runInContext("setBoardMode('board')", sandbox);
 
 // Calculator tab (patient-less). It sits in the tab row beside board／
@@ -953,23 +938,22 @@ if (!courseHtml.includes("courseday")) fail("course panel drew no day headings")
 if (!courseHtml.includes(vm.runInContext("STR.courseWaitClosed", sandbox))) fail("course panel missing the resolved wait");
 // The stage history has been stored since day one and was never drawn anywhere.
 if (!courseHtml.includes(vm.runInContext("STR.courseStage", sandbox))) fail("course panel missing the phase history");
-// Opening a reference from a case records its title only — never the URL, and
-// never anything about the patient. The registry is generated, so this drives
-// whichever row happens to be first rather than a hand-written id.
-const refLink = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS[0])", sandbox));
-vm.runInContext("openCloverPageForCase('c1'," + JSON.stringify(refLink.id) + ");", sandbox);
+// 開いた資料 is no longer recorded when a page is opened (CEO 2026-08-19: the
+// case screen opens clover-pages directly, so there is no picked title to
+// name). Entries stored by earlier versions must stay readable — that is the
+// whole reason the kind:"ref" rows were kept.
+if (vm.runInContext("typeof openCloverPageForCase", sandbox) !== "undefined") fail("recording a reference should be gone with the picker");
+const refName = "参照テスト資料";
+vm.runInContext(
+  "DB.cases.find(c=>c.id==='c1').refLogs = [{ id:'ref-old', text:" + JSON.stringify(refName) + ", date:todayISO() }];",
+  sandbox
+);
 const refRow = vm.runInContext("JSON.stringify(DB.cases.find(c=>c.id==='c1').refLogs)", sandbox);
-if (!refRow.includes(refLink.name)) fail("opening a reference from a case must record it");
+if (!refRow.includes(refName)) fail("an existing reference entry must survive");
 if (refRow.includes("http") || refRow.includes(".html")) fail("reference log must not store URLs");
-// The page still has to open, and only through the registry-path guard.
-const openedUrl = vm.runInContext("window.opened.slice(-1)[0]", sandbox);
-if (!openedUrl || openedUrl.indexOf("https://clover-pages.") !== 0) fail("reference did not open a clover-pages URL: " + openedUrl);
-// Re-opening the same sheet the same day is one question, not two.
-vm.runInContext("openCloverPageForCase('c1'," + JSON.stringify(refLink.id) + ");", sandbox);
-if (vm.runInContext("DB.cases.find(c=>c.id==='c1').refLogs.length", sandbox) !== 1) fail("same reference, same day must not stack duplicates");
 // Footprints must not widen the AI boundary.
 const aiPayloadAfter = JSON.stringify(JSON.parse(vm.runInContext("JSON.stringify(aiFeedbackPayload(DB.cases.find(c=>c.id==='c1')))", sandbox)));
-["doneOn", "closedOn", "openedOn", "refLogs", refLink.name].forEach((leak) => {
+["doneOn", "closedOn", "openedOn", "refLogs", refName].forEach((leak) => {
   if (aiPayloadAfter.includes(leak)) fail("footprint leaked into the AI payload: " + leak);
 });
 // The export must carry the course, or a discharged case is unreadable outside.
