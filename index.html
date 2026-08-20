@@ -2960,10 +2960,17 @@ function learnBadges(stats){
 // barely used, and clover-pages (opened many times a day) was three taps deep
 // behind the calculator list. The two views' code and logic stay in the file
 // unreachable, so restoring either is a one-line change here.
+//   external:"…"  = the tab has no screen of its own; pressing it runs this and
+//                   leaves the current screen where it is (never looks selected)
+//
+// 2026-08-19 (CEO): clover-pages became such a tab. Copying its index into the
+// app produced 43 rows — too many to scan, and any subset would need a second
+// list to maintain. Pressing the tab now opens clover-pages itself, which is
+// where the index, the search box and the ★ favourites already live.
 var VIEW_TABS = [
   { id:"board",  labelKey:"boardView" },
   { id:"calc",   labelKey:"scoreView", scratch:true },
-  { id:"clover", labelKey:"cloverView" },
+  { id:"clover", labelKey:"cloverView", external:"openVaultHtml()" },
   { id:"learn",  labelKey:"learnView" }
 ];
 
@@ -2973,9 +2980,12 @@ function viewTabById(id){
 }
 
 // An unknown tab id (older device, dropped tab, corrupted state) falls back to
-// the board rather than rendering nothing.
+// the board rather than rendering nothing. A tab that only opens something
+// external has no screen to restore either — a device that was left on the old
+// clover-pages list lands on the board instead of an empty panel.
 function normalizeViewTab(id){
-  return viewTabById(String(id || "")) ? String(id) : VIEW_TABS[0].id;
+  var tab = viewTabById(String(id || ""));
+  return tab && !tab.external ? String(id) : VIEW_TABS[0].id;
 }
 
 // ---- nudges (2026-07-31, Phase 2) -----------------------------------------
@@ -3566,7 +3576,6 @@ const STR = {
   menuBtn:"☰",
   cloverView:"clover-pages",
   cloverIndexRow:"\u76ee\u6b21\uff08\u5168\u90e8\uff09\u3092\u898b\u308b",
-  cloverNote:"clover-pages \u3092\u65b0\u3057\u3044\u30bf\u30d6\u3067\u958b\u304d\u307e\u3059\uff08\u60a3\u8005\u30c7\u30fc\u30bf\u306f\u9001\u308a\u307e\u305b\u3093\uff09",
   backOnLabel:"戻り日（不明なら空欄）",
   editMeta:"年代・性別",
   confirm:"確定",
@@ -7210,30 +7219,14 @@ function renderCalcTabBody(){
   '</div></section>';
 }
 
-// ---- clover-pages tab -----------------------------------------------------
-// A link list and nothing else: the pages are published elsewhere, so this tab
-// holds no patient data and stores nothing. Group headings and order come
-// straight from CLOVER_LINKS, which is generated from the clover-pages index —
-// so the screen matches what is published, without a second list to maintain.
+// ---- clover-pages rows (reference sheet only) -------------------------------
+// The tab itself no longer draws a list — it opens clover-pages (VIEW_TABS,
+// 2026-08-19). These rows are still what the reference sheet on a case is made
+// of, because opening a page from a patient is what gets recorded.
 function cloverRow(label, handler){
   // min-width:0 so a long published title wraps instead of pushing the arrow
   // off the row — titles now come from clover-pages as-is, up to ~50 characters.
   return '<button class="lineitem" style="width:100%;text-align:left" onclick="' + handler + '"><span class="text" style="flex:1;min-width:0">' + esc(label) + '</span><span class="faint">↗</span></button>';
-}
-
-function renderCloverTabBody(){
-  var rows = '', group = '';
-  CLOVER_LINKS.forEach(function(link){
-    if (link.group !== group) {
-      group = link.group;
-      rows += '<div class="fieldlabel">' + esc(group) + '</div>';
-    }
-    rows += cloverRow(link.name, "openCloverPage('" + esc(link.path) + "')");
-  });
-  return '<section class="panelcard"><div class="stack">' + rows +
-    cloverRow(STR.cloverIndexRow, "openVaultHtml()") +
-    '<div class="note">' + esc(STR.cloverNote) + '</div>' +
-  '</div></section>';
 }
 
 // ---- learning conquest map tab (retro-RPG theme, styling under .learnrpg) ---
@@ -7433,13 +7426,17 @@ function renderWeekView(){
 var TAB_BODY = {
   board:renderCaseListView,
   calc:renderCalcTabBody,
-  clover:renderCloverTabBody,
   learn:renderLearnTabBody
 };
 
 function renderTabBar(mode){
   return '<div class="seg">' + VIEW_TABS.map(function(t){
-    return '<button class="chipbtn' + (t.id === mode ? ' on' : '') + '" onclick="setBoardMode(\'' + esc(t.id) + '\')">' + esc(STR[t.labelKey] || t.id) + '</button>';
+    // An external tab never shows as selected: the screen behind it does not
+    // change, so marking it "on" would lie about where you are. ↗ says so too.
+    var on = !t.external && t.id === mode ? ' on' : '';
+    var handler = t.external || ("setBoardMode('" + esc(t.id) + "')");
+    var label = esc(STR[t.labelKey] || t.id) + (t.external ? ' ↗' : '');
+    return '<button class="chipbtn' + on + '" onclick="' + handler + '">' + label + '</button>';
   }).join('') + '</div>';
 }
 

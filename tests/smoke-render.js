@@ -509,18 +509,25 @@ vm.runInContext("openCalcTool('vasc');", sandbox);
 if (!vm.runInContext("renderCalcSheet()", sandbox).includes(vm.runInContext("STR.calcVascJp", sandbox))) fail("CHA2DS2-VASc must state the Japanese starting rule");
 // Restore the fixture for later checks.
 vm.runInContext("['age','ast','alt','plt','bmi','cpEnceph','cpAscites','cpPbc','heltHt','heltAfType','heltStroke'].forEach(function(k){ updateCaseBio('c1',k,''); }); closeSheet();", sandbox);
-// Tab layer: every registered tab must have a body and a chip. This is what
-// makes "adding a screen" a data change — a tab declared without a body would
-// otherwise render blank only when tapped.
+// Tab layer: every registered tab must have a chip, and a tab with a screen of
+// its own must have a body. This is what makes "adding a screen" a data change
+// — a tab declared without a body would otherwise render blank only when
+// tapped. A tab marked external has no body on purpose; its chip runs that
+// snippet instead of switching screens.
 const tabIds = JSON.parse(vm.runInContext("JSON.stringify(VIEW_TABS.map(t=>t.id))", sandbox));
 tabIds.forEach(function(id){
-  if (vm.runInContext("typeof TAB_BODY[" + JSON.stringify(id) + "]", sandbox) !== "function") fail("tab has no body: " + id);
+  const external = vm.runInContext("viewTabById(" + JSON.stringify(id) + ").external || ''", sandbox);
+  const hasBody = vm.runInContext("typeof TAB_BODY[" + JSON.stringify(id) + "]", sandbox) === "function";
+  if (!external && !hasBody) fail("tab has no body: " + id);
+  if (external && hasBody) fail("an external tab must not also claim a screen: " + id);
   if (!vm.runInContext("STR[viewTabById(" + JSON.stringify(id) + ").labelKey]", sandbox)) fail("tab has no label: " + id);
 });
 vm.runInContext("setBoardMode('board')", sandbox);
 const tabBar = vm.runInContext("renderBoard()", sandbox);
 tabIds.forEach(function(id){
-  if (!tabBar.includes("setBoardMode('" + id + "')")) fail("tab row missing chip: " + id);
+  const external = vm.runInContext("viewTabById(" + JSON.stringify(id) + ").external || ''", sandbox);
+  const needle = external || "setBoardMode('" + id + "')";
+  if (!tabBar.includes(needle)) fail("tab row missing chip: " + id);
 });
 // An unknown tab (older device, dropped tab) falls back to the board.
 vm.runInContext("VIEW.boardMode='gone'", sandbox);
@@ -532,35 +539,35 @@ vm.runInContext("setBoardMode('board')", sandbox);
   if (tabBar.includes("setBoardMode('" + id + "')")) fail("retired tab still has a chip: " + id);
 });
 
-// clover-pages tab (CEO 2026-07-30): a link list, one tap from the board. Every
-// registry row must render as its own opener, and the index stays as the escape
-// hatch for pages that are not listed.
+// clover-pages tab (CEO 2026-08-19): it has no screen of its own — pressing it
+// opens clover-pages, where the index, the search box and the ★ favourites
+// already are. Copying 43 rows into the app was too many to scan.
 const cloverPaths = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.path))", sandbox));
 const cloverNames = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.name))", sandbox));
 const cloverGroups = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.group))", sandbox));
 const cloverIds = JSON.parse(vm.runInContext("JSON.stringify(CLOVER_LINKS.map(l=>l.id))", sandbox));
-if (!cloverPaths.length) fail("clover tab has no links");
+if (!cloverPaths.length) fail("clover registry is empty");
 if (new Set(cloverIds).size !== cloverIds.length) fail("clover link ids must be unique");
 // The registry is generated from clover-pages (tools/sync-clover-links.ps1), so
 // labels now travel with the rows instead of living in STR. A blank one would
 // render an unreadable button, and a blank group would drop a heading.
 if (cloverNames.some(function(n){ return !n; })) fail("clover link has no label");
 if (cloverGroups.some(function(g){ return !g; })) fail("clover link has no group heading");
-vm.runInContext("setBoardMode('clover')", sandbox);
-const cloverHtml = vm.runInContext("renderBoard()", sandbox);
-cloverPaths.forEach(function(path, i){
-  // A path the guard refuses would render a dead row, so check the URL builder
-  // rather than only the markup.
+// A path the guard refuses would render a dead row, so check the URL builder.
+cloverPaths.forEach(function(path){
   if (!vm.runInContext("cloverUrl(" + JSON.stringify(path) + ")", sandbox)) fail("clover path refused by the guard: " + path);
-  if (!cloverHtml.includes("openCloverPage('" + path + "')")) fail("clover tab missing row: " + path);
 });
-if (!cloverHtml.includes("openVaultHtml()")) fail("clover tab missing the index row");
-if (!cloverHtml.includes(vm.runInContext("STR.cloverNote", sandbox))) fail("clover tab must say it opens an external page");
-// Nothing patient-bound may reach this screen: it is published, device-agnostic
-// content, so no case may be rendered or reachable from it.
-["haien", "openDetail('c1')", "updateCaseBio", "3E-305"].forEach(function(needle){
-  if (cloverHtml.includes(needle)) fail("clover tab leaks case data: " + needle);
-});
+// The tab row: clover opens the site directly and never shows as the current
+// screen, while an ordinary tab still switches screens.
+vm.runInContext("setBoardMode('board')", sandbox);
+const barHtml = vm.runInContext("renderBoard()", sandbox);
+if (!barHtml.includes('onclick="openVaultHtml()"')) fail("clover tab must open clover-pages itself");
+if (barHtml.includes("setBoardMode('clover')")) fail("clover tab must not switch to a screen of its own");
+if (!barHtml.includes("↗")) fail("the external tab must be marked as leaving the app");
+// A device left on the retired list screen must land on the board, not on an
+// empty panel.
+vm.runInContext("setBoardMode('clover')", sandbox);
+if (vm.runInContext("VIEW.boardMode", sandbox) !== "board") fail("an external tab must not become the current screen");
 // window.open takes registry paths only.
 ["https://example.com/x.html", "javascript:alert(1)", "1_MKM/../secret.html", "//evil.test/x"].forEach(function(bad){
   if (vm.runInContext("cloverUrl(" + JSON.stringify(bad) + ")", sandbox)) fail("cloverUrl accepted a non-registry path: " + bad);
@@ -576,7 +583,9 @@ vm.runInContext("openCalcTab()", sandbox);
 if (vm.runInContext("VIEW.boardMode", sandbox) !== "calc") fail("openCalcTab did not switch to the calc tab");
 if (vm.runInContext("SHEET.name", sandbox) !== "") fail("calc tab must not open a sheet");
 if (vm.runInContext("VIEW.calcFor", sandbox) !== "") fail("calc tab must not be bound to a case");
-const calcListHtml = vm.runInContext("renderBoard()", sandbox);
+// The tab body only: the bottom bar carries clover-pages now, so renderBoard()
+// would report its own tab chip as a stray row in the calculator list.
+const calcListHtml = vm.runInContext("renderCalcTabBody()", sandbox);
 if (!calcListHtml.includes("openCalcTool('adrop')")) fail("calc tab missing the tool list");
 if (calcListHtml.includes("openVaultHtml()")) fail("clover-pages must not sit in the calculator list any more");
 vm.runInContext("openCalcTool('kidney')", sandbox);
